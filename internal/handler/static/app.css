@@ -1189,6 +1189,10 @@ h1 {
   letter-spacing: -0.02em;
 }
 
+.application-public-access {
+  margin-top: var(--space-6);
+}
+
 .application-danger-zone {
   margin-top: var(--space-6);
   border: 1px solid hsl(var(--destructive) / 0.45);
@@ -1920,7 +1924,8 @@ h1 {
   min-width: 0;
 }
 
-.service-widget-heading h2 {
+.service-widget-heading h2,
+.service-widget-heading h3 {
   margin: 0;
   color: hsl(var(--foreground));
   font-size: 1rem;

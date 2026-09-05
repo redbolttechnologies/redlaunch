@@ -120,6 +120,34 @@ func TestStoreAuthorizedEmailsRejectInvalidAddress(t *testing.T) {
 	}
 }
 
+func TestStoreRedlaunchPublicAccessRoundTrip(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	settings, err := database.GetRedlaunchPublicAccess(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings != (application.RedlaunchPublicAccess{}) {
+		t.Fatalf("initial public access = %#v, want disabled empty settings", settings)
+	}
+
+	want := application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"}
+	if err := database.UpdateRedlaunchPublicAccess(t.Context(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := database.GetRedlaunchPublicAccess(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("public access = %#v, want %#v", got, want)
+	}
+}
+
 func TestStoreListsApplicationServiceMetadata(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {

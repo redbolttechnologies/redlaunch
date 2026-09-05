@@ -307,6 +307,40 @@
       <header class="application-settings-header">
         <h2>Settings</h2>
       </header>
+      <section class="service-widget application-public-access" aria-labelledby="public-access-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h3 id="public-access-title">Public access</h3>
+            <p>Publish the Redlaunch management interface through the managed Caddy proxy.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <form class="application-form application-public-access-form" method="post" action="/applications/{{.ApplicationDetailsPage.Application.ID}}/settings/public-access?tab=settings" data-public-access-form>
+            <input type="hidden" name="csrf_token" value="{{.ApplicationDetailsPage.CSRFToken}}">
+            {{if .ApplicationDetailsPage.PublicAccessError}}
+            <div class="application-alert" id="redlaunch-public-access-error" role="alert">
+              <span>{{.ApplicationDetailsPage.PublicAccessError}}</span>
+            </div>
+            {{end}}
+            <label class="switch-field" for="redlaunch-public-access-enabled">
+              <span class="checkbox-field-copy">
+                <span class="checkbox-field-title">Enable access Redlaunch publicly (https)</span>
+                <span class="checkbox-field-help">Caddy obtains and renews the HTTPS certificate automatically.</span>
+              </span>
+              <input class="switch-input sr-only" id="redlaunch-public-access-enabled" name="enabled" type="checkbox" value="true" role="switch" aria-controls="redlaunch-public-access-domain" data-public-access-toggle{{if .ApplicationDetailsPage.PublicAccess.Enabled}} checked{{end}}>
+              <span class="switch-visual" aria-hidden="true"><span></span></span>
+            </label>
+            <div class="field">
+              <label for="redlaunch-public-access-domain">Domain</label>
+              <input id="redlaunch-public-access-domain" name="domain" type="text" value="{{.ApplicationDetailsPage.PublicAccess.Domain}}" maxlength="253" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="redlaunch.example.com" aria-describedby="redlaunch-public-access-domain-help{{if .ApplicationDetailsPage.PublicAccessError}} redlaunch-public-access-error{{end}}"{{if .ApplicationDetailsPage.PublicAccessError}} aria-invalid="true"{{end}} data-public-access-domain{{if .ApplicationDetailsPage.PublicAccess.Enabled}} required{{end}}>
+              <span class="field-help" id="redlaunch-public-access-domain-help">Enter the hostname only, without <code>https://</code> or a path.</span>
+            </div>
+            <div class="application-form-actions">
+              <button class="button button-primary" type="submit">Save public access</button>
+            </div>
+          </form>
+        </div>
+      </section>
       <section class="application-danger-zone" aria-labelledby="danger-zone-title">
         <header class="application-danger-zone-header">
           <div>

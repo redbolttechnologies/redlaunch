@@ -139,6 +139,46 @@ func (s *Store) ListAuthorizedEmails(ctx context.Context) ([]string, error) {
 	return emails, nil
 }
 
+// GetRedlaunchPublicAccess returns the installation-wide public-access
+// settings for the Redlaunch management interface.
+func (s *Store) GetRedlaunchPublicAccess(ctx context.Context) (application.RedlaunchPublicAccess, error) {
+	var settings application.RedlaunchPublicAccess
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT public_access_enabled, public_access_domain
+		FROM redlaunch_settings
+		WHERE id = 1`).Scan(&enabled, &settings.Domain)
+	if err != nil {
+		return application.RedlaunchPublicAccess{}, fmt.Errorf("get Redlaunch public access settings: %w", err)
+	}
+	settings.Enabled = enabled == 1
+	return settings, nil
+}
+
+// UpdateRedlaunchPublicAccess persists the installation-wide public-access
+// settings as one atomic SQLite update.
+func (s *Store) UpdateRedlaunchPublicAccess(ctx context.Context, settings application.RedlaunchPublicAccess) error {
+	enabled := 0
+	if settings.Enabled {
+		enabled = 1
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE redlaunch_settings
+		SET public_access_enabled = ?, public_access_domain = ?
+		WHERE id = 1`, enabled, settings.Domain)
+	if err != nil {
+		return fmt.Errorf("update Redlaunch public access settings: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated Redlaunch settings count: %w", err)
+	}
+	if affected != 1 {
+		return errors.New("Redlaunch public access settings are not initialized")
+	}
+	return nil
+}
+
 // List returns applications in creation order.
 func (s *Store) List(ctx context.Context) ([]application.Application, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -1022,6 +1062,34 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (9, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record authorized emails migration: %w", err)
+		}
+	}
+
+	var redlaunchSettingsMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 10`).Scan(&redlaunchSettingsMigrationApplied); err != nil {
+		return fmt.Errorf("check Redlaunch settings migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS redlaunch_settings (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			public_access_enabled INTEGER NOT NULL DEFAULT 0 CHECK (public_access_enabled IN (0, 1)),
+			public_access_domain TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+		return fmt.Errorf("create Redlaunch settings table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO redlaunch_settings (id)
+		VALUES (1)`); err != nil {
+		return fmt.Errorf("initialize Redlaunch settings: %w", err)
+	}
+	if redlaunchSettingsMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (10, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record Redlaunch settings migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

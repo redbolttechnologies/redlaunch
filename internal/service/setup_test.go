@@ -94,6 +94,7 @@ func TestSetupWritesAndStartsSelectedCoreServices(t *testing.T) {
 		"container_name: redbolt-proxy",
 		"- vars.env",
 		"- secrets.env",
+		"host.docker.internal:host-gateway",
 		"./Caddyfile:/etc/caddy/Caddyfile:ro",
 		"redlaunch.managed=true",
 		"name: redlaunch-common",

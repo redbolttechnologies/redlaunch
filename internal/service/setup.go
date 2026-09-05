@@ -31,6 +31,8 @@ const (
     env_file:
       - vars.env
       - secrets.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
       - "443:443"

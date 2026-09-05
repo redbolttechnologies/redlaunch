@@ -51,6 +51,11 @@ type applicationRoutingRepository interface {
 	DeleteRouting(context.Context, int64, int64, int64) error
 }
 
+type redlaunchSettingsRepository interface {
+	GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error)
+	UpdateRedlaunchPublicAccess(context.Context, application.RedlaunchPublicAccess) error
+}
+
 type proxyReloader interface {
 	ReloadProxy(context.Context, string) error
 }
@@ -286,15 +291,16 @@ type composeProjectRemover interface {
 
 // Applications coordinates application metadata and its managed files.
 type Applications struct {
-	repository        ApplicationRepository
-	detailsRepository applicationDetailsRepository
-	serviceRepository applicationServiceRepository
-	domainRepository  applicationDomainRepository
-	routingRepository applicationRoutingRepository
-	applicationsDir   string
-	proxyDirectory    string
-	runner            composeRunner
-	mu                sync.Mutex
+	repository         ApplicationRepository
+	detailsRepository  applicationDetailsRepository
+	serviceRepository  applicationServiceRepository
+	domainRepository   applicationDomainRepository
+	routingRepository  applicationRoutingRepository
+	settingsRepository redlaunchSettingsRepository
+	applicationsDir    string
+	proxyDirectory     string
+	runner             composeRunner
+	mu                 sync.Mutex
 }
 
 // NewApplications constructs an application service rooted below the
@@ -322,19 +328,21 @@ func NewApplications(repository ApplicationRepository, projectsRoot string, runn
 	serviceRepository, _ := repository.(applicationServiceRepository)
 	domainRepository, _ := repository.(applicationDomainRepository)
 	routingRepository, _ := repository.(applicationRoutingRepository)
+	settingsRepository, _ := repository.(redlaunchSettingsRepository)
 	runner := composeRunner(compose.CommandRunner{})
 	if len(runners) > 0 && runners[0] != nil {
 		runner = runners[0]
 	}
 	return &Applications{
-		repository:        repository,
-		detailsRepository: detailsRepository,
-		serviceRepository: serviceRepository,
-		domainRepository:  domainRepository,
-		routingRepository: routingRepository,
-		applicationsDir:   applicationsDirectory,
-		proxyDirectory:    filepath.Join(root, coreDir, proxyDir),
-		runner:            runner,
+		repository:         repository,
+		detailsRepository:  detailsRepository,
+		serviceRepository:  serviceRepository,
+		domainRepository:   domainRepository,
+		routingRepository:  routingRepository,
+		settingsRepository: settingsRepository,
+		applicationsDir:    applicationsDirectory,
+		proxyDirectory:     filepath.Join(root, coreDir, proxyDir),
+		runner:             runner,
 	}, nil
 }
 

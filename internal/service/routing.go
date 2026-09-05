@@ -13,6 +13,54 @@ import (
 	"redlaunch/internal/application"
 )
 
+const redlaunchPublicUpstream = "http://host.docker.internal:8080"
+
+// GetRedlaunchPublicAccess returns the installation-wide public-access
+// settings shown on the application settings tab.
+func (s *Applications) GetRedlaunchPublicAccess(ctx context.Context) (application.RedlaunchPublicAccess, error) {
+	if s.settingsRepository == nil {
+		return application.RedlaunchPublicAccess{}, errors.New("Redlaunch settings repository is not configured")
+	}
+	return s.settingsRepository.GetRedlaunchPublicAccess(ctx)
+}
+
+// UpdateRedlaunchPublicAccess validates and persists the management-interface
+// hostname, then applies the complete configuration to Caddy. A failed Caddy
+// update restores the previous persisted setting.
+func (s *Applications) UpdateRedlaunchPublicAccess(ctx context.Context, input application.RedlaunchPublicAccessInput) error {
+	if s.settingsRepository == nil {
+		return errors.New("Redlaunch settings repository is not configured")
+	}
+	settings, err := application.ValidateRedlaunchPublicAccess(input)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	previous, err := s.settingsRepository.GetRedlaunchPublicAccess(ctx)
+	if err != nil {
+		return err
+	}
+	if settings == previous {
+		return nil
+	}
+	if err := s.settingsRepository.UpdateRedlaunchPublicAccess(ctx, settings); err != nil {
+		return err
+	}
+	if !previous.Enabled && !settings.Enabled {
+		return nil
+	}
+	if err := s.refreshProxyConfiguration(ctx); err != nil {
+		if rollbackErr := s.settingsRepository.UpdateRedlaunchPublicAccess(ctx, previous); rollbackErr != nil {
+			return fmt.Errorf("apply Caddy Redlaunch configuration: %w (rollback settings: %v)", err, rollbackErr)
+		}
+		return fmt.Errorf("apply Caddy Redlaunch configuration: %w", err)
+	}
+	return nil
+}
+
 // ListRoutings returns the mappings for one associated domain in creation
 // order.
 func (s *Applications) ListRoutings(ctx context.Context, applicationID, domainID int64) ([]application.Routing, error) {
@@ -187,7 +235,7 @@ func routingUpstream(item application.Routing) string {
 // renderCaddyfile creates the complete Caddy configuration for all persisted
 // mappings. Host blocks are grouped so mappings for the same host share one
 // Caddy site, and longer path matchers are evaluated first.
-func renderCaddyfile(routings []application.Routing) string {
+func renderCaddyfile(routings []application.Routing, publicAccess application.RedlaunchPublicAccess) string {
 	byHost := make(map[string][]application.Routing)
 	for _, item := range routings {
 		host := routingHost(item.DomainName, item.Subdomain)
@@ -195,6 +243,11 @@ func renderCaddyfile(routings []application.Routing) string {
 			continue
 		}
 		byHost[host] = append(byHost[host], item)
+	}
+	if publicAccess.Enabled && publicAccess.Domain != "" {
+		if _, ok := byHost[publicAccess.Domain]; !ok {
+			byHost[publicAccess.Domain] = nil
+		}
 	}
 
 	hosts := make([]string, 0, len(byHost))
@@ -235,6 +288,13 @@ func renderCaddyfile(routings []application.Routing) string {
 			builder.WriteString("\n")
 			builder.WriteString("    }\n")
 		}
+		if publicAccess.Enabled && publicAccess.Domain == host {
+			builder.WriteString("    handle {\n")
+			builder.WriteString("        reverse_proxy ")
+			builder.WriteString(redlaunchPublicUpstream)
+			builder.WriteString("\n")
+			builder.WriteString("    }\n")
+		}
 		builder.WriteString("}\n")
 	}
 	return builder.String()
@@ -247,6 +307,13 @@ func (s *Applications) refreshProxyConfiguration(ctx context.Context) error {
 	routings, err := s.routingRepository.ListAllRoutings(ctx)
 	if err != nil {
 		return fmt.Errorf("list routings for Caddy: %w", err)
+	}
+	var publicAccess application.RedlaunchPublicAccess
+	if s.settingsRepository != nil {
+		publicAccess, err = s.settingsRepository.GetRedlaunchPublicAccess(ctx)
+		if err != nil {
+			return fmt.Errorf("read Redlaunch public access settings for Caddy: %w", err)
+		}
 	}
 
 	info, err := os.Lstat(s.proxyDirectory)
@@ -272,13 +339,18 @@ func (s *Applications) refreshProxyConfiguration(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("prepare Caddy Compose file: %w", err)
 	}
+	updatedCompose, hostGatewayChanged, err := addProxyHostGateway(updatedCompose)
+	if err != nil {
+		return fmt.Errorf("prepare Caddy host gateway: %w", err)
+	}
+	composeChanged = composeChanged || hostGatewayChanged
 
 	caddyPath := filepath.Join(s.proxyDirectory, "Caddyfile")
 	caddySnapshot, err := snapshotManagedFile(caddyPath)
 	if err != nil {
 		return fmt.Errorf("read Caddyfile: %w", err)
 	}
-	configuration := renderCaddyfile(routings)
+	configuration := renderCaddyfile(routings, publicAccess)
 	caddyChanged := !caddySnapshot.exists || string(caddySnapshot.contents) != configuration
 	if !composeChanged && !caddyChanged {
 		return nil
@@ -386,4 +458,79 @@ func addProxyCaddyfileMount(contents string) (string, bool, error) {
 		return strings.Join(updated, "\n"), true, nil
 	}
 	return "", false, errors.New("Caddy Compose file does not define proxy volumes")
+}
+
+func addProxyHostGateway(contents string) (string, bool, error) {
+	lines := strings.Split(contents, "\n")
+	proxyStart := -1
+	proxyEnd := len(lines)
+	for index, line := range lines {
+		if line == "  proxy:" {
+			proxyStart = index
+			break
+		}
+	}
+	if proxyStart < 0 {
+		return "", false, errors.New("Caddy Compose file does not define a proxy service")
+	}
+	for index := proxyStart + 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		indent := len(lines[index]) - len(strings.TrimLeft(lines[index], " "))
+		if indent <= 2 {
+			proxyEnd = index
+			break
+		}
+	}
+	for index := proxyStart + 1; index < proxyEnd; index++ {
+		line := strings.Trim(strings.TrimSpace(lines[index]), "\"'")
+		if strings.HasPrefix(line, "host.docker.internal:") || strings.Contains(line, "host.docker.internal:host-gateway") {
+			return contents, false, nil
+		}
+	}
+
+	for index := proxyStart + 1; index < proxyEnd; index++ {
+		line := lines[index]
+		if line != "    extra_hosts:" {
+			continue
+		}
+		end := proxyEnd
+		for candidate := index + 1; candidate < proxyEnd; candidate++ {
+			if strings.TrimSpace(lines[candidate]) == "" {
+				continue
+			}
+			indent := len(lines[candidate]) - len(strings.TrimLeft(lines[candidate], " "))
+			if indent <= 4 {
+				end = candidate
+				break
+			}
+		}
+		entry := "      - \"host.docker.internal:host-gateway\""
+		for candidate := index + 1; candidate < end; candidate++ {
+			trimmed := strings.TrimSpace(lines[candidate])
+			if trimmed == "" {
+				continue
+			}
+			if !strings.HasPrefix(trimmed, "-") {
+				entry = "      host.docker.internal: host-gateway"
+			}
+			break
+		}
+		updated := make([]string, 0, len(lines)+1)
+		updated = append(updated, lines[:end]...)
+		updated = append(updated, entry)
+		updated = append(updated, lines[end:]...)
+		return strings.Join(updated, "\n"), true, nil
+	}
+
+	block := []string{
+		"    extra_hosts:",
+		"      - \"host.docker.internal:host-gateway\"",
+	}
+	updated := make([]string, 0, len(lines)+len(block))
+	updated = append(updated, lines[:proxyStart+1]...)
+	updated = append(updated, block...)
+	updated = append(updated, lines[proxyStart+1:]...)
+	return strings.Join(updated, "\n"), true, nil
 }

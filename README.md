@@ -45,7 +45,8 @@ Alternatively, place the management interface behind an HTTPS reverse proxy.
 - Start, stop, restart, and remove managed services.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
 - Show container status, ports, logs, and host resource usage.
-- Route domains and paths through an optional managed Caddy proxy.
+- Route domains and paths through an optional managed Caddy proxy, including
+  an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Limit access to an allowlist of Google accounts.
 

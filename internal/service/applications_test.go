@@ -23,6 +23,7 @@ type applicationRepositoryStub struct {
 	service              application.Service
 	domain               application.Domain
 	routing              application.Routing
+	publicAccess         application.RedlaunchPublicAccess
 	err                  error
 	serviceErr           error
 	domainErr            error
@@ -30,6 +31,7 @@ type applicationRepositoryStub struct {
 	routingListErr       error
 	routingUpdateErr     error
 	routingDeleteErr     error
+	publicAccessErr      error
 	deleteErr            error
 	applicationDeleteErr error
 	deletedID            int64
@@ -38,6 +40,18 @@ type applicationRepositoryStub struct {
 	deletedDomainID      int64
 	deletedDomainName    string
 	deletedRoutingID     int64
+}
+
+func (s *applicationRepositoryStub) GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error) {
+	return s.publicAccess, s.publicAccessErr
+}
+
+func (s *applicationRepositoryStub) UpdateRedlaunchPublicAccess(_ context.Context, settings application.RedlaunchPublicAccess) error {
+	if s.publicAccessErr != nil {
+		return s.publicAccessErr
+	}
+	s.publicAccess = settings
+	return nil
 }
 
 type serviceRuntimeRunner struct {
@@ -697,6 +711,76 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 	}
 }
 
+func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{}
+	prepareRoutingProxy(t, root)
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{
+		Enabled: true,
+		Domain:  " Admin.Example.COM ",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if repository.publicAccess != (application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"}) {
+		t.Fatalf("stored public access = %#v, want enabled normalized domain", repository.publicAccess)
+	}
+	if len(runner.reloads) != 1 {
+		t.Fatalf("Caddy reloads after enabling public access = %d, want 1", len(runner.reloads))
+	}
+	caddyPath := filepath.Join(root, coreDir, proxyDir, "Caddyfile")
+	caddy := readServiceFile(t, caddyPath)
+	for _, expected := range []string{"admin.example.com {", "handle {", "reverse_proxy http://host.docker.internal:8080"} {
+		if !strings.Contains(caddy, expected) {
+			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, caddy)
+		}
+	}
+
+	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{
+		Domain: "admin.example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if repository.publicAccess.Enabled {
+		t.Fatalf("stored public access after disabling = %#v, want disabled", repository.publicAccess)
+	}
+	if got := readServiceFile(t, caddyPath); got != "# Routes managed by Redlaunch.\n" {
+		t.Fatalf("Caddyfile after disabling public access = %q, want managed header only", got)
+	}
+}
+
+func TestApplicationsUpdateRedlaunchPublicAccessValidatesAndRollsBack(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{reloadErr: errors.New("Caddy unavailable")}
+	prepareRoutingProxy(t, root)
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true}); !errors.Is(err, application.ErrRedlaunchPublicDomainRequired) {
+		t.Fatalf("UpdateRedlaunchPublicAccess(missing domain) error = %v, want %v", err, application.ErrRedlaunchPublicDomainRequired)
+	}
+	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true, Domain: "bad/domain"}); !errors.Is(err, application.ErrRedlaunchPublicDomainInvalid) {
+		t.Fatalf("UpdateRedlaunchPublicAccess(invalid domain) error = %v, want %v", err, application.ErrRedlaunchPublicDomainInvalid)
+	}
+	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true, Domain: "admin.example.com"}); err == nil {
+		t.Fatal("UpdateRedlaunchPublicAccess(Caddy failure) error = nil, want error")
+	}
+	if repository.publicAccess != (application.RedlaunchPublicAccess{}) {
+		t.Fatalf("public access after Caddy failure = %#v, want previous settings", repository.publicAccess)
+	}
+	if got := readServiceFile(t, filepath.Join(root, coreDir, proxyDir, "Caddyfile")); got != "# Routes managed by Redlaunch.\n" {
+		t.Fatalf("Caddyfile after failed update = %q, want original contents", got)
+	}
+}
+
 func TestApplicationsRoutingValidationAndCaddyFailureDoNotPersist(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{
@@ -735,7 +819,7 @@ func prepareRoutingProxy(t *testing.T, root string) {
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	compose := "services:\n  proxy:\n    volumes:\n      - caddy_data:/data\n      - caddy_config:/config\n      - ./Caddyfile:/etc/caddy/Caddyfile:ro\n"
+	compose := "services:\n  proxy:\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n    volumes:\n      - caddy_data:/data\n      - caddy_config:/config\n      - ./Caddyfile:/etc/caddy/Caddyfile:ro\n"
 	if err := os.WriteFile(filepath.Join(directory, "compose.yaml"), []byte(compose), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -766,6 +850,28 @@ func TestWriteManagedFileInPlacePreservesFileIdentity(t *testing.T) {
 	}
 	if got := readServiceFile(t, path); got != "new\n" {
 		t.Fatalf("file contents = %q, want new contents", got)
+	}
+}
+
+func TestAddProxyHostGatewayUpgradesExistingCompose(t *testing.T) {
+	compose := "services:\n  proxy:\n    image: caddy:2.11.4-alpine\n    ports:\n      - \"80:80\"\n"
+	updated, changed, err := addProxyHostGateway(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("addProxyHostGateway() changed = false, want true")
+	}
+	if !strings.Contains(updated, "  proxy:\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n    image:") {
+		t.Fatalf("updated proxy Compose does not contain host gateway under proxy service:\n%s", updated)
+	}
+
+	unchanged, changed, err := addProxyHostGateway(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || unchanged != updated {
+		t.Fatalf("addProxyHostGateway(existing) = (%q, %t), want unchanged false", unchanged, changed)
 	}
 }
 

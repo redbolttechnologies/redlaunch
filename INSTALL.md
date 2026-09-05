@@ -273,6 +273,25 @@ Redlaunch creates a dedicated Compose project under
 <code>compose.yml</code>, <code>vars.env</code>, and <code>secrets.env</code>.
 The project is connected to the shared <code>redlaunch-common</code> network.
 
+### Publish Redlaunch over HTTPS
+
+If Caddy was selected during first-run setup, open an application's
+**Settings** tab and find **Public access**. Enter the hostname that should
+serve the Redlaunch management interface, enable **Enable access Redlaunch
+publicly (https)**, and save. Use only a hostname such as
+<code>redlaunch.example.com</code>, without a scheme or path.
+
+Redlaunch stores this installation-wide setting in SQLite, adds the hostname
+to the managed Caddyfile, routes it through Docker's host gateway to the
+Redlaunch listener on port 8080, and reloads Caddy. The same setting is shown
+from every application's Settings tab.
+Point the hostname's DNS record to the VPS before enabling it.
+
+Google authentication must also use the public callback URL. Set
+<code>GOOGLE_REDIRECT_URL=https://redlaunch.example.com/auth/google/callback</code>
+and <code>AUTH_COOKIE_SECURE=true</code> in the Redlaunch <code>.env</code>, add
+the same callback URL to the Google OAuth client, and restart Redlaunch.
+
 ### Create services
 
 Open the application and use **Services → Create service**. Choose the service

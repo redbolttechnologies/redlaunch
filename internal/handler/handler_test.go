@@ -160,6 +160,10 @@ type fakeApplicationService struct {
 	routingDeleteDomainID         int64
 	routingDeleteErr              error
 	routingListErr                error
+	publicAccess                  application.RedlaunchPublicAccess
+	publicAccessInput             application.RedlaunchPublicAccessInput
+	publicAccessGetErr            error
+	publicAccessUpdateErr         error
 	serviceDetails                application.ServiceDetails
 	serviceDetailsErr             error
 	fullServiceLogs               string
@@ -348,6 +352,15 @@ func (s *fakeApplicationService) DeleteRouting(_ context.Context, applicationID,
 	s.routingDeleteID = routingID
 	s.routingDeleteDomainID = domainID
 	return s.routingDeleteErr
+}
+
+func (s *fakeApplicationService) GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error) {
+	return s.publicAccess, s.publicAccessGetErr
+}
+
+func (s *fakeApplicationService) UpdateRedlaunchPublicAccess(_ context.Context, input application.RedlaunchPublicAccessInput) error {
+	s.publicAccessInput = input
+	return s.publicAccessUpdateErr
 }
 
 func (s *fakeApplicationService) GetEnvironmentFiles(_ context.Context, _ int64) (application.EnvironmentFiles, error) {
@@ -1176,6 +1189,11 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 		`<h2 id="services-title">Services</h2>`,
 		`id="settings-panel"`,
 		`<h2>Settings</h2>`,
+		`<h3 id="public-access-title">Public access</h3>`,
+		`Enable access Redlaunch publicly (https)`,
+		`name="domain"`,
+		`action="/applications/7/settings/public-access?tab=settings"`,
+		`/static/application-settings.js`,
 		`Danger zone`,
 		`data-application-delete-open`,
 		`id="application-delete-dialog"`,
@@ -1235,6 +1253,106 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	}
 	if recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("GET /applications/7 Cache-Control = %q, want no-store", recorder.Header().Get("Cache-Control"))
+	}
+}
+
+func TestApplicationDetailsRendersRedlaunchPublicAccessSettings(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		publicAccess: application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7?tab=settings", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /applications/7?tab=settings status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`id="redlaunch-public-access-enabled" name="enabled" type="checkbox" value="true" role="switch"`,
+		`data-public-access-toggle checked`,
+		`value="admin.example.com"`,
+		`data-public-access-domain required`,
+		`managed Caddy proxy`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET application settings did not render %q: %s", expected, body)
+		}
+	}
+}
+
+func TestUpdateRedlaunchPublicAccessRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutCSRF := url.Values{"enabled": {"true"}, "domain": {"admin.example.com"}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(withoutCSRF.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("POST public access without CSRF status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if applications.publicAccessInput != (application.RedlaunchPublicAccessInput{}) {
+		t.Fatalf("public access update without CSRF reached service: %#v", applications.publicAccessInput)
+	}
+
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"enabled":    {"true"},
+		"domain":     {" Admin.Example.COM "},
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST public access status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/applications/7?tab=settings" {
+		t.Fatalf("POST public access Location = %q, want settings tab", got)
+	}
+	want := application.RedlaunchPublicAccessInput{Enabled: true, Domain: " Admin.Example.COM "}
+	if applications.publicAccessInput != want {
+		t.Fatalf("public access input = %#v, want %#v", applications.publicAccessInput, want)
+	}
+}
+
+func TestUpdateRedlaunchPublicAccessRendersValidationError(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:          []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		publicAccessUpdateErr: application.ErrRedlaunchPublicDomainInvalid,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"enabled":    {"true"},
+		"domain":     {"bad/<domain>"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST invalid public access status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "Enter a valid domain name.") || !strings.Contains(body, `value="bad/&lt;domain&gt;"`) {
+		t.Fatalf("POST invalid public access did not render safe field error: %s", body)
 	}
 }
 
