@@ -6,6 +6,7 @@ export LC_ALL=C
 
 dotenv_file=.env
 dotenv_tmp=
+readonly app_data_volume=redlaunch_app-data
 
 cleanup() {
 	if [[ -n "$dotenv_tmp" ]]; then
@@ -129,6 +130,9 @@ dotenv_tmp=
 # Ensure values already exported in the VPS shell cannot override the values
 # entered during this setup run when Compose interpolates the .env file.
 unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SECRET AUTH_COOKIE_SECURE
+
+printf '\nEnsuring the persistent application data volume exists...\n' >&2
+docker volume create "$app_data_volume" >/dev/null
 
 printf '\nAdding the first authorized email...\n' >&2
 docker compose run --rm --build app auth-add-email --email "$authorized_email"

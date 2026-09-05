@@ -39,3 +39,7 @@ services:
 
 volumes:
   app-data:
+    # Keep the historical volume name so existing installations retain their
+    # database when the volume is changed from Compose-managed to external.
+    name: redlaunch_app-data
+    external: true

@@ -73,6 +73,11 @@ projects/
 Each application has its own Compose file and environment files. Secret values
 are stored outside SQLite and are masked in the web interface.
 
+Redlaunch stores its SQLite database in the external Docker volume
+`redlaunch_app-data`. The setup script creates this volume, and it is kept
+outside the Compose project lifecycle so rebuilding or recreating the
+Redlaunch container does not remove the database.
+
 ## Local development
 
 Local development requires Go 1.25 or newer and a running user systemd manager.

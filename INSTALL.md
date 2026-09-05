@@ -201,12 +201,16 @@ The setup script asks for:
 
 - creates a private <code>.env</code> file;
 - generates a secure session secret when one was not supplied;
+- creates the external <code>redlaunch_app-data</code> Docker volume for the
+  SQLite database;
 - adds the first email address to Redlaunch's SQLite login allowlist; and
 - builds and starts Redlaunch with <code>docker compose up -d --build</code>.
 
 The command intentionally refuses to overwrite an existing <code>.env</code>
 file. Keep <code>.env</code> private; it contains the OAuth client secret and
-session secret.
+session secret. The <code>redlaunch_app-data</code> volume is external to the
+Compose project and must not be removed when cleaning up Docker resources; it
+contains the Redlaunch SQLite database.
 
 The generated <code>.env</code> uses this default callback:
 
