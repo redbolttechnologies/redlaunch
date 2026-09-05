@@ -27,8 +27,15 @@ See the [installation guide](INSTALL.md) for prerequisites, Google OAuth setup,
 networking, alternative installation options, and the complete first-run
 walkthrough.
 
-After installation, open <http://localhost:8080>. For a remote server, use an
-SSH tunnel or place the management interface behind an HTTPS reverse proxy.
+After installation, open <http://localhost:8080>. To access Redlaunch on a
+remote server, create an SSH tunnel from your computer:
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
+```
+
+Keep the tunnel open while using <http://localhost:8080> in your browser.
+Alternatively, place the management interface behind an HTTPS reverse proxy.
 
 ## What it can do
 
