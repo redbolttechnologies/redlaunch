@@ -1,0 +1,192 @@
+{{define "dashboard.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "dashboard-content.html"}}
+<section class="dashboard-page" data-dashboard aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Dashboard</h1>
+      <p>Monitor the current resource usage of this server.</p>
+    </div>
+    <p class="dashboard-refresh-note" role="status" aria-live="polite">Refreshes every 10 seconds. <span class="dashboard-refresh-indicator" id="dashboard-refresh-indicator">Updating…</span></p>
+  </header>
+
+  <div class="dashboard-metrics" id="dashboard-metrics" data-dashboard-metrics hx-get="/dashboard/metrics" hx-trigger="every 10s" hx-swap="innerHTML" hx-indicator="#dashboard-refresh-indicator">
+    {{template "dashboard-metrics.html" .}}
+  </div>
+</section>
+{{end}}
+
+{{define "dashboard-metrics.html"}}
+{{if .DashboardPage.Error}}
+<div class="dashboard-alert" role="alert">
+  <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 8v4M12 16h.01"></path>
+  </svg>
+  <span>{{.DashboardPage.Error}}</span>
+</div>
+{{else}}
+<div class="dashboard-metrics-meta">
+  <span>Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time></span>
+</div>
+
+<section class="dashboard-overview-grid" aria-label="Server resource metrics">
+  <article class="service-widget dashboard-resource-card">
+    <header class="service-widget-header">
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v18M3 12h18"></path>
+            <path d="m5.5 5.5 13 13M18.5 5.5l-13 13"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2>CPU usage</h2>
+          <p>Current server utilization</p>
+        </div>
+      </div>
+    </header>
+    <div class="service-widget-body dashboard-resource-body">
+      <p class="dashboard-metric-value">{{dashboardPercent .DashboardPage.Metrics.CPUUsagePercent}}</p>
+      <p class="dashboard-metric-help">Across all available CPU cores.</p>
+    </div>
+  </article>
+
+  <article class="service-widget dashboard-resource-card">
+    <header class="service-widget-header">
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+            <path d="M7 8h10M7 12h10M7 16h4"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2>Memory usage</h2>
+          <p>Current server memory</p>
+        </div>
+      </div>
+    </header>
+    <div class="service-widget-body dashboard-resource-body">
+      <dl class="dashboard-resource-list">
+        <div>
+          <dt>Available</dt>
+          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.AvailableBytes}}</code></dd>
+        </div>
+        <div>
+          <dt>Used</dt>
+          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.UsedBytes}}</code></dd>
+        </div>
+        <div>
+          <dt>Free</dt>
+          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.FreeBytes}}</code></dd>
+        </div>
+      </dl>
+    </div>
+  </article>
+
+  <article class="service-widget dashboard-resource-card">
+    <header class="service-widget-header">
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 20V4h16v16H4Z"></path>
+            <path d="M8 16v-3M12 16V8M16 16v-6"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2>Disk usage</h2>
+          <p>Root filesystem</p>
+        </div>
+      </div>
+    </header>
+    <div class="service-widget-body dashboard-resource-body">
+      <dl class="dashboard-resource-list dashboard-disk-list">
+        <div>
+          <dt>Used</dt>
+          <dd><code>{{dashboardSize .DashboardPage.Metrics.Disk.UsedBytes}}</code></dd>
+        </div>
+        <div>
+          <dt>Available</dt>
+          <dd><code>{{dashboardSize .DashboardPage.Metrics.Disk.AvailableBytes}}</code></dd>
+        </div>
+      </dl>
+    </div>
+  </article>
+</section>
+
+<div class="dashboard-process-grid">
+  <section class="service-widget dashboard-process-widget" aria-labelledby="top-cpu-processes-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="top-cpu-processes-title">Top 10 most CPU-intensive processes</h2>
+        <p>Processes using the most CPU during the latest sample.</p>
+      </div>
+    </header>
+    <div class="dashboard-process-table-wrap">
+      <table class="dashboard-process-table">
+        <thead>
+          <tr>
+            <th scope="col">Process</th>
+            <th scope="col">PID</th>
+            <th scope="col">CPU</th>
+            <th scope="col">Memory</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .DashboardPage.Metrics.TopCPU}}
+          <tr>
+            <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
+            <td><code>{{.PID}}</code></td>
+            <td><code>{{dashboardPercent .CPUPercent}}</code></td>
+            <td><code>{{dashboardSize .MemoryBytes}}</code></td>
+          </tr>
+          {{else}}
+          <tr>
+            <td class="dashboard-process-empty" colspan="4">No process data is available.</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="service-widget dashboard-process-widget" aria-labelledby="top-memory-processes-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="top-memory-processes-title">Top 10 most memory-consuming processes</h2>
+        <p>Processes using the most resident memory.</p>
+      </div>
+    </header>
+    <div class="dashboard-process-table-wrap">
+      <table class="dashboard-process-table">
+        <thead>
+          <tr>
+            <th scope="col">Process</th>
+            <th scope="col">PID</th>
+            <th scope="col">Memory</th>
+            <th scope="col">Share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .DashboardPage.Metrics.TopMemory}}
+          <tr>
+            <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
+            <td><code>{{.PID}}</code></td>
+            <td><code>{{dashboardSize .MemoryBytes}}</code></td>
+            <td><code>{{dashboardPercent .MemoryPercent}}</code></td>
+          </tr>
+          {{else}}
+          <tr>
+            <td class="dashboard-process-empty" colspan="4">No process data is available.</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{{end}}
+{{end}}

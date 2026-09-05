@@ -1,0 +1,90 @@
+{{define "application-container.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "application-container-content.html"}}
+<section class="service-form-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.ApplicationContainerPage.Application.ID}}">{{.ApplicationContainerPage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page">Create application container</span>
+  </nav>
+
+  <header class="page-heading service-form-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Create application container</h1>
+      <p>Run a custom application container alongside <strong>{{.ApplicationContainerPage.Application.Name}}</strong>.</p>
+    </div>
+  </header>
+
+  <div class="service-form-card">
+    {{if .ApplicationContainerPage.Error}}
+    <div class="application-alert service-form-alert" role="alert">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v4M12 16h.01"></path>
+      </svg>
+      <span>{{.ApplicationContainerPage.Error}}</span>
+    </div>
+    {{end}}
+
+    <form class="application-form service-form" method="post" action="/applications/{{.ApplicationContainerPage.Application.ID}}/services/application/new">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationContainerPage.CSRFToken}}">
+
+      <div class="service-form-grid">
+        <div class="field">
+          <label for="application-container-service-name">Service name</label>
+          <input id="application-container-service-name" name="service_name" type="text" maxlength="64" value="{{.ApplicationContainerPage.ServiceName}}" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">The Compose service name. Defaults to <code>app</code>.</span>
+        </div>
+
+        <div class="field">
+          <label for="application-container-image-name">Image name</label>
+          <input id="application-container-image-name" name="image_name" type="text" maxlength="255" value="{{.ApplicationContainerPage.ImageName}}" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <span class="field-help">The image name and tag, for example <code>app:latest</code>. The local registry prefix is added automatically when the option below is left unchecked.</span>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Registry</span>
+          <label class="switch-field" for="application-container-use-docker-registry">
+            <span class="checkbox-field-copy">
+              <span class="checkbox-field-title">Use Docker Registry</span>
+              <span class="checkbox-field-help">Leave unchecked to use the local registry at <code>localhost:5000</code>. Check to use the image reference as entered.</span>
+            </span>
+            <input class="switch-input sr-only" id="application-container-use-docker-registry" name="use_docker_registry" type="checkbox" role="switch" value="on"{{if .ApplicationContainerPage.UseDockerRegistry}} checked{{end}}>
+            <span class="switch-visual" aria-hidden="true"><span></span></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Startup</span>
+          <label class="switch-field" for="application-container-auto-start">
+            <span class="checkbox-field-copy">
+              <span class="checkbox-field-title">Automatically start container</span>
+              <span class="checkbox-field-help">Leave off to save the Compose definition without starting it. Turn on to start it immediately.</span>
+            </span>
+            <input class="switch-input sr-only" id="application-container-auto-start" name="auto_start" type="checkbox" role="switch" value="on"{{if .ApplicationContainerPage.AutoStart}} checked{{end}}>
+            <span class="switch-visual" aria-hidden="true"><span></span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="application-form-note">
+        <span class="application-form-note-mark" aria-hidden="true">i</span>
+        <span>The container definition will be added to <code>compose.yml</code> and both environment files will be loaded{{if .ApplicationContainerPage.AutoStart}}; the container will start immediately{{else}}. The container will remain stopped until you start it{{end}}.</span>
+      </div>
+
+      <footer class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.ApplicationContainerPage.Application.ID}}">Cancel</a>
+        <button class="button button-primary" type="submit">Create container</button>
+      </footer>
+    </form>
+  </div>
+</section>
+{{end}}

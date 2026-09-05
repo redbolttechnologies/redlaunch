@@ -1,0 +1,183 @@
+{{define "proxy.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "proxy-content.html"}}
+<section class="proxy-page" aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Proxy</h1>
+      <p>Inspect the shared Caddy reverse proxy and its routed domains{{with .ProxyPage.Details.ContainerName}} · <code>{{.}}</code>{{end}}.</p>
+    </div>
+    <div class="service-details-actions" role="group" aria-label="Proxy actions">
+      <form class="service-details-action-form" method="post" action="/proxy/start">
+        <input type="hidden" name="csrf_token" value="{{.ProxyPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-start" type="submit"{{if serviceIsRunning .ProxyPage.Details.Status}} disabled{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m8 5 11 7-11 7V5Z"></path>
+          </svg>
+          <span>Start</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="/proxy/stop">
+        <input type="hidden" name="csrf_token" value="{{.ProxyPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-stop" type="submit"{{if serviceIsStopped .ProxyPage.Details.Status}} disabled{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+          </svg>
+          <span>Stop</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="/proxy/restart">
+        <input type="hidden" name="csrf_token" value="{{.ProxyPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-restart" type="submit">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 11a8 8 0 0 0-14.9-4M4 5v4h4"></path>
+            <path d="M4 13a8 8 0 0 0 14.9 4M20 19v-4h-4"></path>
+          </svg>
+          <span>Restart</span>
+        </button>
+      </form>
+    </div>
+  </header>
+
+  <div class="application-tabs" data-application-tabs>
+    <div class="application-tablist" role="tablist" aria-label="Proxy details">
+      <button class="application-tab" id="dashboard-tab" type="button" role="tab" aria-controls="dashboard-panel" aria-selected="true" tabindex="0" data-application-tab="dashboard-panel">Dashboard</button>
+      <button class="application-tab" id="logs-tab" type="button" role="tab" aria-controls="logs-panel" aria-selected="false" tabindex="-1" data-application-tab="logs-panel">Logs</button>
+    </div>
+
+    <section class="application-tab-panel" id="dashboard-panel" role="tabpanel" aria-labelledby="dashboard-tab" tabindex="0">
+      <div class="service-dashboard proxy-dashboard">
+        <section class="service-widget service-general-widget proxy-container-widget" aria-labelledby="proxy-container-title">
+          <h2 id="proxy-container-title" class="sr-only">Proxy container information</h2>
+          <div class="service-widget-body">
+            <dl class="service-general-grid proxy-general-grid">
+              <div class="service-general-item">
+                <span class="service-metadata-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3.5" y="5" width="17" height="15" rx="2"></rect>
+                    <path d="M16 3v4M8 3v4M3.5 10h17"></path>
+                  </svg>
+                </span>
+                <div class="service-general-copy">
+                  <dt>Created</dt>
+                  <dd><time datetime="{{proxyCreatedAtISO .ProxyPage.Details}}" title="{{proxyCreatedAtTitle .ProxyPage.Details}}">{{proxyCreatedAt .ProxyPage.Details}}</time></dd>
+                </div>
+              </div>
+              <div class="service-general-item">
+                <span class="service-metadata-icon {{serviceStatusClass .ProxyPage.Details.Status}}" aria-hidden="true">
+                  {{if serviceIsRunning .ProxyPage.Details.Status}}
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="9"></circle>
+                    <path d="m8 12 2.5 2.5L16 9"></path>
+                  </svg>
+                  {{else}}
+                  <span class="status-dot"></span>
+                  {{end}}
+                </span>
+                <div class="service-general-copy">
+                  <dt>Status</dt>
+                  <dd><span class="service-status-value {{serviceStatusClass .ProxyPage.Details.Status}}">{{if .ProxyPage.Details.Status}}{{.ProxyPage.Details.Status}}{{else}}Unknown{{end}}</span></dd>
+                </div>
+              </div>
+              <div class="service-general-item">
+                <span class="service-metadata-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"></path>
+                    <path d="m4.5 7.5 7.5 4 7.5-4M12 12v9"></path>
+                  </svg>
+                </span>
+                <div class="service-general-copy">
+                  <dt>Image</dt>
+                  <dd><code>{{if .ProxyPage.Details.ImageName}}{{.ProxyPage.Details.ImageName}}{{else}}—{{end}}</code></dd>
+                </div>
+              </div>
+            </dl>
+          </div>
+        </section>
+
+        <section class="service-widget proxy-domains-widget" aria-labelledby="proxy-domains-title">
+          <header class="service-widget-header">
+            <div class="service-widget-heading">
+              <h2 id="proxy-domains-title">Associated domains</h2>
+              <p>Domains and request mappings currently routed through the shared proxy.</p>
+            </div>
+          </header>
+          <div class="service-widget-body">
+            {{if .ProxyPage.Details.Domains}}
+            <div class="service-environment-table-wrap">
+              <table class="service-environment-table routing-table proxy-domains-table">
+                <caption class="sr-only">Domains and mappings associated with the proxy</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Domain</th>
+                    <th scope="col">Application</th>
+                    <th scope="col">Request path</th>
+                    <th scope="col">Mapped service</th>
+                    <th scope="col">Mapped path</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .ProxyPage.Details.Domains}}
+                  <tr>
+                    <th scope="row"><code>{{.Name}}</code></th>
+                    <td>{{if .ApplicationName}}{{.ApplicationName}}{{else}}—{{end}}</td>
+                    <td><code>{{if .RequestPath}}{{.RequestPath}}{{else}}—{{end}}</code></td>
+                    <td><code>{{if .MappedService}}{{.MappedService}}{{else}}—{{end}}</code></td>
+                    <td><code>{{if .MappedPath}}{{.MappedPath}}{{else}}—{{end}}</code></td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+            {{else}}
+            <div class="service-widget-empty" role="status">
+              <p>No domains are associated with the proxy.</p>
+            </div>
+            {{end}}
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="application-tab-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" tabindex="0" hidden>
+      <section class="service-widget proxy-logs-widget" aria-labelledby="proxy-logs-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="proxy-logs-title">Logs</h2>
+            <p>Most recent 1,000 lines from the proxy container.</p>
+          </div>
+          {{if .ProxyPage.Details.LogsAvailable}}
+          <a class="button button-secondary service-log-action" href="/proxy/logs/download" download>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path>
+            </svg>
+            <span>Download full logs</span>
+          </a>
+          {{end}}
+        </header>
+        <div class="service-widget-body">
+          {{if .ProxyPage.Details.LogsAvailable}}
+            {{if .ProxyPage.Details.Logs}}
+            <ol class="service-logs" tabindex="0" aria-label="Most recent 1,000 log lines for the proxy" data-proxy-logs>
+              {{range proxyLogLines .ProxyPage.Details.Logs -}}
+              <li><code>{{.}}</code></li>
+              {{- end}}
+            </ol>
+            {{else}}
+            <div class="service-widget-empty" role="status">
+              <p>No logs have been emitted by the proxy.</p>
+            </div>
+            {{end}}
+          {{else}}
+          <div class="service-widget-empty" role="status">
+            <p>Proxy logs are unavailable right now.</p>
+          </div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+  </div>
+</section>
+{{end}}

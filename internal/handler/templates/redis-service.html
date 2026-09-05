@@ -1,0 +1,89 @@
+{{define "redis-service.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "redis-service-content.html"}}
+<section class="service-form-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.RedisServicePage.Application.ID}}">{{.RedisServicePage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page">Create Redis service</span>
+  </nav>
+
+  <header class="page-heading service-form-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Create Redis service</h1>
+      <p>Run a Redis container alongside <strong>{{.RedisServicePage.Application.Name}}</strong>.</p>
+    </div>
+  </header>
+
+  <div class="service-form-card">
+    {{if .RedisServicePage.Error}}
+    <div class="application-alert service-form-alert" role="alert">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v4M12 16h.01"></path>
+      </svg>
+      <span>{{.RedisServicePage.Error}}</span>
+    </div>
+    {{end}}
+
+    <form class="application-form service-form" method="post" action="/applications/{{.RedisServicePage.Application.ID}}/services/redis/new">
+      <input type="hidden" name="csrf_token" value="{{.RedisServicePage.CSRFToken}}">
+
+      <div class="service-form-grid">
+        <div class="field">
+          <label for="redis-service-name">Service name</label>
+          <input id="redis-service-name" name="service_name" type="text" maxlength="64" value="{{.RedisServicePage.ServiceName}}" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">The Compose service name. Defaults to <code>redis</code>.</span>
+        </div>
+
+        <div class="field">
+          <label for="redis-version">Redis version</label>
+          <input id="redis-version" name="redis_version" type="text" maxlength="64" value="{{.RedisServicePage.RedisVersion}}" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">The official image tag, for example <code>7</code>.</span>
+        </div>
+
+        <div class="field">
+          <label for="redis-port">Port</label>
+          <input id="redis-port" name="port" type="number" min="1" max="65535" step="1" value="{{.RedisServicePage.Port}}" inputmode="numeric" required>
+          <span class="field-help">The host port published for Redis. Defaults to <code>6379</code>.</span>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Storage</span>
+          <label class="checkbox-field" for="redis-persist-to-disk">
+            <input id="redis-persist-to-disk" name="persist_to_disk" type="checkbox" value="on"{{if .RedisServicePage.PersistToDisk}} checked{{end}}>
+            <span class="checkbox-field-copy">
+              <span class="checkbox-field-title">Persist to disk</span>
+              <span class="checkbox-field-help">Enable append-only logging and snapshots every second.</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="redis-password">Password <span class="field-label-optional">(optional)</span></label>
+        <input id="redis-password" name="password" type="password" maxlength="256" value="" autocomplete="new-password">
+        <span class="field-help">Leave empty to run Redis without password authentication. The password is stored only in <code>secrets.env</code>.</span>
+      </div>
+
+      <div class="application-form-note">
+        <span class="application-form-note-mark" aria-hidden="true">i</span>
+        <span>The Redis definition will be added to <code>compose.yml</code>, its password will be kept in <code>secrets.env</code>, and the container will start immediately.</span>
+      </div>
+
+      <footer class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.RedisServicePage.Application.ID}}">Cancel</a>
+        <button class="button button-primary" type="submit">Create service</button>
+      </footer>
+    </form>
+  </div>
+</section>
+{{end}}

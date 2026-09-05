@@ -1,0 +1,164 @@
+{{define "layout"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Redlaunch application control plane">
+  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
+  {{if .DashboardPage}}<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>{{end}}
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/copy.js" defer></script>
+  {{if .DashboardPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
+  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress}}<script src="/static/setup.js" defer></script>{{end}}
+  {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
+  {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
+  {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script>{{end}}
+  {{if .ApplicationRoutingPage}}<script src="/static/application-routings.js" defer></script>{{end}}
+  {{if .ServiceDetailsPage}}<script src="/static/backup-schedule.js" defer></script><script src="/static/service-details.js" defer></script>{{end}}
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a class="brand" href="/" aria-label="Redlaunch home">
+          <img class="brand-logo" src="/static/redlaunch-logo.svg" alt="Redlaunch" width="108" height="28">
+        </a>
+      </div>
+
+      <nav class="side-menu" aria-label="Primary navigation">
+        <a class="side-menu-item{{if eq .ActivePage "dashboard"}} side-menu-item-active{{end}}" href="/dashboard"{{if eq .ActivePage "dashboard"}} aria-current="page"{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19V5M4 19h16"></path>
+            <path d="m7 15 3-4 3 2 5-6"></path>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+        <a class="side-menu-item{{if eq .ActivePage "applications"}} side-menu-item-active{{end}}" href="/applications"{{if eq .ActivePage "applications"}} aria-current="page"{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="14" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="3.5" y="14" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="14" y="14" width="6.5" height="6.5" rx="1"></rect>
+          </svg>
+          <span>Applications</span>
+        </a>
+        <a class="side-menu-item{{if eq .ActivePage "proxy"}} side-menu-item-active{{end}}" href="/proxy"{{if eq .ActivePage "proxy"}} aria-current="page"{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="6" rx="1"></rect>
+            <rect x="3" y="14" width="18" height="6" rx="1"></rect>
+            <path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"></path>
+          </svg>
+          <span>Proxy</span>
+        </a>
+      </nav>
+
+      {{with .User}}
+      <section class="sidebar-user-widget" aria-label="Signed-in user">
+        {{if .PictureURL}}
+        <img class="sidebar-user-avatar" src="{{.PictureURL}}" alt="Profile image for {{.Name}}" width="32" height="32">
+        {{else}}
+        <span class="sidebar-user-avatar sidebar-user-avatar-initials" aria-hidden="true">{{.Initials}}</span>
+        {{end}}
+        <div class="sidebar-user-copy">
+          <strong class="sidebar-user-name" title="{{.Name}}">{{.Name}}</strong>
+          <span class="sidebar-user-email" title="{{.Email}}">{{.Email}}</span>
+        </div>
+        <form class="sidebar-logout-form" method="post" action="/logout">
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+          <button class="icon-button sidebar-logout" type="submit" aria-label="Log out" title="Log out">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5"></path>
+              <path d="m14 8 4 4-4 4"></path>
+              <path d="M18 12H9"></path>
+            </svg>
+          </button>
+        </form>
+      </section>
+      {{end}}
+    </aside>
+
+    <header class="main-header">
+      <section class="server-info" aria-labelledby="server-info-title">
+        <div class="server-info-heading">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="6" rx="1"></rect>
+            <rect x="3" y="14" width="18" height="6" rx="1"></rect>
+            <path d="M7 7h.01M7 17h.01"></path>
+          </svg>
+          <h2 id="server-info-title">Server</h2>
+        </div>
+        <dl class="server-info-details">
+          <div class="server-info-row">
+            <dt>Hostname</dt>
+            <dd title="{{.Server.Hostname}}">
+              <span class="server-info-value">{{.Server.Hostname}}</span>
+              <button class="icon-button server-info-copy" type="button" data-copy-value="{{.Server.Hostname}}" aria-label="Copy hostname" title="Copy hostname">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+                </svg>
+              </button>
+            </dd>
+          </div>
+          <div class="server-info-row">
+            <dt>IP address</dt>
+            <dd title="{{.Server.IPAddress}}">
+              <span class="server-info-value">{{.Server.IPAddress}}</span>
+              <button class="icon-button server-info-copy" type="button" data-copy-value="{{.Server.IPAddress}}" aria-label="Copy IP address" title="Copy IP address">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+                </svg>
+              </button>
+            </dd>
+          </div>
+        </dl>
+      </section>
+    </header>
+
+    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
+      {{if .Setup}}
+      {{template "setup.html" .}}
+      {{else if .DashboardPage}}
+      {{template "dashboard-content.html" .}}
+      {{else if .PostgreSQLServicePage}}
+      {{template "postgresql-service-content.html" .}}
+      {{else if .RedisServicePage}}
+      {{template "redis-service-content.html" .}}
+      {{else if .ApplicationContainerPage}}
+      {{template "application-container-content.html" .}}
+      {{else if .ApplicationRoutingPage}}
+      {{template "application-routing-content.html" .}}
+      {{else if .ServiceDetailsPage}}
+      {{template "service-details-content.html" .}}
+      {{else if .ApplicationDetailsPage}}
+      {{template "application-details-content.html" .}}
+      {{else if .ProxyPage}}
+      {{template "proxy-content.html" .}}
+      {{else if eq .ActivePage "applications"}}
+      {{template "applications-content.html" .}}
+      {{end}}
+      {{if .SetupProgress}}
+      {{template "setup-progress.html" .}}
+      {{end}}
+      {{if .PostgreSQLProgress}}
+      {{template "postgresql-progress.html" .}}
+      {{end}}
+      {{if .RedisProgress}}
+      {{template "redis-progress.html" .}}
+      {{end}}
+      {{if .ApplicationContainerProgress}}
+      {{template "application-container-progress.html" .}}
+      {{end}}
+      {{if .ServiceDeleteProgress}}
+      {{template "service-delete-progress.html" .}}
+      {{end}}
+      {{if .ApplicationDeleteProgress}}
+      {{template "application-delete-progress.html" .}}
+      {{end}}
+    </main>
+  </div>
+</body>
+</html>
+{{end}}

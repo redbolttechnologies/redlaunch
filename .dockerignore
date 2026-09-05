@@ -1,0 +1,10 @@
+/backups/
+/bin/
+/data/
+/projects/
+*.db
+*.db-shm
+*.db-wal
+.env
+vars.env
+secrets.env

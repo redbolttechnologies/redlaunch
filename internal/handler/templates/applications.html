@@ -1,0 +1,117 @@
+{{define "applications.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "applications-content.html"}}
+<section class="applications-page" aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Applications</h1>
+      <p>Manage the Compose applications hosted on this server.</p>
+    </div>
+    <button class="button button-primary" type="button" data-application-open aria-controls="application-dialog" aria-haspopup="dialog" aria-expanded="false">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14"></path>
+      </svg>
+      <span>Create application</span>
+    </button>
+  </header>
+
+  {{if and .ApplicationsPage.Error (not .ApplicationsPage.ModalOpen)}}
+  <div class="application-alert" role="alert">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M12 8v4M12 16h.01"></path>
+    </svg>
+    <span>{{.ApplicationsPage.Error}}</span>
+  </div>
+  {{end}}
+
+  {{if .ApplicationsPage.Applications}}
+  <section class="application-grid" aria-label="Existing applications">
+    {{range .ApplicationsPage.Applications}}
+    <a class="application-card" href="/applications/{{.ID}}">
+      <div class="application-card-topline">
+        <span class="application-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="14" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="3.5" y="14" width="6.5" height="6.5" rx="1"></rect>
+            <rect x="14" y="14" width="6.5" height="6.5" rx="1"></rect>
+          </svg>
+        </span>
+        <p class="application-card-services">{{.ServiceCount}} service{{if ne .ServiceCount 1}}s{{end}}</p>
+      </div>
+      <h2 class="application-card-name">{{.Name}}</h2>
+    </a>
+    {{end}}
+  </section>
+  {{else}}
+  <section class="applications-empty-state" aria-labelledby="applications-empty-title">
+    <div class="applications-empty-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m4 7 8-4 8 4v10l-8 4-8-4V7Z"></path>
+        <path d="m4 7 8 4 8-4M12 11v10"></path>
+      </svg>
+    </div>
+    <div class="applications-empty-copy">
+      <h2 id="applications-empty-title">No applications yet</h2>
+      <p>Create an application to scaffold its Compose project and environment files.</p>
+    </div>
+    <button class="button button-secondary" type="button" data-application-open aria-controls="application-dialog" aria-haspopup="dialog" aria-expanded="false">Create your first application</button>
+  </section>
+  {{end}}
+</section>
+
+{{template "application-dialog.html" .}}
+{{end}}
+
+{{define "application-dialog.html"}}
+<dialog class="application-dialog" id="application-dialog" role="dialog" aria-modal="true" aria-labelledby="application-dialog-title" aria-describedby="application-dialog-description"{{if .ApplicationsPage.ModalOpen}} open{{end}}>
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="application-dialog-title">Create application</h2>
+        <p id="application-dialog-description">Start with a dedicated Compose project and empty <code>vars.env</code> and <code>secrets.env</code> files.</p>
+      </div>
+      <button class="icon-button" type="button" data-application-close aria-label="Close create application dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    {{if .ApplicationsPage.Error}}
+    <div class="application-alert application-dialog-alert" role="alert">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v4M12 16h.01"></path>
+      </svg>
+      <span>{{.ApplicationsPage.Error}}</span>
+    </div>
+    {{end}}
+
+    <form class="application-form" method="post" action="/applications">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationsPage.CSRFToken}}">
+      <div class="field">
+        <label for="application-name">Application name</label>
+        <input id="application-name" name="name" type="text" maxlength="64" value="{{.ApplicationsPage.Name}}" placeholder="e.g. Status page" autocomplete="off" required>
+        <span class="field-help">The name shown on the Applications page.</span>
+      </div>
+      <div class="field">
+        <label for="application-folder-name">Folder name</label>
+        <input id="application-folder-name" name="folder_name" type="text" maxlength="64" value="{{.ApplicationsPage.FolderName}}" placeholder="e.g. status-page" autocomplete="off" required>
+        <span class="field-help">Defaults to a lowercase slug using letters, numbers, and dashes. A single directory name under <code>applications</code>.</span>
+      </div>
+      <div class="application-form-note">
+        <span class="application-form-note-mark" aria-hidden="true">i</span>
+        <span>The shared <code>redlaunch-common</code> network will be available to the new Compose project.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-application-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-application-submit>Create application</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

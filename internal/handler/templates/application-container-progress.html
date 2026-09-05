@@ -1,0 +1,40 @@
+{{define "application-container-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-application-container-progress data-progress-content-selector=".application-details-page" data-close-url="{{.ApplicationContainerProgress.CloseURL}}" data-state="{{.ApplicationContainerProgress.State}}" data-status-url="{{.ApplicationContainerProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="application-container-progress-title" aria-busy="{{if eq .ApplicationContainerProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.ApplicationContainerProgress.State}}" aria-hidden="true">
+        {{if eq .ApplicationContainerProgress.State "complete"}}✓{{else if eq .ApplicationContainerProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="application-container-progress-title" data-progress-title>{{if eq .ApplicationContainerProgress.State "complete"}}{{if .ApplicationContainerProgress.AutoStart}}Application container ready{{else}}Application container configured{{end}}{{else if eq .ApplicationContainerProgress.State "failed"}}Container creation stopped{{else}}Creating application container{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .ApplicationContainerProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label">{{.Label}}</span>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .ApplicationContainerProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The container creation stopped during <strong>{{.ApplicationContainerProgress.ErrorStage}}</strong>.</p>
+      <pre>{{.ApplicationContainerProgress.ErrorDetail}}</pre>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the application container progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

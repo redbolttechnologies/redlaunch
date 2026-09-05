@@ -1,0 +1,40 @@
+{{define "postgresql-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-postgresql-progress data-progress-content-selector=".application-details-page" data-close-url="{{.PostgreSQLProgress.CloseURL}}" data-state="{{.PostgreSQLProgress.State}}" data-status-url="{{.PostgreSQLProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="postgresql-progress-title" aria-busy="{{if eq .PostgreSQLProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.PostgreSQLProgress.State}}" aria-hidden="true">
+        {{if eq .PostgreSQLProgress.State "complete"}}✓{{else if eq .PostgreSQLProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="postgresql-progress-title" data-progress-title>{{if eq .PostgreSQLProgress.State "complete"}}PostgreSQL database ready{{else if eq .PostgreSQLProgress.State "failed"}}Database creation stopped{{else}}Creating PostgreSQL database{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .PostgreSQLProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label">{{.Label}}</span>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .PostgreSQLProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The database creation stopped during <strong>{{.PostgreSQLProgress.ErrorStage}}</strong>.</p>
+      <pre>{{.PostgreSQLProgress.ErrorDetail}}</pre>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the database creation progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

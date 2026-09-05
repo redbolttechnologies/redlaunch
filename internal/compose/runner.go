@@ -1,0 +1,652 @@
+// Package compose runs Docker Compose projects.
+package compose
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const maxCommandOutput = 8 * 1024
+
+// CommandRunner runs Docker Compose through the Docker CLI.
+type CommandRunner struct {
+	// Binary is the Docker CLI binary to execute. An empty value uses docker.
+	Binary string
+}
+
+// ServiceRuntime contains the Docker Compose runtime fields shown for a
+// managed service. Ports and status intentionally retain Docker's display
+// format so the UI matches docker ps output. Running is derived from Compose's
+// machine-readable state for operational checks.
+type ServiceRuntime struct {
+	ServiceName   string
+	ContainerName string
+	CreatedAt     time.Time
+	Status        string
+	Image         string
+	Ports         string
+	Running       bool
+}
+
+// ConfiguredService contains the fields Redlaunch needs when importing a
+// service from a Docker Compose project. The Compose definition remains the
+// source of truth for the rest of the service configuration.
+type ConfiguredService struct {
+	Name  string
+	Image string
+}
+
+// EnvironmentVariable is one resolved environment value from a Compose
+// service definition.
+type EnvironmentVariable struct {
+	Key   string
+	Value string
+}
+
+// Up starts all services in a Compose project in detached mode.
+func (r CommandRunner) Up(ctx context.Context, projectDir string) error {
+	return r.runComposeUp(ctx, projectDir, "")
+}
+
+// UpService starts one service in a Compose project in detached mode without
+// starting unrelated services from the same project.
+func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return errors.New("Compose service name is required")
+	}
+	return r.runComposeUp(ctx, projectDir, serviceName)
+}
+
+// ConfigServices validates a Compose project and returns its configured
+// services without starting containers. Environment and filesystem
+// interpolation are disabled because imports contain only the uploaded Compose
+// file; the managed vars.env and secrets.env files are added by the service
+// layer after validation.
+func (r CommandRunner) ConfigServices(ctx context.Context, projectDir string) ([]ConfiguredService, error) {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
+	command.Dir = projectDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, composeCommandError("validate Compose project", err, output)
+	}
+
+	var config struct {
+		Services map[string]struct {
+			Image string `json:"image"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output), &config); err != nil {
+		return nil, fmt.Errorf("decode Compose configuration: %w", err)
+	}
+	if len(config.Services) == 0 {
+		return nil, errors.New("Compose file does not define any services")
+	}
+
+	names := make([]string, 0, len(config.Services))
+	for name := range config.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	services := make([]ConfiguredService, 0, len(names))
+	for _, name := range names {
+		services = append(services, ConfiguredService{
+			Name:  name,
+			Image: strings.TrimSpace(config.Services[name].Image),
+		})
+	}
+	return services, nil
+}
+
+func (r CommandRunner) runComposeUp(ctx context.Context, projectDir, serviceName string) error {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	args := []string{"compose", "-f", composeFile, "up", "-d"}
+	operation := "run compose project"
+	if serviceName != "" {
+		args = append(args, serviceName)
+		operation = fmt.Sprintf("run compose service %q", serviceName)
+	}
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Dir = projectDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		details := strings.TrimSpace(string(output))
+		if len(details) > maxCommandOutput {
+			details = "..." + details[len(details)-maxCommandOutput:]
+		}
+		if details != "" {
+			return fmt.Errorf("%s: %w: %s", operation, err, details)
+		}
+		return fmt.Errorf("%s: %w", operation, err)
+	}
+	return nil
+}
+
+// ReloadProxy asks the running Caddy container to load its mounted Caddyfile.
+// The command is executed through Compose so the HTTP/service layer never
+// needs to construct a Docker command itself.
+func (r CommandRunner) ReloadProxy(ctx context.Context, projectDir string) error {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+	command.Dir = projectDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return composeCommandError("reload Caddy proxy", err, output)
+	}
+	return nil
+}
+
+// Start starts one existing service in a Compose project.
+func (r CommandRunner) Start(ctx context.Context, projectDir, serviceName string) error {
+	return r.runServiceCommand(ctx, projectDir, "start", serviceName)
+}
+
+// Stop stops one service in a Compose project.
+func (r CommandRunner) Stop(ctx context.Context, projectDir, serviceName string) error {
+	return r.runServiceCommand(ctx, projectDir, "stop", serviceName)
+}
+
+// Restart restarts one service in a Compose project.
+func (r CommandRunner) Restart(ctx context.Context, projectDir, serviceName string) error {
+	return r.runServiceCommand(ctx, projectDir, "restart", serviceName)
+}
+
+// Remove removes one service's container from a Compose project. The service
+// is stopped separately by the application service so this command cannot
+// affect any other container in the project.
+func (r CommandRunner) Remove(ctx context.Context, projectDir, serviceName string) error {
+	return r.runServiceCommandWithOptions(ctx, projectDir, "rm", serviceName, "-f")
+}
+
+// Down stops and removes all containers and Compose-managed resources for a
+// project. Volumes are included because they belong to the managed project;
+// external networks and volumes remain untouched by Docker Compose.
+func (r CommandRunner) Down(ctx context.Context, projectDir string) error {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "down", "--volumes", "--remove-orphans")
+	command.Dir = projectDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return composeCommandError("remove Compose project", err, output)
+	}
+	return nil
+}
+
+func (r CommandRunner) runServiceCommand(ctx context.Context, projectDir, action, serviceName string) error {
+	return r.runServiceCommandWithOptions(ctx, projectDir, action, serviceName)
+}
+
+func (r CommandRunner) runServiceCommandWithOptions(ctx context.Context, projectDir, action, serviceName string, options ...string) error {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	args := []string{"compose", "-f", composeFile, action}
+	args = append(args, options...)
+	args = append(args, serviceName)
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Dir = projectDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		details := strings.TrimSpace(string(output))
+		if len(details) > maxCommandOutput {
+			details = "..." + details[len(details)-maxCommandOutput:]
+		}
+		if details != "" {
+			return fmt.Errorf("run compose %s for service %q: %w: %s", action, serviceName, err, details)
+		}
+		return fmt.Errorf("run compose %s for service %q: %w", action, serviceName, err)
+	}
+	return nil
+}
+
+// ListServices returns the current containers for a Compose project. The
+// --all flag includes stopped containers, while the JSON format gives the
+// caller the same status and ports strings Docker displays in docker ps.
+func (r CommandRunner) ListServices(ctx context.Context, projectDir string) ([]ServiceRuntime, error) {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "ps", "-a", "--format", "json")
+	command.Dir = projectDir
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if len(details) > maxCommandOutput {
+			details = "..." + details[len(details)-maxCommandOutput:]
+		}
+		if details != "" {
+			return nil, fmt.Errorf("list compose services: %w: %s", err, details)
+		}
+		return nil, fmt.Errorf("list compose services: %w", err)
+	}
+	return decodeServiceRuntimes(output)
+}
+
+// IsServiceRunning reports whether one Compose service currently has a
+// running container. A missing service is treated as not running.
+func (r CommandRunner) IsServiceRunning(ctx context.Context, projectDir, serviceName string) (bool, error) {
+	services, err := r.ListServices(ctx, projectDir)
+	if err != nil {
+		return false, err
+	}
+	for _, service := range services {
+		if service.ServiceName == serviceName {
+			return service.Running, nil
+		}
+	}
+	return false, nil
+}
+
+// Logs returns the most recent log lines for one Compose service. The caller
+// chooses the tail size so the service layer can keep the dashboard bounded.
+func (r CommandRunner) Logs(ctx context.Context, projectDir, serviceName string, tail int) (string, error) {
+	if tail < 1 {
+		return "", errors.New("log tail must be positive")
+	}
+	return r.readLogs(ctx, projectDir, serviceName, strconv.Itoa(tail))
+}
+
+// AllLogs returns the complete log history for one Compose service.
+func (r CommandRunner) AllLogs(ctx context.Context, projectDir, serviceName string) (string, error) {
+	return r.readLogs(ctx, projectDir, serviceName, "")
+}
+
+func (r CommandRunner) readLogs(ctx context.Context, projectDir, serviceName, tail string) (string, error) {
+
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return "", fmt.Errorf("find Compose file: %w", err)
+	}
+	args := []string{"compose", "-f", composeFile, "logs"}
+	if tail != "" {
+		args = append(args, "--tail", tail)
+	}
+	args = append(args, "--no-color", "--no-log-prefix", serviceName)
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Dir = projectDir
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return "", composeCommandError("read service logs", err, stderr.Bytes())
+	}
+	return string(output), nil
+}
+
+const (
+	postgresDumpScript    = `PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump --clean --if-exists --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
+	postgresRestoreScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec psql --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
+)
+
+// BackupPostgreSQL writes a plain SQL dump produced inside the PostgreSQL
+// service container. The command only references environment variables that
+// are already provided to the managed container, so credentials never pass
+// through the host command line or HTTP layer.
+func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, serviceName, destination string) error {
+	output, err := openManagedOutput(destination)
+	if err != nil {
+		return fmt.Errorf("open PostgreSQL backup: %w", err)
+	}
+	defer output.Close()
+
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", serviceName, "sh", "-c", postgresDumpScript)
+	command.Dir = projectDir
+	command.Stdout = output
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return composeCommandError("create PostgreSQL backup", err, stderr.Bytes())
+	}
+	return nil
+}
+
+// RestorePostgreSQL restores a plain SQL dump through psql inside the
+// PostgreSQL service container.
+func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, serviceName, source string) error {
+	input, err := openManagedInput(source)
+	if err != nil {
+		return fmt.Errorf("open PostgreSQL backup: %w", err)
+	}
+	defer input.Close()
+
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", serviceName, "sh", "-c", postgresRestoreScript)
+	command.Dir = projectDir
+	command.Stdin = input
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return composeCommandError("restore PostgreSQL backup", err, stderr.Bytes())
+	}
+	return nil
+}
+
+func openManagedOutput(path string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, errors.New("backup destination must be a regular file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
+
+func openManagedInput(path string) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("backup source must be a regular file")
+	}
+	return os.Open(path)
+}
+
+// Environment returns the resolved environment values for one Compose
+// service. Compose config is used instead of reading environment files
+// directly so the result follows Compose interpolation and env_file semantics.
+func (r CommandRunner) Environment(ctx context.Context, projectDir, serviceName string) ([]EnvironmentVariable, error) {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("find Compose file: %w", err)
+	}
+	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "config", "--format", "json", serviceName)
+	command.Dir = projectDir
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		details := strings.TrimSpace(stderr.String())
+		if len(details) > maxCommandOutput {
+			details = "..." + details[len(details)-maxCommandOutput:]
+		}
+		if details != "" {
+			return nil, fmt.Errorf("read service environment: %w: %s", err, details)
+		}
+		return nil, fmt.Errorf("read service environment: %w", err)
+	}
+	return decodeServiceEnvironment(output, serviceName)
+}
+
+type composeConfig struct {
+	Services map[string]composeConfigService `json:"services"`
+}
+
+type composeConfigService struct {
+	Environment json.RawMessage `json:"environment"`
+}
+
+func decodeServiceEnvironment(output []byte, serviceName string) ([]EnvironmentVariable, error) {
+	var config composeConfig
+	if err := json.Unmarshal(bytes.TrimSpace(output), &config); err != nil {
+		return nil, fmt.Errorf("decode Compose configuration: %w", err)
+	}
+	service, ok := config.Services[serviceName]
+	if !ok {
+		return nil, fmt.Errorf("service %q is not present in Compose configuration", serviceName)
+	}
+
+	rawEnvironment := bytes.TrimSpace(service.Environment)
+	if len(rawEnvironment) == 0 || bytes.Equal(rawEnvironment, []byte("null")) {
+		return []EnvironmentVariable{}, nil
+	}
+
+	if rawEnvironment[0] == '{' {
+		return decodeEnvironmentObject(rawEnvironment)
+	}
+	if rawEnvironment[0] == '[' {
+		return decodeEnvironmentList(rawEnvironment)
+	}
+	return nil, errors.New("Compose service environment has an unsupported format")
+}
+
+func decodeEnvironmentObject(rawEnvironment []byte) ([]EnvironmentVariable, error) {
+	values := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(rawEnvironment, &values); err != nil {
+		return nil, fmt.Errorf("decode Compose service environment: %w", err)
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	result := make([]EnvironmentVariable, 0, len(keys))
+	for _, key := range keys {
+		value, err := decodeEnvironmentValue(values[key])
+		if err != nil {
+			return nil, fmt.Errorf("decode environment value for %q: %w", key, err)
+		}
+		result = append(result, EnvironmentVariable{Key: key, Value: value})
+	}
+	return result, nil
+}
+
+func decodeEnvironmentList(rawEnvironment []byte) ([]EnvironmentVariable, error) {
+	var entries []string
+	if err := json.Unmarshal(rawEnvironment, &entries); err != nil {
+		return nil, fmt.Errorf("decode Compose service environment: %w", err)
+	}
+	result := make([]EnvironmentVariable, 0, len(entries))
+	for _, entry := range entries {
+		key, value, hasValue := strings.Cut(entry, "=")
+		if !hasValue {
+			value = ""
+		}
+		result = append(result, EnvironmentVariable{Key: key, Value: value})
+	}
+	sort.Slice(result, func(left, right int) bool {
+		return result[left].Key < result[right].Key
+	})
+	return result, nil
+}
+
+func decodeEnvironmentValue(rawValue json.RawMessage) (string, error) {
+	if bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		return "", nil
+	}
+	var value string
+	if err := json.Unmarshal(rawValue, &value); err == nil {
+		return value, nil
+	}
+	var scalar any
+	if err := json.Unmarshal(rawValue, &scalar); err != nil {
+		return "", err
+	}
+	return fmt.Sprint(scalar), nil
+}
+
+func composeCommandError(operation string, err error, output []byte) error {
+	details := strings.TrimSpace(string(output))
+	if len(details) > maxCommandOutput {
+		details = "..." + details[len(details)-maxCommandOutput:]
+	}
+	if details != "" {
+		return fmt.Errorf("%s: %w: %s", operation, err, details)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+type composeServiceRuntime struct {
+	Service   string `json:"Service"`
+	Name      string `json:"Name"`
+	Names     string `json:"Names"`
+	CreatedAt string `json:"CreatedAt"`
+	State     string `json:"State"`
+	Status    string `json:"Status"`
+	Image     string `json:"Image"`
+	Ports     string `json:"Ports"`
+}
+
+func decodeServiceRuntimes(output []byte) ([]ServiceRuntime, error) {
+	output = bytes.TrimSpace(output)
+	if len(output) == 0 {
+		return nil, nil
+	}
+
+	var rows []composeServiceRuntime
+	if output[0] == '[' {
+		if err := json.Unmarshal(output, &rows); err != nil {
+			return nil, fmt.Errorf("decode Compose service list: %w", err)
+		}
+	} else {
+		decoder := json.NewDecoder(bytes.NewReader(output))
+		for {
+			var row composeServiceRuntime
+			if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("decode Compose service: %w", err)
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	services := make([]ServiceRuntime, 0, len(rows))
+	for _, row := range rows {
+		containerName := strings.TrimSpace(row.Name)
+		if containerName == "" {
+			containerName = strings.TrimSpace(row.Names)
+		}
+		status := strings.TrimSpace(row.Status)
+		if status == "" {
+			status = strings.TrimSpace(row.State)
+		}
+		running := strings.EqualFold(strings.TrimSpace(row.State), "running")
+		if strings.TrimSpace(row.State) == "" {
+			lowerStatus := strings.ToLower(status)
+			running = strings.HasPrefix(lowerStatus, "up") || strings.HasPrefix(lowerStatus, "running") || strings.HasPrefix(lowerStatus, "started")
+		}
+		services = append(services, ServiceRuntime{
+			ServiceName:   strings.TrimSpace(row.Service),
+			ContainerName: containerName,
+			CreatedAt:     parseDockerCreatedAt(row.CreatedAt),
+			Status:        status,
+			Image:         strings.TrimSpace(row.Image),
+			Ports:         strings.TrimSpace(row.Ports),
+			Running:       running,
+		})
+	}
+	return services, nil
+}
+
+func parseDockerCreatedAt(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05 -0700 MST",
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05 -0700",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func findComposeFile(projectDir string) (string, error) {
+	for _, name := range []string{"compose.yml", "compose.yaml"} {
+		path := filepath.Join(projectDir, name)
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("%s is not a regular file", name)
+		}
+		return name, nil
+	}
+	return "", errors.New("no compose.yaml or compose.yml file found")
+}

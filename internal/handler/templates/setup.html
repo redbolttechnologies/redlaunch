@@ -1,0 +1,48 @@
+{{define "setup.html"}}
+<section class="setup-shell">
+  <div class="setup-heading">
+    <h1 id="setup-title">Set up your server</h1>
+    <p class="setup-description">Choose the core services Redlaunch should install on this server. You can install either service or both.</p>
+  </div>
+
+  {{if .Setup.Error}}
+  <div class="setup-alert" role="alert">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M12 8v4M12 16h.01"></path>
+    </svg>
+    <span>{{.Setup.Error}}</span>
+  </div>
+  {{end}}
+
+  <form class="setup-form" action="/setup" method="post">
+    <input type="hidden" name="csrf_token" value="{{.Setup.CSRFToken}}">
+    <fieldset class="setup-options">
+      <legend>Core services</legend>
+
+      <label class="setup-option">
+        <input type="checkbox" name="proxy" value="on"{{if .Setup.InstallProxy}} checked{{end}}>
+        <span class="setup-option-copy">
+          <span class="setup-option-title">Reverse proxy <span class="setup-option-technical">Caddy</span></span>
+          <span class="setup-option-description">Routes traffic to managed applications on the shared Redlaunch network.</span>
+        </span>
+        <span class="setup-option-badge">80 / 443</span>
+      </label>
+
+      <label class="setup-option">
+        <input type="checkbox" name="registry" value="on"{{if .Setup.InstallRegistry}} checked{{end}}>
+        <span class="setup-option-copy">
+          <span class="setup-option-title">Docker Registry</span>
+          <span class="setup-option-description">Provides a local image registry available at <code>localhost:5000</code>.</span>
+        </span>
+        <span class="setup-option-badge">5000</span>
+      </label>
+    </fieldset>
+
+    <div class="setup-actions">
+      <p class="setup-footnote">Configuration is stored under the configured projects root.</p>
+      <button class="button button-primary" type="submit">Complete setup</button>
+    </div>
+  </form>
+</section>
+{{end}}

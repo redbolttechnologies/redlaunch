@@ -1,0 +1,929 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"redlaunch/internal/application"
+)
+
+const backupDirectoryMode os.FileMode = 0o700
+
+// BackupRepository is the persistence capability required by database backup
+// operations.
+type BackupRepository interface {
+	Get(context.Context, int64) (application.Application, error)
+	ListServices(context.Context, int64) ([]application.Service, error)
+	GetBackupSchedule(context.Context, int64) (application.BackupSchedule, error)
+	SaveBackupSchedule(context.Context, application.BackupSchedule) error
+	CreateBackup(context.Context, application.Backup) (application.Backup, error)
+	ListBackups(context.Context, int64) ([]application.Backup, error)
+	DeleteBackup(context.Context, int64, string) error
+}
+
+// PostgreSQLBackupRunner performs a database dump or restore without exposing
+// credentials to the host command line and can inspect the service runtime
+// state before a manual dump.
+type PostgreSQLBackupRunner interface {
+	BackupPostgreSQL(context.Context, string, string, string) error
+	RestorePostgreSQL(context.Context, string, string, string) error
+	IsServiceRunning(context.Context, string, string) (bool, error)
+}
+
+// BackupScheduler installs or removes one isolated systemd service/timer pair.
+type BackupScheduler interface {
+	Install(context.Context, string, string, string, string) error
+	Disable(context.Context, string, string) error
+}
+
+// BackupConfig configures backup storage and scheduled execution. When
+// ExecutablePrefix is set, it is prepended to the backup command in the
+// systemd unit (for example, docker exec <container> for a containerized
+// Redlaunch process).
+type BackupConfig struct {
+	ProjectsRoot     string
+	BackupRoot       string
+	DatabasePath     string
+	Executable       string
+	ExecutablePrefix []string
+	Runner           PostgreSQLBackupRunner
+	Scheduler        BackupScheduler
+	Clock            func() time.Time
+}
+
+// BackupService coordinates database backup configuration, systemd schedules,
+// backup files, retention, and restores.
+type BackupService struct {
+	repository       BackupRepository
+	projectsRoot     string
+	backupRoot       string
+	databasePath     string
+	executable       string
+	executablePrefix []string
+	runner           PostgreSQLBackupRunner
+	scheduler        BackupScheduler
+	clock            func() time.Time
+	mu               sync.Mutex
+}
+
+// NewBackupService constructs a backup service with an isolated backup root.
+func NewBackupService(repository BackupRepository, config BackupConfig) (*BackupService, error) {
+	if repository == nil {
+		return nil, errors.New("backup repository is required")
+	}
+	if config.Runner == nil {
+		return nil, errors.New("PostgreSQL backup runner is required")
+	}
+	projectsRoot, err := absoluteManagedPath(config.ProjectsRoot, "projects root")
+	if err != nil {
+		return nil, err
+	}
+	backupRoot := config.BackupRoot
+	if strings.TrimSpace(backupRoot) == "" {
+		backupRoot = filepath.Join(projectsRoot, "backups")
+	}
+	backupRoot, err = absoluteManagedPath(backupRoot, "backup root")
+	if err != nil {
+		return nil, err
+	}
+	databasePath := ""
+	if strings.TrimSpace(config.DatabasePath) != "" {
+		databasePath, err = filepath.Abs(config.DatabasePath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve database path: %w", err)
+		}
+	}
+	executable := strings.TrimSpace(config.Executable)
+	if executable == "" {
+		executable = "redlaunch"
+	}
+	executablePrefix := make([]string, len(config.ExecutablePrefix))
+	for index, argument := range config.ExecutablePrefix {
+		if strings.TrimSpace(argument) == "" {
+			return nil, errors.New("backup executable prefix contains an empty argument")
+		}
+		executablePrefix[index] = argument
+	}
+	scheduler := config.Scheduler
+	if scheduler == nil {
+		scheduler = noBackupScheduler{}
+	}
+	clock := config.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return &BackupService{
+		repository:       repository,
+		projectsRoot:     projectsRoot,
+		backupRoot:       backupRoot,
+		databasePath:     databasePath,
+		executable:       executable,
+		executablePrefix: executablePrefix,
+		runner:           config.Runner,
+		scheduler:        scheduler,
+		clock:            clock,
+	}, nil
+}
+
+// GetBackupDetails returns the schedule and recorded backup files for one
+// PostgreSQL-compatible database service.
+func (s *BackupService) GetBackupDetails(ctx context.Context, applicationID int64, serviceName string) (application.BackupDetails, error) {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return application.BackupDetails{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	schedule, err := s.scheduleForService(ctx, service.ID, s.backupLocation(item, service))
+	if err != nil {
+		return application.BackupDetails{}, err
+	}
+	backups, err := s.repository.ListBackups(ctx, service.ID)
+	if err != nil {
+		return application.BackupDetails{}, fmt.Errorf("list backups: %w", err)
+	}
+	backups = validBackupsForService(backups, service.ID)
+	return application.BackupDetails{Schedule: schedule, Backups: backups}, nil
+}
+
+// UpdateBackupSchedule saves a database backup schedule and synchronizes its
+// isolated systemd timer. Disabling an existing schedule stops the timer and
+// one-shot service before the disabled state is persisted.
+func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID int64, serviceName string, input application.BackupScheduleInput) error {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	location := s.backupLocation(item, service)
+	current, err := s.scheduleForService(ctx, service.ID, location)
+	if err != nil {
+		return err
+	}
+	if !input.Enabled {
+		if current.Enabled {
+			if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, service.ID), backupTimerUnitName(applicationID, service.ID)); err != nil {
+				return fmt.Errorf("disable scheduled backups: %w", err)
+			}
+		}
+		current.Enabled = false
+		current.BackupLocation = location
+		return s.repository.SaveBackupSchedule(ctx, current)
+	}
+
+	validated, err := application.ValidateBackupScheduleInput(input)
+	if err != nil {
+		return err
+	}
+	candidate := current
+	candidate.ServiceID = service.ID
+	candidate.Enabled = true
+	candidate.ScheduleType = validated.ScheduleType
+	candidate.Hour = validated.Hour
+	candidate.Minute = validated.Minute
+	candidate.Weekday = validated.Weekday
+	candidate.RetentionDays = validated.RetentionDays
+	candidate.BackupLocation = location
+	serviceUnitName := backupServiceUnitName(applicationID, service.ID)
+	timerUnitName := backupTimerUnitName(applicationID, service.ID)
+	serviceContents, timerContents := s.renderUnits(applicationID, service.ID, candidate)
+	if err := s.scheduler.Install(ctx, serviceUnitName, serviceContents, timerUnitName, timerContents); err != nil {
+		return fmt.Errorf("enable scheduled backups: %w", err)
+	}
+	if err := s.repository.SaveBackupSchedule(ctx, candidate); err != nil {
+		_ = s.scheduler.Disable(ctx, serviceUnitName, timerUnitName)
+		return fmt.Errorf("save backup schedule: %w", err)
+	}
+	return nil
+}
+
+// RunBackupNow creates a backup immediately when the database service is
+// running, whether or not a schedule is enabled.
+func (s *BackupService) RunBackupNow(ctx context.Context, applicationID int64, serviceName string) (application.Backup, error) {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return application.Backup{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureServiceRunning(ctx, item, service); err != nil {
+		return application.Backup{}, err
+	}
+	return s.runBackup(ctx, item, service, false)
+}
+
+// RunScheduledBackup runs one backup for a systemd service unit. The schedule
+// is checked again so a queued one-shot invocation cannot run after a user has
+// disabled the timer.
+func (s *BackupService) RunScheduledBackup(ctx context.Context, applicationID, serviceID int64) (application.Backup, error) {
+	item, service, err := s.findDatabaseServiceByID(ctx, applicationID, serviceID)
+	if err != nil {
+		return application.Backup{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runBackup(ctx, item, service, true)
+}
+
+// RestoreBackup restores a recorded backup file into its own database service.
+func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return err
+	}
+	fileName, err = application.ValidateBackupFileName(fileName)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	backups, err := s.repository.ListBackups(ctx, service.ID)
+	if err != nil {
+		return fmt.Errorf("list backups for restore: %w", err)
+	}
+	var selected application.Backup
+	for _, backup := range backups {
+		if backup.ServiceID == service.ID && backup.FileName == fileName {
+			selected = backup
+			break
+		}
+	}
+	if selected.FileName == "" {
+		return application.ErrBackupNotFound
+	}
+	location := s.backupLocation(item, service)
+	if _, err := inspectBackupDirectory(s.backupRoot, item.FolderName, service.Name); err != nil {
+		return fmt.Errorf("inspect backup location: %w", err)
+	}
+	path, err := safeBackupPath(location, selected.FileName)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("backup file must be a regular file")
+	}
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return fmt.Errorf("resolve application directory for restore: %w", err)
+	}
+	if err := s.runner.RestorePostgreSQL(ctx, directory, service.Name, path); err != nil {
+		return fmt.Errorf("restore backup: %w", err)
+	}
+	return nil
+}
+
+// DeleteBackup removes a recorded backup file and its database record. The
+// file is removed first so a failed filesystem operation never loses the
+// record of a backup that still exists.
+func (s *BackupService) DeleteBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return err
+	}
+	fileName, err = application.ValidateBackupFileName(fileName)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	backups, err := s.repository.ListBackups(ctx, service.ID)
+	if err != nil {
+		return fmt.Errorf("list backups for delete: %w", err)
+	}
+	var found bool
+	for _, backup := range backups {
+		if backup.ServiceID == service.ID && backup.FileName == fileName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return application.ErrBackupNotFound
+	}
+
+	directory, err := inspectBackupDirectory(s.backupRoot, item.FolderName, service.Name)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.deleteBackupRecord(ctx, service.ID, fileName)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect backup location: %w", err)
+	}
+	path, err := safeBackupPath(directory, fileName)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.deleteBackupRecord(ctx, service.ID, fileName)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("backup file must be a regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("delete backup file: %w", err)
+	}
+	return s.deleteBackupRecord(ctx, service.ID, fileName)
+}
+
+// OpenBackup opens a recorded backup file for streaming to a client. The
+// caller owns the returned reader and must close it.
+func (s *BackupService) OpenBackup(ctx context.Context, applicationID int64, serviceName, fileName string) (io.ReadCloser, application.Backup, error) {
+	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
+	if err != nil {
+		return nil, application.Backup{}, err
+	}
+	fileName, err = application.ValidateBackupFileName(fileName)
+	if err != nil {
+		return nil, application.Backup{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	backups, err := s.repository.ListBackups(ctx, service.ID)
+	if err != nil {
+		return nil, application.Backup{}, fmt.Errorf("list backups for download: %w", err)
+	}
+	var selected application.Backup
+	for _, backup := range backups {
+		if backup.ServiceID == service.ID && backup.FileName == fileName {
+			selected = backup
+			break
+		}
+	}
+	if selected.FileName == "" {
+		return nil, application.Backup{}, application.ErrBackupNotFound
+	}
+
+	directory, err := inspectBackupDirectory(s.backupRoot, item.FolderName, service.Name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, application.Backup{}, application.ErrBackupNotFound
+	}
+	if err != nil {
+		return nil, application.Backup{}, fmt.Errorf("inspect backup location: %w", err)
+	}
+	path, err := safeBackupPath(directory, selected.FileName)
+	if err != nil {
+		return nil, application.Backup{}, err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, application.Backup{}, application.ErrBackupNotFound
+	}
+	if err != nil {
+		return nil, application.Backup{}, fmt.Errorf("inspect backup file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, application.Backup{}, errors.New("backup file must be a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, application.Backup{}, fmt.Errorf("open backup file: %w", err)
+	}
+	fileInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, application.Backup{}, fmt.Errorf("inspect opened backup file: %w", err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, application.Backup{}, errors.New("backup file must be a regular file")
+	}
+	selected.SizeBytes = fileInfo.Size()
+	return file, selected, nil
+}
+
+func (s *BackupService) deleteBackupRecord(ctx context.Context, serviceID int64, fileName string) error {
+	if err := s.repository.DeleteBackup(ctx, serviceID, fileName); err != nil {
+		return fmt.Errorf("delete backup record: %w", err)
+	}
+	return nil
+}
+
+func (s *BackupService) ensureServiceRunning(ctx context.Context, item application.Application, service application.Service) error {
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return fmt.Errorf("resolve application directory for backup status: %w", err)
+	}
+	running, err := s.runner.IsServiceRunning(ctx, directory, service.Name)
+	if err != nil {
+		return fmt.Errorf("check database service status: %w", err)
+	}
+	if !running {
+		return application.ErrBackupServiceNotRunning
+	}
+	return nil
+}
+
+func (s *BackupService) runBackup(ctx context.Context, item application.Application, service application.Service, requireEnabled bool) (application.Backup, error) {
+	location := s.backupLocation(item, service)
+	schedule, err := s.scheduleForService(ctx, service.ID, location)
+	if err != nil {
+		return application.Backup{}, err
+	}
+	if requireEnabled && !schedule.Enabled {
+		return application.Backup{}, application.ErrBackupScheduleDisabled
+	}
+	if err := ensureBackupDirectory(s.backupRoot, item.FolderName, service.Name); err != nil {
+		return application.Backup{}, fmt.Errorf("prepare backup location: %w", err)
+	}
+
+	now := s.clock().UTC()
+	temporary, err := os.CreateTemp(location, ".redlaunch-backup-*.sql")
+	if err != nil {
+		return application.Backup{}, fmt.Errorf("create temporary backup file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return application.Backup{}, fmt.Errorf("prepare temporary backup file: %w", err)
+	}
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("resolve application directory for backup: %w", err)
+	}
+	if err := s.runner.BackupPostgreSQL(ctx, directory, service.Name, temporaryPath); err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("create backup: %w", err)
+	}
+	info, err := os.Lstat(temporaryPath)
+	if err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("inspect completed backup: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, errors.New("completed backup is not a regular file")
+	}
+	if err := os.Chmod(temporaryPath, 0o600); err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("protect completed backup: %w", err)
+	}
+
+	fileName, err := nextBackupFileName(location, now)
+	if err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, err
+	}
+	path, err := safeBackupPath(location, fileName)
+	if err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("save completed backup: %w", err)
+	}
+	removeTemporary = false
+
+	backup, err := s.repository.CreateBackup(ctx, application.Backup{
+		ServiceID: service.ID,
+		FileName:  fileName,
+		CreatedAt: now,
+		SizeBytes: info.Size(),
+	})
+	if err != nil {
+		_ = os.Remove(path)
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("record completed backup: %w", err)
+	}
+	schedule.ServiceID = service.ID
+	schedule.BackupLocation = location
+	schedule.LastBackupAt = now
+	schedule.LastBackupStatus = "successful"
+	schedule.LastBackupSize = backup.SizeBytes
+	if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
+		return application.Backup{}, fmt.Errorf("save backup status: %w", err)
+	}
+	if err := s.applyRetention(ctx, service.ID, location, schedule.RetentionDays, now); err != nil {
+		return backup, fmt.Errorf("apply backup retention: %w", err)
+	}
+	return backup, nil
+}
+
+func (s *BackupService) applyRetention(ctx context.Context, serviceID int64, location string, retentionDays int, now time.Time) error {
+	if retentionDays < 1 {
+		return nil
+	}
+	backups, err := s.repository.ListBackups(ctx, serviceID)
+	if err != nil {
+		return err
+	}
+	cutoff := now.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	for _, backup := range backups {
+		if backup.CreatedAt.IsZero() || !backup.CreatedAt.Before(cutoff) {
+			continue
+		}
+		fileName, err := application.ValidateBackupFileName(backup.FileName)
+		if err != nil {
+			continue
+		}
+		path, err := safeBackupPath(location, fileName)
+		if err != nil {
+			continue
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			// The record is stale, but removing it keeps the UI honest.
+		} else if err != nil {
+			return err
+		} else {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return errors.New("expired backup is not a regular file")
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		}
+		if err := s.repository.DeleteBackup(ctx, serviceID, fileName); err != nil && !errors.Is(err, application.ErrBackupNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *BackupService) recordBackupFailure(ctx context.Context, schedule application.BackupSchedule, location string, at time.Time) {
+	schedule.BackupLocation = location
+	schedule.LastBackupAt = at
+	schedule.LastBackupStatus = "failed"
+	schedule.LastBackupSize = 0
+	_ = s.repository.SaveBackupSchedule(ctx, schedule)
+}
+
+func (s *BackupService) scheduleForService(ctx context.Context, serviceID int64, location string) (application.BackupSchedule, error) {
+	schedule, err := s.repository.GetBackupSchedule(ctx, serviceID)
+	if errors.Is(err, application.ErrBackupScheduleNotFound) {
+		return application.BackupSchedule{
+			ServiceID:      serviceID,
+			ScheduleType:   application.BackupScheduleDaily,
+			Hour:           application.BackupDefaultHour,
+			Minute:         application.BackupDefaultMinute,
+			RetentionDays:  application.BackupDefaultRetention,
+			BackupLocation: location,
+		}, nil
+	}
+	if err != nil {
+		return application.BackupSchedule{}, err
+	}
+	schedule.ServiceID = serviceID
+	schedule.BackupLocation = location
+	if schedule.ScheduleType == "" {
+		schedule.ScheduleType = application.BackupScheduleDaily
+	}
+	if schedule.RetentionDays == 0 {
+		schedule.RetentionDays = application.BackupDefaultRetention
+	}
+	return schedule, nil
+}
+
+func (s *BackupService) findDatabaseService(ctx context.Context, applicationID int64, serviceName string) (application.Application, application.Service, error) {
+	if applicationID < 1 {
+		return application.Application{}, application.Service{}, application.ErrNotFound
+	}
+	serviceName, err := application.ValidateServiceName(serviceName)
+	if err != nil {
+		return application.Application{}, application.Service{}, err
+	}
+	item, err := s.repository.Get(ctx, applicationID)
+	if err != nil {
+		return application.Application{}, application.Service{}, err
+	}
+	if _, err := application.ValidateFolderName(item.FolderName); err != nil {
+		return application.Application{}, application.Service{}, fmt.Errorf("validate stored application folder: %w", err)
+	}
+	services, err := s.repository.ListServices(ctx, applicationID)
+	if err != nil {
+		return application.Application{}, application.Service{}, err
+	}
+	for _, service := range services {
+		if service.Name != serviceName {
+			continue
+		}
+		if !application.IsDatabaseServiceType(service.Type) {
+			return application.Application{}, application.Service{}, application.ErrBackupUnsupported
+		}
+		if service.ID < 1 {
+			return application.Application{}, application.Service{}, application.ErrServiceNotFound
+		}
+		return item, service, nil
+	}
+	return application.Application{}, application.Service{}, application.ErrServiceNotFound
+}
+
+func (s *BackupService) findDatabaseServiceByID(ctx context.Context, applicationID, serviceID int64) (application.Application, application.Service, error) {
+	if applicationID < 1 || serviceID < 1 {
+		return application.Application{}, application.Service{}, application.ErrNotFound
+	}
+	item, err := s.repository.Get(ctx, applicationID)
+	if err != nil {
+		return application.Application{}, application.Service{}, err
+	}
+	if _, err := application.ValidateFolderName(item.FolderName); err != nil {
+		return application.Application{}, application.Service{}, fmt.Errorf("validate stored application folder: %w", err)
+	}
+	services, err := s.repository.ListServices(ctx, applicationID)
+	if err != nil {
+		return application.Application{}, application.Service{}, err
+	}
+	for _, service := range services {
+		if service.ID != serviceID {
+			continue
+		}
+		if !application.IsDatabaseServiceType(service.Type) {
+			return application.Application{}, application.Service{}, application.ErrBackupUnsupported
+		}
+		if _, err := application.ValidateServiceName(service.Name); err != nil {
+			return application.Application{}, application.Service{}, application.ErrServiceNotFound
+		}
+		return item, service, nil
+	}
+	return application.Application{}, application.Service{}, application.ErrServiceNotFound
+}
+
+func (s *BackupService) managedApplicationDirectory(item application.Application) (string, error) {
+	folderName, err := application.ValidateFolderName(item.FolderName)
+	if err != nil {
+		return "", fmt.Errorf("validate stored application folder: %w", err)
+	}
+	directory := filepath.Join(s.projectsRoot, applicationsDir, folderName)
+	relative, err := filepath.Rel(filepath.Join(s.projectsRoot, applicationsDir), directory)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("application directory is outside the managed applications directory")
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", application.ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", errors.New("application path is not a directory")
+	}
+	return directory, nil
+}
+
+func (s *BackupService) backupLocation(item application.Application, service application.Service) string {
+	return filepath.Join(s.backupRoot, item.FolderName, service.Name)
+}
+
+func (s *BackupService) renderUnits(applicationID, serviceID int64, schedule application.BackupSchedule) (string, string) {
+	serviceUnitName := backupServiceUnitName(applicationID, serviceID)
+	serviceArgs := append([]string(nil), s.executablePrefix...)
+	serviceArgs = append(serviceArgs, s.executable, "backup-run", "--application-id", strconv.FormatInt(applicationID, 10), "--service-id", strconv.FormatInt(serviceID, 10))
+	if s.databasePath != "" {
+		serviceArgs = append(serviceArgs, "--db-path", s.databasePath)
+	}
+	serviceArgs = append(serviceArgs, "--projects-root", s.projectsRoot, "--backup-root", s.backupRoot)
+	execStart := make([]string, 0, len(serviceArgs))
+	for _, arg := range serviceArgs {
+		execStart = append(execStart, quoteSystemdArgument(arg))
+	}
+	serviceContents := "[Unit]\n" +
+		"Description=Redlaunch database backup service\n" +
+		"After=docker.service\n\n" +
+		"[Service]\n" +
+		"Type=oneshot\n" +
+		"ExecStart=" + strings.Join(execStart, " ") + "\n" +
+		"PrivateTmp=true\n" +
+		"NoNewPrivileges=true\n"
+	timerContents := "[Unit]\n" +
+		"Description=Redlaunch database backup timer\n\n" +
+		"[Timer]\n" +
+		"OnCalendar=" + backupCalendarExpression(schedule) + "\n" +
+		"Persistent=true\n" +
+		"Unit=" + serviceUnitName + "\n\n" +
+		"[Install]\n" +
+		"WantedBy=timers.target\n"
+	return serviceContents, timerContents
+}
+
+func backupServiceUnitName(applicationID, serviceID int64) string {
+	return "redlaunch-backup-a" + strconv.FormatInt(applicationID, 10) + "-s" + strconv.FormatInt(serviceID, 10) + ".service"
+}
+
+func backupTimerUnitName(applicationID, serviceID int64) string {
+	return "redlaunch-backup-a" + strconv.FormatInt(applicationID, 10) + "-s" + strconv.FormatInt(serviceID, 10) + ".timer"
+}
+
+func backupCalendarExpression(schedule application.BackupSchedule) string {
+	switch schedule.ScheduleType {
+	case application.BackupScheduleHourly:
+		return fmt.Sprintf("*-*-* *:%02d:00", schedule.Minute)
+	case application.BackupScheduleWeekly:
+		return fmt.Sprintf("%s *-*-* %02d:%02d:00", systemdWeekday(schedule.Weekday), schedule.Hour, schedule.Minute)
+	default:
+		return fmt.Sprintf("*-*-* %02d:%02d:00", schedule.Hour, schedule.Minute)
+	}
+}
+
+func systemdWeekday(value string) string {
+	switch strings.ToLower(value) {
+	case "monday":
+		return "Mon"
+	case "tuesday":
+		return "Tue"
+	case "wednesday":
+		return "Wed"
+	case "thursday":
+		return "Thu"
+	case "friday":
+		return "Fri"
+	case "saturday":
+		return "Sat"
+	case "sunday":
+		return "Sun"
+	default:
+		return "Mon"
+	}
+}
+
+func quoteSystemdArgument(value string) string {
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for _, character := range value {
+		switch character {
+		case '\\', '"':
+			builder.WriteByte('\\')
+			builder.WriteRune(character)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		case '%':
+			// Percent specifiers are expanded by systemd in ExecStart. Escape
+			// them so configured paths remain literal arguments.
+			builder.WriteString(`%%`)
+		default:
+			builder.WriteRune(character)
+		}
+	}
+	builder.WriteByte('"')
+	return builder.String()
+}
+
+func absoluteManagedPath(value, label string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must not be empty", label)
+	}
+	path, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", label, err)
+	}
+	path = filepath.Clean(path)
+	if path == string(filepath.Separator) {
+		return "", fmt.Errorf("%s must not be the filesystem root", label)
+	}
+	return path, nil
+}
+
+func ensureBackupDirectory(root, folderName, serviceName string) error {
+	if _, err := application.ValidateFolderName(folderName); err != nil {
+		return err
+	}
+	if _, err := application.ValidateServiceName(serviceName); err != nil {
+		return err
+	}
+	if err := ensurePrivateDirectory(root); err != nil {
+		return err
+	}
+	applicationDirectory := filepath.Join(root, folderName)
+	if err := ensurePrivateDirectory(applicationDirectory); err != nil {
+		return err
+	}
+	return ensurePrivateDirectory(filepath.Join(applicationDirectory, serviceName))
+}
+
+func ensurePrivateDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(path, backupDirectoryMode); err != nil {
+			return err
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("backup path must be a directory")
+	}
+	if err := os.Chmod(path, backupDirectoryMode); err != nil {
+		return err
+	}
+	return nil
+}
+
+func inspectBackupDirectory(root, folderName, serviceName string) (string, error) {
+	if _, err := application.ValidateFolderName(folderName); err != nil {
+		return "", err
+	}
+	if _, err := application.ValidateServiceName(serviceName); err != nil {
+		return "", err
+	}
+	for _, path := range []string{root, filepath.Join(root, folderName), filepath.Join(root, folderName, serviceName)} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", errors.New("backup path must be a directory")
+		}
+	}
+	return filepath.Join(root, folderName, serviceName), nil
+}
+
+func safeBackupPath(directory, fileName string) (string, error) {
+	fileName, err := application.ValidateBackupFileName(fileName)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(directory, fileName)
+	relative, err := filepath.Rel(directory, path)
+	if err != nil || relative != fileName || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("backup file is outside the backup directory")
+	}
+	return path, nil
+}
+
+func nextBackupFileName(directory string, at time.Time) (string, error) {
+	base := "backup-" + at.UTC().Format("20060102-150405.000000000Z")
+	for index := 0; index < 1000; index++ {
+		name := base + ".sql"
+		if index > 0 {
+			name = base + "-" + strconv.Itoa(index) + ".sql"
+		}
+		path, err := safeBackupPath(directory, name)
+		if err != nil {
+			return "", err
+		}
+		_, err = os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return name, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", errors.New("could not allocate a unique backup file name")
+}
+
+func validBackupsForService(backups []application.Backup, serviceID int64) []application.Backup {
+	valid := make([]application.Backup, 0, len(backups))
+	for _, backup := range backups {
+		if backup.ServiceID != serviceID {
+			continue
+		}
+		fileName, err := application.ValidateBackupFileName(backup.FileName)
+		if err != nil {
+			continue
+		}
+		backup.FileName = fileName
+		valid = append(valid, backup)
+	}
+	return valid
+}
+
+type noBackupScheduler struct{}
+
+func (noBackupScheduler) Install(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (noBackupScheduler) Disable(context.Context, string, string) error {
+	return nil
+}

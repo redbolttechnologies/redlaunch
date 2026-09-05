@@ -1,0 +1,41 @@
+services:
+  app:
+    build:
+      context: .
+    image: redlaunch:local
+    container_name: redbolt-redlaunch
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=unconfined
+    tmpfs:
+      - /tmp
+    environment:
+      HTTP_ADDR: ":8080"
+      DB_PATH: "/data/redlaunch.db"
+      PROJECTS_ROOT: "/projects"
+      BACKUP_ROOT: "/var/backups/redlaunch"
+      BACKUP_CONTAINER_NAME: "redbolt-redlaunch"
+      BACKUP_DOCKER_BINARY: "/usr/bin/docker"
+      SYSTEMD_BINARY: "/usr/bin/dbus-send"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GOOGLE_REDIRECT_URL: "${GOOGLE_REDIRECT_URL:-http://localhost:8080/auth/google/callback}"
+      AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET:-}"
+      AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
+      DOCKER_CONFIG: "/tmp/docker"
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - app-data:/data
+      - "${PROJECTS_ROOT:-./projects}:/projects"
+      - "${BACKUP_HOST_ROOT:-./backups}:/var/backups/redlaunch"
+      - "/etc/systemd/system:/etc/systemd/system"
+      - "/run/systemd/system:/run/systemd/system:ro"
+      - "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+volumes:
+  app-data:

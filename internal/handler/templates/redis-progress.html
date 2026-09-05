@@ -1,0 +1,40 @@
+{{define "redis-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-redis-progress data-progress-content-selector=".application-details-page" data-close-url="{{.RedisProgress.CloseURL}}" data-state="{{.RedisProgress.State}}" data-status-url="{{.RedisProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="redis-progress-title" aria-busy="{{if eq .RedisProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.RedisProgress.State}}" aria-hidden="true">
+        {{if eq .RedisProgress.State "complete"}}✓{{else if eq .RedisProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="redis-progress-title" data-progress-title>{{if eq .RedisProgress.State "complete"}}Redis service ready{{else if eq .RedisProgress.State "failed"}}Service creation stopped{{else}}Creating Redis service{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .RedisProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label">{{.Label}}</span>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .RedisProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The service creation stopped during <strong>{{.RedisProgress.ErrorStage}}</strong>.</p>
+      <pre>{{.RedisProgress.ErrorDetail}}</pre>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the Redis service progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

@@ -1,0 +1,40 @@
+{{define "service-delete-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-service-delete-progress data-progress-content-selector=".application-details-page" data-close-url="{{.ServiceDeleteProgress.CloseURL}}" data-state="{{.ServiceDeleteProgress.State}}" data-status-url="{{.ServiceDeleteProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="service-delete-progress-title" aria-busy="{{if eq .ServiceDeleteProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.ServiceDeleteProgress.State}}" aria-hidden="true">
+        {{if eq .ServiceDeleteProgress.State "complete"}}✓{{else if eq .ServiceDeleteProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="service-delete-progress-title" data-progress-title>{{if eq .ServiceDeleteProgress.State "complete"}}Service deleted{{else if eq .ServiceDeleteProgress.State "failed"}}Service deletion stopped{{else}}Deleting service <code>{{.ServiceDeleteProgress.ServiceName}}</code>{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .ServiceDeleteProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label">{{.Label}}</span>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .ServiceDeleteProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The service deletion stopped during <strong>{{.ServiceDeleteProgress.ErrorStage}}</strong>.</p>
+      <p>{{.ServiceDeleteProgress.ErrorDetail}}</p>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the service deletion progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

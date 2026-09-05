@@ -1,0 +1,40 @@
+{{define "application-delete-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-application-delete-progress data-progress-content-selector=".application-details-page" data-close-url="{{.ApplicationDeleteProgress.CloseURL}}" data-state="{{.ApplicationDeleteProgress.State}}" data-status-url="{{.ApplicationDeleteProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="application-delete-progress-title" aria-busy="{{if eq .ApplicationDeleteProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.ApplicationDeleteProgress.State}}" aria-hidden="true">
+        {{if eq .ApplicationDeleteProgress.State "complete"}}✓{{else if eq .ApplicationDeleteProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="application-delete-progress-title" data-progress-title>{{if eq .ApplicationDeleteProgress.State "complete"}}Application deleted{{else if eq .ApplicationDeleteProgress.State "failed"}}Application deletion stopped{{else}}Deleting application <code>{{.ApplicationDeleteProgress.ApplicationName}}</code>{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .ApplicationDeleteProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label">{{.Label}}</span>
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .ApplicationDeleteProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The application deletion stopped during <strong>{{.ApplicationDeleteProgress.ErrorStage}}</strong>.</p>
+      <p>{{.ApplicationDeleteProgress.ErrorDetail}}</p>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the application deletion progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

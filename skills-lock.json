@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "docker-compose": {
+      "source": "bagelhole/devops-security-agent-skills",
+      "sourceType": "github",
+      "skillPath": "devops/containers/docker-compose/SKILL.md",
+      "computedHash": "d3119717854229b9b464a870e811c3f9662caa07c6e06ba756e9d1b84e83c324"
+    },
+    "golang": {
+      "source": "saisudhir14/claude-skills",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "015c18f1fdacd779cdd5fa2795e3e088ef57f7a0dc7a5ebe9bb67245b29f8800"
+    },
+    "sqlite": {
+      "source": "brojonat/llmsrules",
+      "sourceType": "github",
+      "skillPath": "skills/sqlite/SKILL.md",
+      "computedHash": "092f78a7808cc25095ef4ff4cf812bc4aa203bdc49a8fef0330d0e2ed9b61011"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
+    }
+  }
+}

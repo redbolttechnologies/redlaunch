@@ -1,0 +1,84 @@
+{{define "postgresql-service.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "postgresql-service-content.html"}}
+<section class="service-form-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.PostgreSQLServicePage.Application.ID}}">{{.PostgreSQLServicePage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page">Create PostgreSQL database</span>
+  </nav>
+
+  <header class="page-heading service-form-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Create PostgreSQL database</h1>
+      <p>Run a PostgreSQL container alongside <strong>{{.PostgreSQLServicePage.Application.Name}}</strong>.</p>
+    </div>
+  </header>
+
+  <div class="service-form-card">
+    {{if .PostgreSQLServicePage.Error}}
+    <div class="application-alert service-form-alert" role="alert">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v4M12 16h.01"></path>
+      </svg>
+      <span>{{.PostgreSQLServicePage.Error}}</span>
+    </div>
+    {{end}}
+
+    <form class="application-form service-form" method="post" action="/applications/{{.PostgreSQLServicePage.Application.ID}}/services/postgresql/new">
+      <input type="hidden" name="csrf_token" value="{{.PostgreSQLServicePage.CSRFToken}}">
+
+      <div class="service-form-grid">
+        <div class="field">
+          <label for="postgres-service-name">Service name</label>
+          <input id="postgres-service-name" name="service_name" type="text" maxlength="64" value="{{.PostgreSQLServicePage.ServiceName}}" autocomplete="off" required>
+          <span class="field-help">The Compose service name. Defaults to <code>db</code>.</span>
+        </div>
+
+        <div class="field">
+          <label for="postgres-version">Postgres version</label>
+          <input id="postgres-version" name="postgres_version" type="text" maxlength="64" value="{{.PostgreSQLServicePage.PostgresVersion}}" autocomplete="off" required>
+          <span class="field-help">The official image tag, for example <code>17</code>.</span>
+        </div>
+
+        <div class="field">
+          <label for="postgres-database-name">Database name</label>
+          <input id="postgres-database-name" name="database_name" type="text" maxlength="63" value="{{.PostgreSQLServicePage.DatabaseName}}" autocomplete="off" required>
+          <span class="field-help">Defaults to the application name.</span>
+        </div>
+
+        <div class="field">
+          <label for="postgres-database-user">Database user</label>
+          <input id="postgres-database-user" name="database_user" type="text" maxlength="63" value="{{.PostgreSQLServicePage.DatabaseUser}}" autocomplete="username" required>
+          <span class="field-help">The role created for the application.</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="postgres-database-password">Database password</label>
+        <input id="postgres-database-password" name="database_password" type="password" maxlength="256" value="" autocomplete="new-password">
+        <span class="field-help">Leave empty and Redlaunch will generate a secure random password.</span>
+      </div>
+
+      <div class="application-form-note">
+        <span class="application-form-note-mark" aria-hidden="true">i</span>
+        <span>The PostgreSQL definition will be added to <code>compose.yml</code>, its non-secret values will be kept in <code>vars.env</code>, its password in <code>secrets.env</code>, and the container will start immediately.</span>
+      </div>
+
+      <footer class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.PostgreSQLServicePage.Application.ID}}">Cancel</a>
+        <button class="button button-primary" type="submit">Create database</button>
+      </footer>
+    </form>
+  </div>
+</section>
+{{end}}

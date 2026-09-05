@@ -1,0 +1,538 @@
+{{define "service-details.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "service-details-content.html"}}
+<section class="service-details-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.ServiceDetailsPage.Application.ID}}">{{.ServiceDetailsPage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page"><code>{{.ServiceDetailsPage.Details.Service.Name}}</code></span>
+  </nav>
+
+  <header class="page-heading service-details-heading">
+    <div class="service-details-title">
+      <span class="service-type-icon service-details-type-icon service-type-{{serviceTypeClass .ServiceDetailsPage.Details.Service.Type}}" role="img" aria-label="{{serviceTypeLabel .ServiceDetailsPage.Details.Service.Type}}" title="{{serviceTypeLabel .ServiceDetailsPage.Details.Service.Type}}">
+        {{if eq (serviceTypeClass .ServiceDetailsPage.Details.Service.Type) "database"}}
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+          <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path>
+          <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path>
+        </svg>
+        {{else if eq (serviceTypeClass .ServiceDetailsPage.Details.Service.Type) "cache"}}
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m4 7 8-4 8 4-8 4-8-4Z"></path>
+          <path d="m4 12 8 4 8-4"></path>
+          <path d="m4 17 8 4 8-4"></path>
+        </svg>
+        {{else}}
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+          <rect x="14" y="3.5" width="6.5" height="6.5" rx="1"></rect>
+          <rect x="3.5" y="14" width="6.5" height="6.5" rx="1"></rect>
+          <rect x="14" y="14" width="6.5" height="6.5" rx="1"></rect>
+        </svg>
+        {{end}}
+      </span>
+      <div class="page-heading-copy">
+        <div class="service-details-name-row">
+          <h1 id="page-title">{{.ServiceDetailsPage.Details.Service.Name}}</h1>
+          <span class="service-status-badge {{serviceStatusClass .ServiceDetailsPage.Details.Service.Status}}" aria-label="{{if serviceIsRunning .ServiceDetailsPage.Details.Service.Status}}Running, {{end}}{{if .ServiceDetailsPage.Details.Service.Status}}{{.ServiceDetailsPage.Details.Service.Status}}{{else}}Unknown{{end}}">
+            <span class="status-dot" aria-hidden="true"></span>
+            {{if serviceIsRunning .ServiceDetailsPage.Details.Service.Status}}<span>Running</span><span aria-hidden="true">·</span>{{end}}
+            <span>{{if .ServiceDetailsPage.Details.Service.Status}}{{.ServiceDetailsPage.Details.Service.Status}}{{else}}Unknown{{end}}</span>
+          </span>
+        </div>
+        <p>Service details for <strong>{{.ServiceDetailsPage.Application.Name}}</strong>.</p>
+      </div>
+    </div>
+    <div class="service-details-actions" role="group" aria-label="Service actions">
+      <form class="service-details-action-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/start">
+        <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+        <input type="hidden" name="return_to" value="service-details">
+        <button class="button button-secondary service-details-action service-details-action-start" type="submit">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m8 5 11 7-11 7V5Z"></path>
+          </svg>
+          <span>Start</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/stop">
+        <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+        <input type="hidden" name="return_to" value="service-details">
+        <button class="button button-secondary service-details-action service-details-action-stop" type="submit">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="6" width="12" height="12" rx="1"></rect>
+          </svg>
+          <span>Stop</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/restart">
+        <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+        <input type="hidden" name="return_to" value="service-details">
+        <button class="button button-secondary service-details-action service-details-action-restart" type="submit">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 11a8 8 0 0 0-14.9-4M4 5v4h4"></path>
+            <path d="M4 13a8 8 0 0 0 14.9 4M20 19v-4h-4"></path>
+          </svg>
+          <span>Restart</span>
+        </button>
+      </form>
+    </div>
+  </header>
+
+  {{if eq (serviceTypeClass .ServiceDetailsPage.Details.Service.Type) "database"}}
+  <div class="application-tabs service-details-tabs" data-application-tabs>
+    <div class="application-tablist" role="tablist" aria-label="Service details">
+      <button class="application-tab" id="dashboard-tab" type="button" role="tab" aria-controls="dashboard-panel" aria-selected="true" tabindex="0" data-application-tab="dashboard-panel">Dashboard</button>
+      <button class="application-tab" id="backups-tab" type="button" role="tab" aria-controls="backups-panel" aria-selected="false" tabindex="-1" data-application-tab="backups-panel">Backups</button>
+      <button class="application-tab" id="logs-tab" type="button" role="tab" aria-controls="logs-panel" aria-selected="false" tabindex="-1" data-application-tab="logs-panel">Logs</button>
+    </div>
+
+    <section class="application-tab-panel service-details-tab-panel" id="dashboard-panel" role="tabpanel" aria-labelledby="dashboard-tab" tabindex="0">
+      {{template "service-details-dashboard.html" .}}
+    </section>
+
+    <section class="application-tab-panel service-details-tab-panel" id="backups-panel" role="tabpanel" aria-labelledby="backups-tab" tabindex="0" hidden>
+      {{template "service-details-backups.html" .}}
+    </section>
+
+    <section class="application-tab-panel service-details-tab-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" tabindex="0" hidden>
+      {{template "service-details-logs.html" .}}
+    </section>
+  </div>
+  {{if .ServiceDetailsPage.Details.Backup}}
+  {{template "service-details-backup-dialogs.html" .}}
+  {{end}}
+  {{else}}
+  {{template "service-details-dashboard.html" .}}
+  {{template "service-details-logs.html" .}}
+  {{end}}
+</section>
+{{end}}
+
+{{define "service-details-dashboard.html"}}
+<div class="service-dashboard">
+  <section class="service-widget service-general-widget" aria-labelledby="general-information-title">
+    <h2 id="general-information-title" class="sr-only">General information</h2>
+    <div class="service-widget-body">
+      <dl class="service-general-grid">
+        <div class="service-general-item">
+          <span class="service-metadata-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
+              <path d="M4 5v13c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path>
+              <path d="M4 11c0 1.66 3.58 3 8 3s8-1.34 8-3"></path>
+            </svg>
+          </span>
+          <div class="service-general-copy">
+            <dt>Service Name</dt>
+            <dd><code>{{.ServiceDetailsPage.Details.Service.Name}}</code></dd>
+          </div>
+        </div>
+        <div class="service-general-item">
+          <span class="service-metadata-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"></path>
+              <path d="m4.5 7.5 7.5 4 7.5-4M12 12v9"></path>
+            </svg>
+          </span>
+          <div class="service-general-copy">
+            <dt>Container Name</dt>
+            <dd><code>{{if .ServiceDetailsPage.Details.Service.ContainerName}}{{.ServiceDetailsPage.Details.Service.ContainerName}}{{else}}—{{end}}</code></dd>
+          </div>
+        </div>
+        <div class="service-general-item">
+          <span class="service-metadata-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3.5" y="5" width="17" height="15" rx="2"></rect>
+              <path d="M16 3v4M8 3v4M3.5 10h17"></path>
+            </svg>
+          </span>
+          <div class="service-general-copy">
+            <dt>Created</dt>
+            <dd><time datetime="{{serviceCreatedAtISO .ServiceDetailsPage.Details.Service}}" title="{{serviceCreatedAtTitle .ServiceDetailsPage.Details.Service}}">{{serviceCreatedAt .ServiceDetailsPage.Details.Service}}</time></dd>
+          </div>
+        </div>
+        <div class="service-general-item">
+          <span class="service-metadata-icon {{serviceStatusClass .ServiceDetailsPage.Details.Service.Status}}" aria-hidden="true">
+            {{if serviceIsRunning .ServiceDetailsPage.Details.Service.Status}}
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"></circle>
+              <path d="m8 12 2.5 2.5L16 9"></path>
+            </svg>
+            {{else}}
+            <span class="status-dot"></span>
+            {{end}}
+          </span>
+          <div class="service-general-copy">
+            <dt>Status</dt>
+            <dd><span class="service-status-value {{serviceStatusClass .ServiceDetailsPage.Details.Service.Status}}">{{if .ServiceDetailsPage.Details.Service.Status}}{{.ServiceDetailsPage.Details.Service.Status}}{{else}}Unknown{{end}}</span></dd>
+          </div>
+        </div>
+        <div class="service-general-item">
+          <span class="service-metadata-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="6" cy="6" r="2.25"></circle>
+              <circle cx="18" cy="6" r="2.25"></circle>
+              <circle cx="18" cy="18" r="2.25"></circle>
+              <path d="M8.25 6h7.5M6 8.25v5.5a4.25 4.25 0 0 0 4.25 4.25h5.5"></path>
+            </svg>
+          </span>
+          <div class="service-general-copy">
+            <dt>Port</dt>
+            <dd><code>{{if .ServiceDetailsPage.Details.Service.Ports}}{{.ServiceDetailsPage.Details.Service.Ports}}{{else}}—{{end}}</code></dd>
+          </div>
+        </div>
+      </dl>
+    </div>
+  </section>
+</div>
+{{end}}
+
+{{define "service-details-backups.html"}}
+<header class="page-heading service-tab-heading">
+  <div class="page-heading-copy">
+    <h2 id="backups-page-title">Backups</h2>
+    <p>Manage scheduled SQL backups and backup history for this database service.</p>
+    {{if and .ServiceDetailsPage.Details.Backup .ServiceDetailsPage.Details.Backup.Schedule.Enabled}}
+    <dl class="backup-schedule-summary" aria-label="Current backup schedule">
+      <div>
+        <dt class="backup-meta-label">Schedule</dt>
+        <dd>{{backupScheduleType .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType}}</dd>
+      </div>
+      {{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "hourly"}}
+      <div>
+        <dt class="backup-meta-label">Minute</dt>
+        <dd><code>{{printf "%02d" .ServiceDetailsPage.Details.Backup.Schedule.Minute}}</code> past each hour</dd>
+      </div>
+      {{else}}
+      {{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "weekly"}}
+      <div>
+        <dt class="backup-meta-label">Day</dt>
+        <dd>{{backupWeekday .ServiceDetailsPage.Details.Backup.Schedule.Weekday}}</dd>
+      </div>
+      {{end}}
+      <div>
+        <dt class="backup-meta-label">Time</dt>
+        <dd><code>{{printf "%02d:%02d" .ServiceDetailsPage.Details.Backup.Schedule.Hour .ServiceDetailsPage.Details.Backup.Schedule.Minute}}</code></dd>
+      </div>
+      {{end}}
+      <div>
+        <dt class="backup-meta-label">Retention</dt>
+        <dd><code>{{.ServiceDetailsPage.Details.Backup.Schedule.RetentionDays}}</code> days</dd>
+      </div>
+    </dl>
+    {{end}}
+  </div>
+  {{if .ServiceDetailsPage.Details.Backup}}
+  <div class="service-details-actions backup-page-header-actions" role="group" aria-label="Backup actions">
+    <div class="backup-schedule-header-toggle">
+      <span class="backup-schedule-toggle-title">Schedule backups</span>
+      <label class="switch-field backup-schedule-switch" for="backup-schedule-enabled">
+        <span class="sr-only">Schedule backups</span>
+        <input class="switch-input sr-only" id="backup-schedule-enabled" type="checkbox" role="switch" aria-controls="backup-schedule-dialog" aria-expanded="false" data-backup-schedule-toggle{{if .ServiceDetailsPage.Details.Backup.Schedule.Enabled}} checked{{end}}>
+        <span class="switch-visual" aria-hidden="true"><span></span></span>
+      </label>
+    </div>
+    {{if serviceIsRunning .ServiceDetailsPage.Details.Service.Status}}
+      <form class="backup-run-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/backups/run">
+        <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+        <button class="button button-primary" type="submit">Run backup now</button>
+      </form>
+    {{else}}
+      <div class="backup-run-disabled">
+        <button class="button button-primary" type="button" disabled title="Start the service before running a manual backup">Run backup now</button>
+        <span class="field-help">Start the service before running a manual backup.</span>
+      </div>
+    {{end}}
+  </div>
+  {{end}}
+</header>
+
+{{if .ServiceDetailsPage.Details.Backup}}
+<section class="service-widget service-last-backup-widget" aria-labelledby="last-backup-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading-with-icon">
+      <span class="service-widget-section-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="8.5"></circle>
+          <path d="M12 7v5l3 2"></path>
+        </svg>
+      </span>
+      <div class="service-widget-heading">
+        <h2 id="last-backup-title">Last backup</h2>
+      </div>
+    </div>
+  </header>
+  <div class="service-widget-body">
+    <dl class="backup-summary-grid">
+      <div>
+        <dt>Completed</dt>
+        <dd>{{if .ServiceDetailsPage.Details.Backup.Schedule.LastBackupStatus}}<time datetime="{{backupAtISO .ServiceDetailsPage.Details.Backup.Schedule.LastBackupAt}}">{{backupAt .ServiceDetailsPage.Details.Backup.Schedule.LastBackupAt}}</time>{{else}}—{{end}}</dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd><span class="backup-status {{backupStatusClass .ServiceDetailsPage.Details.Backup.Schedule.LastBackupStatus}}"><span aria-hidden="true">{{backupStatusIcon .ServiceDetailsPage.Details.Backup.Schedule.LastBackupStatus}}</span><span>{{backupStatusText .ServiceDetailsPage.Details.Backup.Schedule.LastBackupStatus}}</span></span></dd>
+      </div>
+      <div>
+        <dt>Size</dt>
+        <dd>{{if .ServiceDetailsPage.Details.Backup.Schedule.LastBackupStatus}}{{backupSize .ServiceDetailsPage.Details.Backup.Schedule.LastBackupSize}}{{else}}—{{end}}</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="service-widget service-backup-history-widget" aria-labelledby="backup-history-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading-with-icon">
+      <span class="service-widget-section-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7"></path>
+          <path d="M3 4v5h5"></path>
+          <path d="M12 7v5l3 2"></path>
+        </svg>
+      </span>
+      <div class="service-widget-heading">
+        <h2 id="backup-history-title">Backup history</h2>
+      </div>
+    </div>
+  </header>
+  <div class="service-widget-body">
+    {{if .ServiceDetailsPage.Details.Backup.Backups}}
+      <div class="backup-table-wrap">
+        <table class="backup-table">
+          <thead>
+            <tr>
+              <th scope="col">Completed</th>
+              <th scope="col">Size</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .ServiceDetailsPage.Details.Backup.Backups}}
+            <tr>
+              <th scope="row"><time datetime="{{backupTimeISO .}}">{{backupTime .}}</time></th>
+              <td><code>{{backupSize .SizeBytes}}</code></td>
+              <td class="backup-table-actions">
+                <a class="button button-secondary" href="{{backupDownloadPath $.ServiceDetailsPage.Application.ID $.ServiceDetailsPage.Details.Service.Name .FileName}}">Download</a>
+                <form class="backup-table-action-form" method="post" action="{{serviceDetailsPath $.ServiceDetailsPage.Application.ID $.ServiceDetailsPage.Details.Service.Name}}/backups/restore" data-backup-restore>
+                  <input type="hidden" name="csrf_token" value="{{$.ServiceDetailsPage.CSRFToken}}">
+                  <input type="hidden" name="backup_file" value="{{.FileName}}">
+                  <button class="button button-secondary" type="submit">Restore</button>
+                </form>
+                <form class="backup-table-action-form" method="post" action="{{serviceDetailsPath $.ServiceDetailsPage.Application.ID $.ServiceDetailsPage.Details.Service.Name}}/backups/delete" data-backup-delete>
+                  <input type="hidden" name="csrf_token" value="{{$.ServiceDetailsPage.CSRFToken}}">
+                  <input type="hidden" name="backup_file" value="{{.FileName}}">
+                  <button class="button button-destructive" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="service-widget-empty backup-empty" role="status">
+        <span class="backup-empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3.5 6.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-8.5a2 2 0 0 1 2-2Z"></path>
+            <path d="M3.5 6.5V5a2 2 0 0 1 2-2h4l2 2h5"></path>
+          </svg>
+        </span>
+        <div class="backup-empty-copy">
+          <p>No database backups have been created yet.</p>
+          <span>Run a backup to see it here.</span>
+        </div>
+      </div>
+      {{end}}
+  </div>
+</section>
+{{else}}
+<section class="service-widget" aria-labelledby="backups-unavailable-title">
+  <div class="service-widget-body">
+    <div class="service-widget-empty" role="status">
+      <p id="backups-unavailable-title">Backup details are unavailable right now.</p>
+    </div>
+  </div>
+</section>
+{{end}}
+{{end}}
+
+{{define "service-details-logs.html"}}
+<section class="service-widget service-logs-widget" aria-labelledby="service-logs-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading-with-icon">
+      <span class="service-widget-section-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect>
+          <path d="m7 9 2.5 2L7 13M11.5 13h4"></path>
+        </svg>
+      </span>
+      <div class="service-widget-heading">
+        <h2 id="service-logs-title">Logs</h2>
+        <p>Most recent 1,000 lines from this service.</p>
+      </div>
+    </div>
+    {{if .ServiceDetailsPage.Details.LogsAvailable}}
+    <div class="service-log-actions" role="group" aria-label="Log actions">
+      {{if .ServiceDetailsPage.Details.Logs}}
+      <button class="button button-secondary service-log-action" type="button" data-log-filter-toggle aria-controls="service-log-filter" aria-expanded="false">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5h16l-6.5 7.5V18l-3 1v-6.5L4 5Z"></path>
+        </svg>
+        <span>Filter</span>
+      </button>
+      <button class="button button-secondary service-log-action" type="button" data-log-download>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path>
+        </svg>
+        <span>Download</span>
+      </button>
+      <button class="button button-secondary service-log-action" type="button" data-log-copy>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+        </svg>
+        <span>Copy</span>
+      </button>
+      <input class="service-log-filter" id="service-log-filter" type="search" placeholder="Filter logs" aria-label="Filter logs" data-log-filter hidden>
+      {{end}}
+      <a class="button button-secondary service-log-action" href="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/logs/download" download>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path>
+        </svg>
+        <span>Download full logs</span>
+      </a>
+    </div>
+    {{end}}
+  </header>
+  <div class="service-widget-body">
+    {{if .ServiceDetailsPage.Details.LogsAvailable}}
+      {{if .ServiceDetailsPage.Details.Logs}}
+      <ol class="service-logs" tabindex="0" aria-label="Most recent 1,000 log lines for {{.ServiceDetailsPage.Details.Service.Name}}" data-service-logs>
+        {{range proxyLogLines .ServiceDetailsPage.Details.Logs -}}
+        <li><code>{{.}}</code></li>
+        {{- end}}
+      </ol>
+      <p class="service-log-filter-empty" role="status" hidden>No log lines match this filter.</p>
+      {{else}}
+      <div class="service-widget-empty" role="status">
+        <p>No logs have been emitted by this service.</p>
+      </div>
+      {{end}}
+    {{else}}
+    <div class="service-widget-empty" role="status">
+      <p>Logs are unavailable right now.</p>
+    </div>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "service-details-backup-dialogs.html"}}
+<dialog class="application-dialog backup-schedule-dialog" id="backup-schedule-dialog" data-backup-schedule-dialog role="dialog" aria-modal="true" aria-labelledby="backup-schedule-dialog-title" aria-describedby="backup-schedule-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="backup-schedule-dialog-title">Schedule backups</h2>
+        <p id="backup-schedule-dialog-description">Choose when Redlaunch should create and retain SQL backups for this database service.</p>
+      </div>
+      <button class="icon-button" type="button" data-backup-schedule-close aria-label="Close schedule backups dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form id="backup-schedule-form" class="application-form backup-schedule-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/backups/schedule" data-backup-schedule-form>
+      <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+      <input type="hidden" name="enabled" value="on">
+      <div class="backup-schedule-fields">
+        <div class="field" data-backup-schedule-field="type">
+          <label for="backup-schedule-type">Schedule</label>
+          <select id="backup-schedule-type" name="schedule_type" data-backup-schedule-type required>
+            <option value="hourly"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "hourly"}} selected{{end}}>Hourly</option>
+            <option value="daily"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "daily"}} selected{{end}}>Daily</option>
+            <option value="weekly"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "weekly"}} selected{{end}}>Weekly</option>
+          </select>
+        </div>
+        <div class="field" data-backup-schedule-field="weekday">
+          <label for="backup-schedule-weekday">Day</label>
+          <select id="backup-schedule-weekday" name="weekday"{{if ne .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "weekly"}} disabled{{end}}>
+            <option value="monday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "monday"}} selected{{end}}>Monday</option>
+            <option value="tuesday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "tuesday"}} selected{{end}}>Tuesday</option>
+            <option value="wednesday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "wednesday"}} selected{{end}}>Wednesday</option>
+            <option value="thursday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "thursday"}} selected{{end}}>Thursday</option>
+            <option value="friday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "friday"}} selected{{end}}>Friday</option>
+            <option value="saturday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "saturday"}} selected{{end}}>Saturday</option>
+            <option value="sunday"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.Weekday "sunday"}} selected{{end}}>Sunday</option>
+          </select>
+        </div>
+        <div class="field" data-backup-schedule-field="hour"{{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "hourly"}} hidden{{end}}>
+          <label for="backup-schedule-hour">Hour</label>
+          <input id="backup-schedule-hour" name="hour" type="number" min="0" max="23" step="1" value="{{printf "%02d" .ServiceDetailsPage.Details.Backup.Schedule.Hour}}" inputmode="numeric" required>
+        </div>
+        <div class="field" data-backup-schedule-field="minute">
+          <label for="backup-schedule-minute" data-backup-minute-label>{{if eq .ServiceDetailsPage.Details.Backup.Schedule.ScheduleType "hourly"}}Minute past each hour{{else}}Minute{{end}}</label>
+          <input id="backup-schedule-minute" name="minute" type="number" min="0" max="59" step="1" value="{{printf "%02d" .ServiceDetailsPage.Details.Backup.Schedule.Minute}}" inputmode="numeric" required>
+        </div>
+        <div class="field">
+          <label for="backup-schedule-retention">Retention</label>
+          <input id="backup-schedule-retention" name="retention_days" type="number" min="1" max="3650" step="1" value="{{.ServiceDetailsPage.Details.Backup.Schedule.RetentionDays}}" inputmode="numeric" required>
+          <span class="field-help">Days to keep completed backups.</span>
+        </div>
+      </div>
+
+      <div class="backup-location-row">
+        <span class="backup-meta-label">Backup location</span>
+        <div class="backup-location-control">
+          <code>{{.ServiceDetailsPage.Details.Backup.Schedule.BackupLocation}}</code>
+          <button class="icon-button backup-location-copy" type="button" data-copy-value="{{.ServiceDetailsPage.Details.Backup.Schedule.BackupLocation}}" aria-label="Copy backup location" title="Copy backup location">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+              <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-backup-schedule-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-backup-schedule-submit>Save</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog backup-disable-dialog" id="backup-disable-dialog" data-backup-disable-dialog role="dialog" aria-modal="true" aria-labelledby="backup-disable-dialog-title" aria-describedby="backup-disable-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="backup-disable-dialog-title">Turn off scheduled backups</h2>
+        <p id="backup-disable-dialog-description">Scheduled backups will stop running. Existing backup files and history will not be removed.</p>
+      </div>
+      <button class="icon-button" type="button" data-backup-disable-close aria-label="Close turn off scheduled backups dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/backups/schedule" data-backup-disable-form>
+      <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+      <input type="hidden" name="enabled" value="off">
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-backup-disable-close>Cancel</button>
+        <button class="button button-destructive" type="submit" data-backup-disable-submit>Turn off scheduled backups</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

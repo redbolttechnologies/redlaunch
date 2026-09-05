@@ -1,0 +1,180 @@
+{{define "application-routing.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "application-routing-content.html"}}
+<section class="application-routing-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.ApplicationRoutingPage.Application.ID}}">{{.ApplicationRoutingPage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page">{{routingHost .ApplicationRoutingPage.Domain.Name ""}}</span>
+  </nav>
+
+  <header class="page-heading application-routing-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Routing</h1>
+      <p>Route requests for <code>{{routingHost .ApplicationRoutingPage.Domain.Name ""}}</code> to an application service.</p>
+    </div>
+    <a class="button button-secondary" href="/applications/{{.ApplicationRoutingPage.Application.ID}}?tab=domains">Back to domains</a>
+  </header>
+
+  <section class="service-widget application-routings-widget" aria-labelledby="routings-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="routings-title">Routings</h2>
+        <p>Incoming paths and the services that handle them.</p>
+      </div>
+      <button class="button button-primary" type="button" data-routing-add aria-controls="routing-edit-dialog" aria-haspopup="dialog" aria-expanded="false">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"></path>
+        </svg>
+        <span>Add routing</span>
+      </button>
+    </header>
+    <div class="service-widget-body">
+      {{if .ApplicationRoutingPage.Routings}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table routing-table">
+          <caption class="sr-only">Routings for {{routingHost .ApplicationRoutingPage.Domain.Name ""}}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Domain</th>
+              <th scope="col">Request path</th>
+              <th scope="col">Service</th>
+              <th scope="col">Service path</th>
+              <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .ApplicationRoutingPage.Routings}}
+            <tr>
+              <th scope="row"><code>{{routingHost $.ApplicationRoutingPage.Domain.Name .Subdomain}}</code></th>
+              <td><code>{{.Path}}</code></td>
+              <td><code>{{.ServiceName}}</code></td>
+              <td><code>{{.ServicePath}}</code></td>
+              <td class="application-environment-actions">
+                <div class="application-environment-action-group">
+                  <button class="application-environment-edit" type="button" data-routing-edit data-routing-id="{{.ID}}" data-routing-subdomain="{{.Subdomain}}" data-routing-path="{{.Path}}" data-routing-service="{{.ServiceName}}" data-routing-service-path="{{.ServicePath}}" aria-controls="routing-edit-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Edit routing for {{routingHost $.ApplicationRoutingPage.Domain.Name .Subdomain}}">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 20h9"></path>
+                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path>
+                    </svg>
+                  </button>
+                  <button class="application-environment-delete" type="button" data-routing-delete data-routing-id="{{.ID}}" data-routing-host="{{routingHost $.ApplicationRoutingPage.Domain.Name .Subdomain}}" aria-controls="routing-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Delete routing for {{routingHost $.ApplicationRoutingPage.Domain.Name .Subdomain}}">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 6h18"></path>
+                      <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+                      <path d="M10 11v5M14 11v5"></path>
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="service-widget-empty" role="status">
+        <p>No routings are associated with this domain.</p>
+      </div>
+      {{end}}
+    </div>
+  </section>
+</section>
+
+<dialog class="application-dialog routing-edit-dialog" id="routing-edit-dialog" data-routing-edit-dialog{{with .ApplicationRoutingPage.RoutingEdit}}{{if .Open}} data-routing-edit-open{{end}}{{end}} aria-modal="true" aria-labelledby="routing-edit-dialog-title" aria-describedby="routing-edit-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="routing-edit-dialog-title" data-routing-edit-title>{{with .ApplicationRoutingPage.RoutingEdit}}{{if .Add}}Add routing{{else}}Edit routing{{end}}{{else}}Add routing{{end}}</h2>
+        <p id="routing-edit-dialog-description">Define which application service handles a request path.</p>
+      </div>
+      <button class="icon-button" type="button" data-routing-edit-close aria-label="Close routing dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/applications/{{.ApplicationRoutingPage.Application.ID}}/domains/{{.ApplicationRoutingPage.Domain.ID}}/routing">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationRoutingPage.CSRFToken}}">
+      <input type="hidden" name="operation" value="{{with .ApplicationRoutingPage.RoutingEdit}}{{if .Add}}add{{else}}edit{{end}}{{else}}add{{end}}" data-routing-edit-operation>
+      <input type="hidden" name="routing_id" value="{{with .ApplicationRoutingPage.RoutingEdit}}{{.ID}}{{end}}" data-routing-edit-id>
+      {{with .ApplicationRoutingPage.RoutingEdit}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <div class="field">
+        <span class="field-label">Main domain</span>
+        <div class="routing-domain-value"><code>{{.ApplicationRoutingPage.Domain.Name}}</code></div>
+      </div>
+      <div class="field">
+        <label for="routing-edit-subdomain">Subdomain <span class="field-label-optional">(optional)</span></label>
+        <input id="routing-edit-subdomain" name="subdomain" type="text" value="{{with .ApplicationRoutingPage.RoutingEdit}}{{.Subdomain}}{{end}}" maxlength="253" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="api">
+        <span class="field-help">Leave blank to route the main domain.</span>
+      </div>
+      <div class="field">
+        <label for="routing-edit-path">Request path</label>
+        <input id="routing-edit-path" name="path" type="text" value="{{with .ApplicationRoutingPage.RoutingEdit}}{{.Path}}{{else}}/{{end}}" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="/" required>
+      </div>
+      <div class="field">
+        <label for="routing-edit-service">Service</label>
+        <select id="routing-edit-service" name="service" required>
+          <option value="">Select a service</option>
+          {{range .ApplicationRoutingPage.Services}}
+          <option value="{{.Name}}"{{if $.ApplicationRoutingPage.RoutingEdit}}{{if eq $.ApplicationRoutingPage.RoutingEdit.ServiceName .Name}} selected{{end}}{{end}}>{{.Name}}</option>
+          {{end}}
+        </select>
+        {{if not .ApplicationRoutingPage.Services}}<span class="field-help">Create a service before adding a routing.</span>{{end}}
+      </div>
+      <div class="field">
+        <label for="routing-edit-service-path">Service path</label>
+        <input id="routing-edit-service-path" name="service_path" type="text" value="{{with .ApplicationRoutingPage.RoutingEdit}}{{.ServicePath}}{{else}}/{{end}}" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="/" required>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-routing-edit-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-routing-edit-submit>Save</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog routing-delete-dialog" id="routing-delete-dialog" data-routing-delete-dialog{{with .ApplicationRoutingPage.RoutingDelete}}{{if .Open}} data-routing-delete-open{{end}}{{end}} aria-modal="true" aria-labelledby="routing-delete-dialog-title" aria-describedby="routing-delete-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="routing-delete-dialog-title">Delete routing</h2>
+        <p id="routing-delete-dialog-description">Remove the routing for <code data-routing-delete-host-display>{{with .ApplicationRoutingPage.RoutingDelete}}{{.Host}}{{end}}</code>? This action cannot be undone.</p>
+      </div>
+      <button class="icon-button" type="button" data-routing-delete-close aria-label="Close delete routing dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/applications/{{.ApplicationRoutingPage.Application.ID}}/domains/{{.ApplicationRoutingPage.Domain.ID}}/routing/delete">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationRoutingPage.CSRFToken}}">
+      <input type="hidden" name="routing_id" value="{{with .ApplicationRoutingPage.RoutingDelete}}{{.ID}}{{end}}" data-routing-delete-id>
+      <input type="hidden" name="host" value="{{with .ApplicationRoutingPage.RoutingDelete}}{{.Host}}{{end}}" data-routing-delete-host-input>
+      {{with .ApplicationRoutingPage.RoutingDelete}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-routing-delete-close data-routing-delete-cancel>Cancel</button>
+        <button class="button button-destructive" type="submit" data-routing-delete-submit>Delete routing</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

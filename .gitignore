@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.tmp.*
+vars.env
+secrets.env
+/bin/
+/data/
+*.db
+*.db-shm
+*.db-wal
+/projects/
+/backups/
