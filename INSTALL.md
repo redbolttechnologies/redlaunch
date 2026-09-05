@@ -9,7 +9,8 @@ managed applications under the configured projects root.
 Use a supported 64-bit Ubuntu or Debian VPS with:
 
 - an SSH account with <code>sudo</code> access;
-- <code>git</code>, <code>make</code>, <code>bash</code>, and <code>openssl</code>;
+- <code>git</code>, <code>make</code>, <code>bash</code>, <code>openssl</code>, and
+  <code>wget</code>;
 - Docker Engine and the Docker Compose plugin;
 - a hostname and DNS records pointing to the VPS if you will publish services
   through Caddy; and
@@ -45,7 +46,7 @@ Ubuntu](https://docs.docker.com/engine/install/ubuntu/):
 
 ~~~sh
 sudo apt update
-sudo apt install -y ca-certificates curl git make bash openssl
+sudo apt install -y ca-certificates curl wget git make bash openssl
 
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -73,7 +74,7 @@ Debian](https://docs.docker.com/engine/install/debian/):
 
 ~~~sh
 sudo apt update
-sudo apt install -y ca-certificates curl git make bash openssl
+sudo apt install -y ca-certificates curl wget git make bash openssl
 
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/debian/gpg \
@@ -163,9 +164,25 @@ as <code>GOOGLE_REDIRECT_URL</code> and set
 Redlaunch's first-run screen is for routing managed application services; it is
 not an automatic reverse proxy for the Redlaunch UI itself.
 
-## 3. Clone Redlaunch and run <code>make setup</code>
+## 3. Install Redlaunch and run <code>make setup</code>
 
-Clone the repository on the VPS and run setup from its root directory:
+The one-step installer clones Redlaunch into <code>~/redlaunch</code> and runs
+<code>make setup</code>:
+
+~~~sh
+wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh | bash
+~~~
+
+To install somewhere else, set <code>REDLAUNCH_INSTALL_DIR</code> on the Bash
+side of the pipeline:
+
+~~~sh
+wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh \
+  | REDLAUNCH_INSTALL_DIR=/srv/redlaunch bash
+~~~
+
+The installer refuses to overwrite an existing installation directory. If you
+prefer to clone manually, use:
 
 ~~~sh
 git clone <repository-url> redlaunch

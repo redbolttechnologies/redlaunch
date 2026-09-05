@@ -62,6 +62,25 @@ available (otherwise initials), along with a logout control.
 
 Requires Docker Engine with the Docker Compose plugin.
 
+For a one-step installation, run the installer from the account that will own
+the Redlaunch files:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh | bash
+```
+
+The installer clones Redlaunch into `~/redlaunch` and runs `make setup`. To use
+a different directory, set `REDLAUNCH_INSTALL_DIR` on the shell running the
+installer:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh \
+  | REDLAUNCH_INSTALL_DIR=/srv/redlaunch bash
+```
+
+The installer refuses to overwrite an existing installation directory. The
+equivalent manual steps are:
+
 ```sh
 git clone <repository-url> redlaunch
 cd redlaunch
