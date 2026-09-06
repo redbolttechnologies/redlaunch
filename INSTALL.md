@@ -135,9 +135,10 @@ client, which provides the <code>GOOGLE_CLIENT_ID</code> and
    - for an HTTPS management URL:
      <code>https://redlaunch.example.com/auth/google/callback</code>
 
-   Replace the example hostname with the URL used in the browser. The scheme,
-   hostname, port, path, and trailing slash must match exactly. Redlaunch does
-   not use a trailing slash on this callback path.
+   Add both URIs when you will use both local and public access. Replace the
+   example hostname with the public hostname configured in Redlaunch. The
+   scheme, hostname, port, path, and trailing slash must match exactly.
+   Redlaunch does not use a trailing slash on this callback path.
 5. Create the client and copy the **Client ID** and **Client Secret**. Store the
    secret securely; do not commit it, paste it into an issue, or put it in a
    public file.
@@ -158,11 +159,18 @@ ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
 With that tunnel open, visit <code>http://localhost:8080</code> in your local
 browser and use the default callback URL above.
 
-If an HTTPS reverse proxy already publishes Redlaunch, use its public HTTPS URL
-as <code>GOOGLE_REDIRECT_URL</code> and set
-<code>AUTH_COOKIE_SECURE=true</code>. The Caddy service installed from
-Redlaunch's first-run screen is for routing managed application services; it is
-not an automatic reverse proxy for the Redlaunch UI itself.
+When Redlaunch public access is enabled in Settings, a login started at the
+configured public hostname automatically uses that hostname for the HTTPS
+callback URL. Keep <code>GOOGLE_REDIRECT_URL</code> as the local fallback and
+register both callback URLs in Google. Set
+<code>AUTH_COOKIE_SECURE=true</code> when using the public HTTPS URL. The Caddy
+service installed from Redlaunch's first-run screen is for routing managed
+application services until public access is enabled; it is not an automatic
+reverse proxy for the Redlaunch UI itself.
+
+For an external HTTPS reverse proxy that is not configured through Redlaunch's
+Public access setting, set <code>GOOGLE_REDIRECT_URL</code> to that proxy's
+callback URL instead.
 
 ## 3. Install Redlaunch and run <code>make setup</code>
 
@@ -220,17 +228,16 @@ the <code>projects</code> directory beside the Compose file. If you set
 <code>PROJECTS_ROOT</code> in <code>.env</code>, use an absolute path on the VPS
 and run the Compose commands from the installation directory.
 
-The generated <code>.env</code> uses this default callback:
+The generated <code>.env</code> uses this local fallback callback:
 
 ~~~text
 GOOGLE_REDIRECT_URL='http://localhost:8080/auth/google/callback'
 ~~~
 
-If you are using a public HTTPS management URL, edit <code>.env</code>
-immediately after setup and restart the stack before signing in:
+If you are using a public HTTPS management URL, set secure cookies before
+signing in through it:
 
 ~~~text
-GOOGLE_REDIRECT_URL='https://redlaunch.example.com/auth/google/callback'
 AUTH_COOKIE_SECURE='true'
 ~~~
 
@@ -245,8 +252,9 @@ docker compose ps
 docker compose logs --tail=100 app
 ~~~
 
-Open Redlaunch at <code>http://localhost:8080</code> through the SSH tunnel, or
-at the HTTPS URL configured above. Sign in with the authorized Google account.
+Open Redlaunch at <code>http://localhost:8080</code> through the SSH tunnel and
+sign in with the authorized Google account. The public URL becomes available
+after the first-run Caddy setup described below.
 
 ## 4. Complete the Redlaunch first-run setup
 
@@ -299,10 +307,13 @@ Redlaunch listener on port 8080, and reloads Caddy. The same setting is shown
 from every application's Settings tab.
 Point the hostname's DNS record to the VPS before enabling it.
 
-Google authentication must also use the public callback URL. Set
-<code>GOOGLE_REDIRECT_URL=https://redlaunch.example.com/auth/google/callback</code>
-and <code>AUTH_COOKIE_SECURE=true</code> in the Redlaunch <code>.env</code>, add
-the same callback URL to the Google OAuth client, and restart Redlaunch.
+Google authentication automatically uses
+<code>https://redlaunch.example.com/auth/google/callback</code> when sign-in is
+started at the configured public hostname. Add that exact callback URL to the
+Google OAuth client, keep the local callback URI registered if local access is
+also needed, and set <code>AUTH_COOKIE_SECURE=true</code> in Redlaunch's
+<code>.env</code> before using the public URL. Replace the example hostname with
+the configured public hostname.
 
 ### Create services
 
@@ -391,9 +402,10 @@ Longer path matchers take precedence when multiple routes share a host.
 
 ## Troubleshooting
 
-- **<code>redirect_uri_mismatch</code>**: compare
-  <code>GOOGLE_REDIRECT_URL</code> with the Google client's authorized
-  redirect URI character for character, then restart the Compose stack.
+- **<code>redirect_uri_mismatch</code>**: register both the configured local
+  <code>GOOGLE_REDIRECT_URL</code> and, when public access is enabled, the exact
+  <code>https://&lt;public-hostname&gt;/auth/google/callback</code> URI in the
+  Google client. The scheme, host, port, path, and trailing slash must match.
 - **Google login says the account is not authorized**: use the email entered
   during <code>make setup</code>; it must be a verified Google email and, for a
   Google app in Testing status, a configured test user.

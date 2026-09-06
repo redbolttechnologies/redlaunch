@@ -90,6 +90,75 @@ func TestAuthorizationURLIncludesStateAndConfiguredValues(t *testing.T) {
 	}
 }
 
+func TestAuthorizationURLSupportsPerRequestRedirectURL(t *testing.T) {
+	service := newTestService(t, &fakeAuthorizedEmailStore{allowed: map[string]bool{}}, func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	const publicRedirectURL = "https://public.redlaunch.example/auth/google/callback"
+	parsed, err := url.Parse(service.AuthorizationURLForRedirect("state-token", publicRedirectURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("redirect_uri"); got != publicRedirectURL {
+		t.Fatalf("per-request redirect_uri = %q, want %q", got, publicRedirectURL)
+	}
+
+	configured, err := url.Parse(service.AuthorizationURL("state-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configured.Query().Get("redirect_uri"); got != "https://redlaunch.example.com/auth/google/callback" {
+		t.Fatalf("configured redirect_uri after override = %q, want configured URL", got)
+	}
+}
+
+func TestCompleteLoginSupportsPerRequestRedirectURL(t *testing.T) {
+	var gotRedirectURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse token form: %v", err)
+			}
+			gotRedirectURL = r.Form.Get("redirect_uri")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"access-token","token_type":"Bearer","expires_in":3600}`))
+		case "/userinfo":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"email":"admin@example.com","email_verified":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	service, err := New(Config{
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		RedirectURL:   "https://redlaunch.example.com/auth/google/callback",
+		SessionSecret: strings.Repeat("s", 32),
+		OAuthEndpoint: oauth2.Endpoint{
+			AuthURL:   server.URL + "/authorize",
+			TokenURL:  server.URL + "/token",
+			AuthStyle: oauth2.AuthStyleInParams,
+		},
+		UserInfoURL: server.URL + "/userinfo",
+		HTTPClient:  server.Client(),
+	}, &fakeAuthorizedEmailStore{allowed: map[string]bool{"admin@example.com": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const publicRedirectURL = "https://public.redlaunch.example/auth/google/callback"
+	if _, err := service.CompleteLoginForRedirect(context.Background(), "authorization-code", publicRedirectURL); err != nil {
+		t.Fatal(err)
+	}
+	if gotRedirectURL != publicRedirectURL {
+		t.Fatalf("token redirect_uri = %q, want %q", gotRedirectURL, publicRedirectURL)
+	}
+}
+
 func TestCompleteLoginUsesVerifiedEmailAndAllowlist(t *testing.T) {
 	store := &fakeAuthorizedEmailStore{allowed: map[string]bool{"admin@example.com": true}}
 	service := newTestService(t, store, func(w http.ResponseWriter) {

@@ -96,10 +96,9 @@ func New(config Config, store AuthorizedEmailStore) (*Service, error) {
 	if strings.TrimSpace(config.RedirectURL) == "" {
 		return nil, errors.New("Google redirect URL is required")
 	}
-	redirectURLValue := strings.TrimSpace(config.RedirectURL)
-	redirectURL, err := url.Parse(redirectURLValue)
-	if err != nil || redirectURL.Scheme == "" || redirectURL.Host == "" || redirectURL.User != nil || (redirectURL.Scheme != "http" && redirectURL.Scheme != "https") {
-		return nil, errors.New("Google redirect URL must be an absolute HTTP or HTTPS URL")
+	redirectURLValue, err := parseRedirectURL(config.RedirectURL)
+	if err != nil {
+		return nil, err
 	}
 	if len(config.SessionSecret) < 32 {
 		return nil, errors.New("authentication session secret must contain at least 32 bytes")
@@ -170,15 +169,34 @@ func (s *Service) Enabled() bool {
 
 // AuthorizationURL builds the Google authorization URL for one login attempt.
 func (s *Service) AuthorizationURL(state string) string {
-	if !s.Enabled() {
+	return s.AuthorizationURLForRedirect(state, "")
+}
+
+// AuthorizationURLForRedirect builds the Google authorization URL with an
+// optional per-request redirect URL. An empty redirectURL uses the configured
+// redirect URL.
+func (s *Service) AuthorizationURLForRedirect(state, redirectURL string) string {
+	oauthConfig, err := s.oauthConfigForRedirect(redirectURL)
+	if err != nil {
 		return ""
 	}
-	return s.oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOnline)
+	return oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOnline)
 }
 
 // CompleteLogin exchanges a Google authorization code, reads the verified
 // Google account identity, and checks its email against the local allowlist.
 func (s *Service) CompleteLogin(ctx context.Context, code string) (User, error) {
+	return s.CompleteLoginForRedirect(ctx, code, "")
+}
+
+// CompleteLoginForRedirect completes a Google login using an optional
+// per-request redirect URL. The redirect URL must match the one used to start
+// the authorization request; an empty redirectURL uses the configured value.
+func (s *Service) CompleteLoginForRedirect(ctx context.Context, code, redirectURL string) (User, error) {
+	oauthConfig, err := s.oauthConfigForRedirect(redirectURL)
+	if err != nil {
+		return User{}, err
+	}
 	if !s.Enabled() {
 		return User{}, errors.New("Google authentication is not configured")
 	}
@@ -187,7 +205,7 @@ func (s *Service) CompleteLogin(ctx context.Context, code string) (User, error) 
 	}
 
 	oauthContext := context.WithValue(ctx, oauth2.HTTPClient, s.httpClient)
-	token, err := s.oauthConfig.Exchange(oauthContext, code)
+	token, err := oauthConfig.Exchange(oauthContext, code)
 	if err != nil {
 		return User{}, fmt.Errorf("exchange Google authorization code: %w", err)
 	}
@@ -233,6 +251,35 @@ func (s *Service) CompleteLogin(ctx context.Context, code string) (User, error) 
 		Name:       user.Name,
 		PictureURL: user.PictureURL,
 	})
+}
+
+func (s *Service) oauthConfigForRedirect(redirectURL string) (*oauth2.Config, error) {
+	if !s.Enabled() {
+		return nil, errors.New("Google authentication is not configured")
+	}
+	redirectURL = strings.TrimSpace(redirectURL)
+	if redirectURL == "" {
+		return s.oauthConfig, nil
+	}
+	redirectURL, err := parseRedirectURL(redirectURL)
+	if err != nil {
+		return nil, err
+	}
+	config := *s.oauthConfig
+	config.RedirectURL = redirectURL
+	return &config, nil
+}
+
+func parseRedirectURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("Google redirect URL is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("Google redirect URL must be an absolute HTTP or HTTPS URL")
+	}
+	return value, nil
 }
 
 // NewSession creates a signed, expiring session value for an authorized user.

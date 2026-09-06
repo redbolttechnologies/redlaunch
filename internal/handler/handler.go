@@ -38,6 +38,7 @@ const (
 	oauthStateCookieName    = "redlaunch_oauth_state"
 	oauthRedirectCookieName = "redlaunch_oauth_redirect"
 	sessionCookieName       = "redlaunch_session"
+	oauthCallbackPath       = "/auth/google/callback"
 )
 
 type authenticatedUserContextKey struct{}
@@ -91,6 +92,11 @@ type authenticationService interface {
 	ValidateSession(context.Context, string) (redlaunchauth.User, bool, error)
 	CookieSecure() bool
 	SessionDuration() time.Duration
+}
+
+type authenticationRedirectService interface {
+	AuthorizationURLForRedirect(string, string) string
+	CompleteLoginForRedirect(context.Context, string, string) (redlaunchauth.User, error)
 }
 
 type applicationService interface {
@@ -686,6 +692,12 @@ func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	redirectURL, err := h.oauthRedirectURL(r)
+	if err != nil {
+		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
+		http.Error(w, "Google sign-in could not be started.", http.StatusInternalServerError)
+		return
+	}
 	state, err := newCSRFToken()
 	if err != nil {
 		h.logger.Error("create Google OAuth state", "error", err)
@@ -712,7 +724,7 @@ func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		Secure:   secure,
 	})
-	http.Redirect(w, r, h.authentication.AuthorizationURL(state), http.StatusFound)
+	http.Redirect(w, r, h.authorizationURL(state, redirectURL), http.StatusFound)
 }
 
 func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
@@ -749,7 +761,13 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.authentication.CompleteLogin(r.Context(), code)
+	redirectURL, err := h.oauthRedirectURL(r)
+	if err != nil {
+		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
+		http.Error(w, "Google sign-in could not be completed.", http.StatusInternalServerError)
+		return
+	}
+	user, err := h.completeLogin(r.Context(), code, redirectURL)
 	if errors.Is(err, redlaunchauth.ErrNotAuthorized) || errors.Is(err, redlaunchauth.ErrEmailNotVerified) || errors.Is(err, application.ErrEmailInvalid) {
 		h.redirectToLoginWithError(w, r, target, "unauthorized")
 		return
@@ -790,6 +808,61 @@ func (h *Handler) currentSessionUser(r *http.Request) (redlaunchauth.User, bool,
 		return redlaunchauth.User{}, false, nil
 	}
 	return h.authentication.ValidateSession(r.Context(), cookie.Value)
+}
+
+func (h *Handler) authorizationURL(state, redirectURL string) string {
+	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
+		return authentication.AuthorizationURLForRedirect(state, redirectURL)
+	}
+	return h.authentication.AuthorizationURL(state)
+}
+
+func (h *Handler) completeLogin(ctx context.Context, code, redirectURL string) (redlaunchauth.User, error) {
+	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
+		return authentication.CompleteLoginForRedirect(ctx, code, redirectURL)
+	}
+	return h.authentication.CompleteLogin(ctx, code)
+}
+
+func (h *Handler) oauthRedirectURL(r *http.Request) (string, error) {
+	if _, ok := h.authentication.(authenticationRedirectService); !ok {
+		return "", nil
+	}
+	publicAccess, err := h.redlaunchPublicAccess.GetRedlaunchPublicAccess(r.Context())
+	if err != nil {
+		return "", fmt.Errorf("read Redlaunch public access settings: %w", err)
+	}
+	if !publicAccess.Enabled {
+		return "", nil
+	}
+	domain, err := application.ValidateDomainName(publicAccess.Domain)
+	if err != nil {
+		return "", fmt.Errorf("validate Redlaunch public access domain: %w", err)
+	}
+	if !requestUsesPublicHost(r, domain) {
+		return "", nil
+	}
+	return (&url.URL{Scheme: "https", Host: domain, Path: oauthCallbackPath}).String(), nil
+}
+
+func requestUsesPublicHost(r *http.Request, expectedDomain string) bool {
+	host := strings.TrimSpace(r.Host)
+	if host == "" && r.URL != nil {
+		host = strings.TrimSpace(r.URL.Host)
+	}
+	if host == "" {
+		return false
+	}
+	parsed, err := url.Parse("//" + host)
+	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return false
+	}
+	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	expectedDomain = strings.TrimSuffix(strings.ToLower(expectedDomain), ".")
+	return hostname != "" && hostname == expectedDomain
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {

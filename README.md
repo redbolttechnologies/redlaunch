@@ -37,6 +37,14 @@ ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
 Keep the tunnel open while using <http://localhost:8080> in your browser.
 Alternatively, place the management interface behind an HTTPS reverse proxy.
 
+When Redlaunch public access is enabled, a login started at its configured
+public hostname uses `https://<hostname>/auth/google/callback` automatically.
+Register that public callback URI in the same Google OAuth client as the local
+callback URI.
+
+For an external HTTPS reverse proxy that is not configured through Redlaunch's
+Public access setting, set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
+
 ## What it can do
 
 - Create and manage Docker Compose applications.
@@ -84,7 +92,7 @@ Local development requires Go 1.25 or newer and a running user systemd manager.
 
 ```sh
 cp .env.example .env
-# Add your Google OAuth client ID, client secret, and redirect URL to .env.
+# Add your Google OAuth client ID, client secret, and local fallback redirect URL to .env.
 openssl rand -hex 32
 # Add the generated value to .env as AUTH_SESSION_SECRET.
 make add-authorized-email EMAIL=you@example.com
@@ -101,7 +109,7 @@ The main configuration values are:
 | `DB_PATH` | `./data/redlaunch.db` | SQLite database path |
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
-| `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Google OAuth callback URL |
+| `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
 | `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies with HTTPS |
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
 

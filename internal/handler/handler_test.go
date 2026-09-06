@@ -45,19 +45,21 @@ type fakeDashboardMetricsService struct {
 }
 
 type fakeAuthenticationService struct {
-	enabled          bool
-	completeUser     redlaunchauth.User
-	completeEmail    string
-	completeErr      error
-	completeCalls    int
-	sessionValue     string
-	sessionErr       error
-	validateEmail    string
-	validateUser     redlaunchauth.User
-	validateValid    bool
-	validateErr      error
-	validateCalls    int
-	authorizationURL string
+	enabled                  bool
+	completeUser             redlaunchauth.User
+	completeEmail            string
+	completeErr              error
+	completeCalls            int
+	sessionValue             string
+	sessionErr               error
+	validateEmail            string
+	validateUser             redlaunchauth.User
+	validateValid            bool
+	validateErr              error
+	validateCalls            int
+	authorizationURL         string
+	authorizationRedirectURL string
+	completeRedirectURL      string
 }
 
 func (s *fakeAuthenticationService) Enabled() bool {
@@ -68,12 +70,22 @@ func (s *fakeAuthenticationService) AuthorizationURL(state string) string {
 	return s.authorizationURL + "?state=" + url.QueryEscape(state)
 }
 
+func (s *fakeAuthenticationService) AuthorizationURLForRedirect(state, redirectURL string) string {
+	s.authorizationRedirectURL = redirectURL
+	return s.AuthorizationURL(state)
+}
+
 func (s *fakeAuthenticationService) CompleteLogin(context.Context, string) (redlaunchauth.User, error) {
 	s.completeCalls++
 	if s.completeUser.Email != "" {
 		return s.completeUser, s.completeErr
 	}
 	return redlaunchauth.User{Email: s.completeEmail}, s.completeErr
+}
+
+func (s *fakeAuthenticationService) CompleteLoginForRedirect(ctx context.Context, code, redirectURL string) (redlaunchauth.User, error) {
+	s.completeRedirectURL = redirectURL
+	return s.CompleteLogin(ctx, code)
 }
 
 func (s *fakeAuthenticationService) NewSession(redlaunchauth.User) (string, error) {
@@ -4041,6 +4053,93 @@ func TestAuthenticationRedirectsToLoginAndRendersGoogleButton(t *testing.T) {
 	web.Routes().ServeHTTP(staticRecorder, httptest.NewRequest(http.MethodGet, "/static/app.css", nil))
 	if staticRecorder.Code != http.StatusOK {
 		t.Fatalf("GET /static/app.css status = %d, want %d", staticRecorder.Code, http.StatusOK)
+	}
+}
+
+func TestAuthenticationUsesConfiguredPublicHostForOAuthRedirect(t *testing.T) {
+	const wantRedirectURL = "https://redlaunch.example.com/auth/google/callback"
+	authentication := &fakeAuthenticationService{
+		enabled:          true,
+		authorizationURL: "https://accounts.example.test/authorize",
+	}
+	applications := &fakeApplicationService{
+		publicAccess: application.RedlaunchPublicAccess{
+			Enabled: true,
+			Domain:  "Redlaunch.Example.COM",
+		},
+	}
+	web, err := New(nil, applications, authentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicRequest := httptest.NewRequest(http.MethodGet, "https://redlaunch.example.com/auth/google", nil)
+	publicRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(publicRecorder, publicRequest)
+	if publicRecorder.Code != http.StatusFound {
+		t.Fatalf("public GET /auth/google status = %d, want %d", publicRecorder.Code, http.StatusFound)
+	}
+	if authentication.authorizationRedirectURL != wantRedirectURL {
+		t.Fatalf("public OAuth redirect URL = %q, want %q", authentication.authorizationRedirectURL, wantRedirectURL)
+	}
+
+	localRequest := httptest.NewRequest(http.MethodGet, "http://localhost:8080/auth/google", nil)
+	localRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(localRecorder, localRequest)
+	if localRecorder.Code != http.StatusFound {
+		t.Fatalf("local GET /auth/google status = %d, want %d", localRecorder.Code, http.StatusFound)
+	}
+	if authentication.authorizationRedirectURL != "" {
+		t.Fatalf("local OAuth redirect URL = %q, want configured redirect URL", authentication.authorizationRedirectURL)
+	}
+}
+
+func TestAuthenticationUsesPublicRedirectForOAuthCallback(t *testing.T) {
+	const wantRedirectURL = "https://redlaunch.example.com/auth/google/callback"
+	authentication := &fakeAuthenticationService{
+		enabled:          true,
+		authorizationURL: "https://accounts.example.test/authorize",
+		completeEmail:    "admin@example.com",
+		sessionValue:     "signed-session",
+	}
+	applications := &fakeApplicationService{
+		publicAccess: application.RedlaunchPublicAccess{
+			Enabled: true,
+			Domain:  "redlaunch.example.com",
+		},
+	}
+	web, err := New(nil, applications, authentication)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startRequest := httptest.NewRequest(http.MethodGet, "https://redlaunch.example.com/auth/google", nil)
+	startRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(startRecorder, startRequest)
+	startLocation, err := url.Parse(startRecorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stateCookie, redirectCookie *http.Cookie
+	for _, cookie := range startRecorder.Result().Cookies() {
+		switch cookie.Name {
+		case oauthStateCookieName:
+			stateCookie = cookie
+		case oauthRedirectCookieName:
+			redirectCookie = cookie
+		}
+	}
+
+	callbackRequest := httptest.NewRequest(http.MethodGet, "https://redlaunch.example.com/auth/google/callback?code=code&state="+url.QueryEscape(startLocation.Query().Get("state")), nil)
+	callbackRequest.AddCookie(stateCookie)
+	callbackRequest.AddCookie(redirectCookie)
+	callbackRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(callbackRecorder, callbackRequest)
+	if callbackRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("public GET /auth/google/callback status = %d, want %d", callbackRecorder.Code, http.StatusSeeOther)
+	}
+	if authentication.completeRedirectURL != wantRedirectURL {
+		t.Fatalf("callback OAuth redirect URL = %q, want %q", authentication.completeRedirectURL, wantRedirectURL)
 	}
 }
 
