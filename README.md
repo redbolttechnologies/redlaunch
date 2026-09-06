@@ -54,6 +54,10 @@ make update
 This pulls the latest Git changes and rebuilds and restarts the Docker Compose
 deployment.
 
+For a sample GitHub Actions workflow that builds the root `Dockerfile` and
+pushes an image through a trusted SSH tunnel to the server's local registry,
+see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
+
 ## What it can do
 
 - Create and manage Docker Compose applications.
