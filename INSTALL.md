@@ -322,8 +322,9 @@ type from the menu:
 
 - **PostgreSQL database**: enter a service name, PostgreSQL image version,
   database name, and database user. Enter a password or leave it blank to have
-  Redlaunch generate one. The database starts immediately; its password is
-  stored in <code>secrets.env</code>.
+  Redlaunch generate one. The database starts immediately and includes a
+  production-ready <code>pg_isready</code> healthcheck; its password is stored
+  in <code>secrets.env</code>.
 - **Redis cache**: enter a service name, Redis image version, and host port.
   Password authentication is optional. Enable **Persist to disk** when the
   cache should use append-only logging and snapshots. Redis is published on
