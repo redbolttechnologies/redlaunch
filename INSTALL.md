@@ -328,7 +328,8 @@ type from the menu:
 - **Redis cache**: enter a service name, Redis image version, and host port.
   Password authentication is optional. Enable **Persist to disk** when the
   cache should use append-only logging and snapshots. Redis is published on
-  loopback by default and starts immediately.
+  loopback by default, includes a production-ready <code>redis-cli</code>
+  healthcheck, and starts immediately.
 - **Application**: enter the Compose service name and Docker image reference.
   **Automatically start container** is off by default, which is useful when
   the image is not available yet. Turn it on when the image can be pulled

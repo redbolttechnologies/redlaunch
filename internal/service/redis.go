@@ -184,6 +184,12 @@ func addRedisService(contents, serviceName, version, port string, passwordConfig
 		"    env_file:",
 		"      - vars.env",
 		"      - secrets.env",
+		"    healthcheck:",
+		"      test: [\"CMD-SHELL\", \"if [ -n \\\"$$REDIS_PASSWORD\\\" ]; then REDISCLI_AUTH=\\\"$$REDIS_PASSWORD\\\" redis-cli --no-auth-warning ping; else redis-cli ping; fi\"]",
+		"      interval: 10s",
+		"      timeout: 5s",
+		"      retries: 5",
+		"      start_period: 30s",
 		"    ports:",
 		// Redis is published on loopback only. This keeps an optional
 		// passwordless cache from becoming reachable on the public interface.
