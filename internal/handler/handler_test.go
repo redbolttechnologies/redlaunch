@@ -195,6 +195,9 @@ type fakeApplicationService struct {
 	variableDeleteID              int64
 	variableDeleteName            string
 	variableDeleteErr             error
+	variableMoveID                int64
+	variableMoveName              string
+	variableMoveErr               error
 	secretUpdateID                int64
 	secretOriginalName            string
 	secretUpdateName              string
@@ -207,6 +210,9 @@ type fakeApplicationService struct {
 	secretDeleteID                int64
 	secretDeleteName              string
 	secretDeleteErr               error
+	secretMoveID                  int64
+	secretMoveName                string
+	secretMoveErr                 error
 	postgres                      application.Service
 	postgresInput                 application.PostgreSQLServiceInput
 	postgresErr                   error
@@ -403,6 +409,12 @@ func (s *fakeApplicationService) DeleteEnvironmentVariable(_ context.Context, id
 	return s.variableDeleteErr
 }
 
+func (s *fakeApplicationService) MoveEnvironmentVariableToSecrets(_ context.Context, id int64, name string) error {
+	s.variableMoveID = id
+	s.variableMoveName = name
+	return s.variableMoveErr
+}
+
 func (s *fakeApplicationService) UpdateEnvironmentSecret(_ context.Context, id int64, originalName, name, value string) error {
 	s.secretUpdateID = id
 	s.secretOriginalName = originalName
@@ -422,6 +434,12 @@ func (s *fakeApplicationService) DeleteEnvironmentSecret(_ context.Context, id i
 	s.secretDeleteID = id
 	s.secretDeleteName = name
 	return s.secretDeleteErr
+}
+
+func (s *fakeApplicationService) MoveEnvironmentSecretToVariables(_ context.Context, id int64, name string) error {
+	s.secretMoveID = id
+	s.secretMoveName = name
+	return s.secretMoveErr
 }
 
 func (s *fakeApplicationService) GetServiceDetails(_ context.Context, _ int64, _ string) (application.ServiceDetails, error) {
@@ -1984,11 +2002,17 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 		`data-variable-delete`,
 		`aria-label="Delete variable APP_NAME"`,
 		`aria-label="Delete variable PASSWORD_LIKE_VARIABLE"`,
+		`data-variable-move`,
+		`aria-label="Move variable APP_NAME to secrets"`,
+		`aria-label="Move variable PASSWORD_LIKE_VARIABLE to secrets"`,
 		`data-variable-add`,
 		`>Add variable</span>`,
 		`data-secret-edit`,
 		`data-secret-value="super-secret"`,
 		`aria-label="Edit secret API_TOKEN"`,
+		`data-secret-move`,
+		`aria-label="Move secret API_TOKEN to variables"`,
+		`<path d="M7 11V7a5 5 0 0 1 9.9-1"></path>`,
 		`data-secret-delete`,
 		`aria-label="Delete secret API_TOKEN"`,
 		`data-secret-add`,
@@ -2021,6 +2045,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	if got := strings.Count(body, ` data-variable-delete `); got != len(applications.environmentFiles.Variables) {
 		t.Fatalf("GET /applications/7 rendered %d variable delete buttons, want %d: %s", got, len(applications.environmentFiles.Variables), body)
 	}
+	if got := strings.Count(body, ` data-variable-move `); got != len(applications.environmentFiles.Variables) {
+		t.Fatalf("GET /applications/7 rendered %d variable move buttons, want %d: %s", got, len(applications.environmentFiles.Variables), body)
+	}
 	if got := strings.Count(body, `data-variable-add`); got != 1 {
 		t.Fatalf("GET /applications/7 rendered %d add variable buttons, want 1: %s", got, body)
 	}
@@ -2029,6 +2056,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	}
 	if got := strings.Count(body, ` data-secret-delete `); got != len(applications.environmentFiles.Secrets) {
 		t.Fatalf("GET /applications/7 rendered %d secret delete buttons, want %d: %s", got, len(applications.environmentFiles.Secrets), body)
+	}
+	if got := strings.Count(body, ` data-secret-move `); got != len(applications.environmentFiles.Secrets) {
+		t.Fatalf("GET /applications/7 rendered %d secret move buttons, want %d: %s", got, len(applications.environmentFiles.Secrets), body)
 	}
 	if got := strings.Count(body, `data-secret-add`); got != 1 {
 		t.Fatalf("GET /applications/7 rendered %d add secret buttons, want 1: %s", got, body)
@@ -2158,6 +2188,161 @@ func TestApplicationVariableDeleteRendersErrorInConfirmationDialog(t *testing.T)
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST invalid delete variable did not render %q: %s", expected, body)
+		}
+	}
+}
+
+func TestApplicationVariableMoveToSecretsRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := web.Routes()
+
+	form := url.Values{"name": {"APP_NAME"}}
+	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/applications/7/variables/move-to-secrets", strings.NewReader(form.Encode()))
+	missingTokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	missingToken := httptest.NewRecorder()
+	handler.ServeHTTP(missingToken, missingTokenRequest)
+	if missingToken.Code != http.StatusForbidden {
+		t.Fatalf("POST move variable without CSRF status = %d, want %d", missingToken.Code, http.StatusForbidden)
+	}
+	if applications.variableMoveID != 0 {
+		t.Fatalf("variable move without CSRF = %#v, want no move", applications)
+	}
+
+	form.Set("csrf_token", web.csrfToken)
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/variables/move-to-secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST move variable status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/applications/7?tab=variables" {
+		t.Fatalf("POST move variable Location = %q, want variables tab", got)
+	}
+	if applications.variableMoveID != 7 || applications.variableMoveName != "APP_NAME" {
+		t.Fatalf("variable move = (%d, %q), want (7, APP_NAME)", applications.variableMoveID, applications.variableMoveName)
+	}
+}
+
+func TestApplicationVariableMoveToSecretsRendersConflictError(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		environmentFiles: application.EnvironmentFiles{
+			Variables:          []application.EnvironmentVariable{{Key: "APP_NAME", Value: "Status page"}},
+			VariablesAvailable: true,
+			SecretsAvailable:   true,
+		},
+		variableMoveErr: application.ErrEnvironmentVariableAlreadyExists,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"name":       {"APP_NAME"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/variables/move-to-secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST conflicting move variable status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`class="application-alert application-environment-alert" role="alert">A secret with that name already exists.</div>`,
+		`APP_NAME`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST conflicting move variable did not render %q: %s", expected, body)
+		}
+	}
+}
+
+func TestApplicationSecretMoveToVariablesRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := web.Routes()
+
+	form := url.Values{"name": {"API_TOKEN"}}
+	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/applications/7/secrets/move-to-variables", strings.NewReader(form.Encode()))
+	missingTokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	missingToken := httptest.NewRecorder()
+	handler.ServeHTTP(missingToken, missingTokenRequest)
+	if missingToken.Code != http.StatusForbidden {
+		t.Fatalf("POST move secret without CSRF status = %d, want %d", missingToken.Code, http.StatusForbidden)
+	}
+	if applications.secretMoveID != 0 {
+		t.Fatalf("secret move without CSRF = %#v, want no move", applications)
+	}
+
+	form.Set("csrf_token", web.csrfToken)
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets/move-to-variables", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST move secret status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/applications/7?tab=secrets" {
+		t.Fatalf("POST move secret Location = %q, want secrets tab", got)
+	}
+	if applications.secretMoveID != 7 || applications.secretMoveName != "API_TOKEN" {
+		t.Fatalf("secret move = (%d, %q), want (7, API_TOKEN)", applications.secretMoveID, applications.secretMoveName)
+	}
+}
+
+func TestApplicationSecretMoveToVariablesRendersConflictError(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		environmentFiles: application.EnvironmentFiles{
+			Variables:          []application.EnvironmentVariable{{Key: "APP_NAME", Value: "Status page"}},
+			Secrets:            []application.EnvironmentVariable{{Key: "API_TOKEN", Value: "secret-value"}},
+			VariablesAvailable: true,
+			SecretsAvailable:   true,
+		},
+		secretMoveErr: application.ErrEnvironmentVariableAlreadyExists,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"name":       {"API_TOKEN"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets/move-to-variables", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST conflicting move secret status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`class="application-alert application-environment-alert" role="alert">A variable with that name already exists.</div>`,
+		`API_TOKEN`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST conflicting move secret did not render %q: %s", expected, body)
 		}
 	}
 }

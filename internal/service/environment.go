@@ -59,6 +59,29 @@ func parseEnvironmentEntry(line string) (string, string, bool) {
 	return key, parseEnvironmentValue(trimmed[separator+1:]), true
 }
 
+func findEnvironmentVariable(contents, name string) (string, error) {
+	contents = strings.ReplaceAll(contents, "\r\n", "\n")
+	contents = strings.TrimPrefix(contents, "\ufeff")
+
+	var value string
+	found := false
+	for _, line := range strings.Split(contents, "\n") {
+		key, parsedValue, ok := parseEnvironmentEntry(line)
+		if !ok || key != name {
+			continue
+		}
+		if found {
+			return "", application.ErrEnvironmentVariableDuplicate
+		}
+		found = true
+		value = parsedValue
+	}
+	if !found {
+		return "", application.ErrEnvironmentVariableNotFound
+	}
+	return value, nil
+}
+
 func validateEnvironmentFileContents(contents []byte) error {
 	if len(contents) > application.MaxEnvironmentFileSize {
 		return application.ErrEnvironmentImportFileTooLarge

@@ -152,6 +152,87 @@ func (s *Applications) DeleteEnvironmentVariable(ctx context.Context, applicatio
 	})
 }
 
+// MoveEnvironmentVariableToSecrets moves one entry from an application's
+// vars.env file to its secrets.env file while preserving both files' other
+// contents and permissions.
+func (s *Applications) MoveEnvironmentVariableToSecrets(ctx context.Context, applicationID int64, name string) error {
+	return s.moveApplicationEnvironmentVariable(ctx, applicationID, name, varsEnvFile, "variables", secretsEnvFile, "secrets")
+}
+
+// MoveEnvironmentSecretToVariables moves one entry from an application's
+// secrets.env file to its vars.env file while preserving both files' other
+// contents and permissions.
+func (s *Applications) MoveEnvironmentSecretToVariables(ctx context.Context, applicationID int64, name string) error {
+	return s.moveApplicationEnvironmentVariable(ctx, applicationID, name, secretsEnvFile, "secrets", varsEnvFile, "variables")
+}
+
+func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, applicationID int64, name, sourceFile, sourceLabel, destinationFile, destinationLabel string) error {
+	name, err := application.ValidateEnvironmentVariableName(name)
+	if err != nil {
+		return err
+	}
+	if s.detailsRepository == nil {
+		return errors.New("application details repository is not configured")
+	}
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourcePath := filepath.Join(directory, sourceFile)
+	sourceSnapshot, err := snapshotManagedFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("read application %s file: %w", sourceLabel, err)
+	}
+	if !sourceSnapshot.exists {
+		return application.ErrEnvironmentFileNotFound
+	}
+
+	destinationPath := filepath.Join(directory, destinationFile)
+	destinationSnapshot, err := snapshotManagedFile(destinationPath)
+	if err != nil {
+		return fmt.Errorf("read application %s file: %w", destinationLabel, err)
+	}
+	if !destinationSnapshot.exists {
+		return application.ErrEnvironmentFileNotFound
+	}
+
+	value, err := findEnvironmentVariable(string(sourceSnapshot.contents), name)
+	if err != nil {
+		return err
+	}
+	if _, err := application.ValidateEnvironmentVariableValue(value); err != nil {
+		return err
+	}
+	updatedSource, err := deleteEnvironmentVariable(string(sourceSnapshot.contents), name)
+	if err != nil {
+		return err
+	}
+	updatedDestination, err := appendEnvironmentVariable(string(destinationSnapshot.contents), name, value)
+	if err != nil {
+		return err
+	}
+
+	rollbackFiles := func() error {
+		return errors.Join(restoreManagedFile(sourceSnapshot), restoreManagedFile(destinationSnapshot))
+	}
+	if err := writeManagedFile(sourcePath, updatedSource, sourceSnapshot.mode); err != nil {
+		return errors.Join(fmt.Errorf("write application %s file: %w", sourceLabel, err), rollbackFiles())
+	}
+	if err := writeManagedFile(destinationPath, updatedDestination, destinationSnapshot.mode); err != nil {
+		return errors.Join(fmt.Errorf("write application %s file: %w", destinationLabel, err), rollbackFiles())
+	}
+	return nil
+}
+
 // UpdateEnvironmentSecret changes one entry in an application's secrets.env
 // file while preserving the rest of the file and its permissions.
 func (s *Applications) UpdateEnvironmentSecret(ctx context.Context, applicationID int64, originalName, name, value string) error {

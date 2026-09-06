@@ -1187,6 +1187,168 @@ func TestApplicationsDeleteEnvironmentVariableRejectsUnsafeOrAmbiguousDeletes(t 
 	}
 }
 
+func TestApplicationsMoveEnvironmentVariableToSecretsPreservesFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	vars := "\ufeff# application settings\r\nexport APP_NAME=Status page\r\nPORT=8080 # local port\r\n"
+	if err := os.WriteFile(varsPath, []byte(vars), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	secrets := "# application secrets\nAPI_TOKEN=keep-me\n"
+	if err := os.WriteFile(secretsPath, []byte(secrets), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.MoveEnvironmentVariableToSecrets(t.Context(), 7, "APP_NAME"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantVars := "\ufeff# application settings\r\nPORT=8080 # local port\r\n"
+	if got := readServiceFile(t, varsPath); got != wantVars {
+		t.Fatalf("vars.env after move = %q, want %q", got, wantVars)
+	}
+	wantSecrets := "# application secrets\nAPI_TOKEN=keep-me\nAPP_NAME=\"Status page\"\n"
+	if got := readServiceFile(t, secretsPath); got != wantSecrets {
+		t.Fatalf("secrets.env after move = %q, want %q", got, wantSecrets)
+	}
+	if got := serviceFilePermissions(t, varsPath); got != 0o640 {
+		t.Fatalf("vars.env permissions after move = %o, want %o", got, 0o640)
+	}
+	if got := serviceFilePermissions(t, secretsPath); got != 0o600 {
+		t.Fatalf("secrets.env permissions after move = %o, want %o", got, 0o600)
+	}
+}
+
+func TestApplicationsMoveEnvironmentVariableToSecretsRejectsExistingSecret(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	vars := "APP_NAME=Status page\n"
+	if err := os.WriteFile(varsPath, []byte(vars), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	secrets := "APP_NAME=already-secret\n"
+	if err := os.WriteFile(secretsPath, []byte(secrets), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.MoveEnvironmentVariableToSecrets(t.Context(), 7, "APP_NAME"); !errors.Is(err, application.ErrEnvironmentVariableAlreadyExists) {
+		t.Fatalf("MoveEnvironmentVariableToSecrets() error = %v, want %v", err, application.ErrEnvironmentVariableAlreadyExists)
+	}
+	if got := readServiceFile(t, varsPath); got != vars {
+		t.Fatalf("vars.env after rejected move = %q, want %q", got, vars)
+	}
+	if got := readServiceFile(t, secretsPath); got != secrets {
+		t.Fatalf("secrets.env after rejected move = %q, want %q", got, secrets)
+	}
+}
+
+func TestApplicationsMoveEnvironmentSecretToVariablesPreservesFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	secrets := "\ufeff# application secrets\r\nexport API_TOKEN=Secret value\r\nKEEP=unchanged # keep this comment\r\n"
+	if err := os.WriteFile(secretsPath, []byte(secrets), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	vars := "# application settings\nAPP_NAME=Status page\n"
+	if err := os.WriteFile(varsPath, []byte(vars), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.MoveEnvironmentSecretToVariables(t.Context(), 7, "API_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSecrets := "\ufeff# application secrets\r\nKEEP=unchanged # keep this comment\r\n"
+	if got := readServiceFile(t, secretsPath); got != wantSecrets {
+		t.Fatalf("secrets.env after move = %q, want %q", got, wantSecrets)
+	}
+	wantVars := "# application settings\nAPP_NAME=Status page\nAPI_TOKEN=\"Secret value\"\n"
+	if got := readServiceFile(t, varsPath); got != wantVars {
+		t.Fatalf("vars.env after move = %q, want %q", got, wantVars)
+	}
+	if got := serviceFilePermissions(t, secretsPath); got != 0o600 {
+		t.Fatalf("secrets.env permissions after move = %o, want %o", got, 0o600)
+	}
+	if got := serviceFilePermissions(t, varsPath); got != 0o640 {
+		t.Fatalf("vars.env permissions after move = %o, want %o", got, 0o640)
+	}
+}
+
+func TestApplicationsMoveEnvironmentSecretToVariablesRejectsExistingVariable(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	secrets := "API_TOKEN=Secret value\n"
+	if err := os.WriteFile(secretsPath, []byte(secrets), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	vars := "API_TOKEN=already-variable\n"
+	if err := os.WriteFile(varsPath, []byte(vars), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.MoveEnvironmentSecretToVariables(t.Context(), 7, "API_TOKEN"); !errors.Is(err, application.ErrEnvironmentVariableAlreadyExists) {
+		t.Fatalf("MoveEnvironmentSecretToVariables() error = %v, want %v", err, application.ErrEnvironmentVariableAlreadyExists)
+	}
+	if got := readServiceFile(t, secretsPath); got != secrets {
+		t.Fatalf("secrets.env after rejected move = %q, want %q", got, secrets)
+	}
+	if got := readServiceFile(t, varsPath); got != vars {
+		t.Fatalf("vars.env after rejected move = %q, want %q", got, vars)
+	}
+}
+
 func TestApplicationsUpdateEnvironmentSecretPreservesFileStructure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{

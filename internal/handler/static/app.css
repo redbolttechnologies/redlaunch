@@ -2610,7 +2610,17 @@ h1 {
   gap: var(--space-1);
 }
 
+.application-environment-move-form {
+  display: inline;
+}
+
+.application-environment-alert {
+  margin-top: 0;
+  margin-bottom: var(--space-4);
+}
+
 .application-environment-edit,
+.application-environment-move,
 .application-environment-delete {
   display: inline-grid;
   width: 2rem;
@@ -2631,22 +2641,31 @@ h1 {
   background: hsl(var(--accent));
 }
 
+.application-environment-move:hover {
+  color: hsl(var(--primary));
+  background: hsl(var(--accent));
+}
+
 .application-environment-delete:hover {
   color: hsl(var(--destructive));
   background: hsl(var(--destructive) / 0.08);
 }
 
 .application-environment-edit:focus-visible,
+.application-environment-move:focus-visible,
 .application-environment-delete:focus-visible,
 .service-environment-table tbody tr:hover .application-environment-edit,
+.service-environment-table tbody tr:hover .application-environment-move,
 .service-environment-table tbody tr:hover .application-environment-delete,
 .service-environment-table tbody tr:focus-within .application-environment-edit,
+.service-environment-table tbody tr:focus-within .application-environment-move,
 .service-environment-table tbody tr:focus-within .application-environment-delete {
   opacity: 1;
 }
 
 @media (hover: none) {
   .application-environment-edit,
+  .application-environment-move,
   .application-environment-delete {
     opacity: 1;
   }

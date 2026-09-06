@@ -150,9 +150,11 @@ type applicationEnvironmentService interface {
 type applicationEnvironmentEditor interface {
 	AddEnvironmentVariable(context.Context, int64, string, string) error
 	DeleteEnvironmentVariable(context.Context, int64, string) error
+	MoveEnvironmentVariableToSecrets(context.Context, int64, string) error
 	UpdateEnvironmentVariable(context.Context, int64, string, string, string) error
 	AddEnvironmentSecret(context.Context, int64, string, string) error
 	DeleteEnvironmentSecret(context.Context, int64, string) error
+	MoveEnvironmentSecretToVariables(context.Context, int64, string) error
 	UpdateEnvironmentSecret(context.Context, int64, string, string, string) error
 }
 
@@ -561,8 +563,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /applications/{id}/delete/status", h.applicationDeleteStatus)
 	mux.HandleFunc("POST /applications/{id}/variables", h.updateApplicationVariable)
 	mux.HandleFunc("POST /applications/{id}/variables/delete", h.deleteApplicationVariable)
+	mux.HandleFunc("POST /applications/{id}/variables/move-to-secrets", h.moveApplicationVariableToSecrets)
 	mux.HandleFunc("POST /applications/{id}/secrets", h.updateApplicationSecret)
 	mux.HandleFunc("POST /applications/{id}/secrets/delete", h.deleteApplicationSecret)
+	mux.HandleFunc("POST /applications/{id}/secrets/move-to-variables", h.moveApplicationSecretToVariables)
 	mux.HandleFunc("POST /applications/{id}/domains", h.createApplicationDomain)
 	mux.HandleFunc("POST /applications/{id}/domains/delete", h.deleteApplicationDomain)
 	mux.HandleFunc("GET /applications/{id}/domains/{domainID}/routing", h.applicationRoutingPage)
@@ -1313,6 +1317,7 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 		PublicAccess: publicAccess,
 		Variables: environmentFilePageData{
 			ID:              "variables",
+			ApplicationID:   item.ID,
 			Title:           "Variables",
 			Description:     "Non-secret values from vars.env.",
 			ApplicationName: item.Name,
@@ -1322,6 +1327,7 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 		},
 		Secrets: environmentFilePageData{
 			ID:              "secrets",
+			ApplicationID:   item.ID,
 			Title:           "Secrets",
 			Description:     "Sensitive values from secrets.env are masked.",
 			ApplicationName: item.Name,
@@ -1551,6 +1557,55 @@ func (h *Handler) deleteApplicationVariable(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=variables", http.StatusSeeOther)
 }
 
+func (h *Handler) moveApplicationVariableToSecrets(w http.ResponseWriter, r *http.Request) {
+	needsSetup, err := h.setupManager.NeedsSetup()
+	if err != nil {
+		h.logger.Error("inspect setup state", "error", err)
+		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
+		return
+	}
+	if needsSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The move variable request was invalid.", http.StatusBadRequest)
+		return
+	}
+	expectedCSRFToken := h.csrfToken
+	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
+		expectedCSRFToken = cookie.Value
+	}
+	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+		http.Error(w, "This variables page expired. Submit the refreshed page to continue.", http.StatusForbidden)
+		return
+	}
+
+	name := r.Form.Get("name")
+	if h.applicationEditor == nil {
+		h.logger.Error("move application variable without an editor", "application_id", id)
+		h.renderApplicationVariableMoveError(w, r, id, "The variable could not be moved right now.", http.StatusInternalServerError)
+		return
+	}
+	if err := h.applicationEditor.MoveEnvironmentVariableToSecrets(r.Context(), id, name); err != nil {
+		if environmentVariableMoveUserError(err) {
+			h.renderApplicationVariableMoveError(w, r, id, environmentVariableMoveMessage(err), http.StatusBadRequest)
+			return
+		}
+		h.logger.Error("move application variable to secrets", "application_id", id, "error", err)
+		h.renderApplicationVariableMoveError(w, r, id, "The variable could not be moved right now.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=variables", http.StatusSeeOther)
+}
+
 func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request) {
 	needsSetup, err := h.setupManager.NeedsSetup()
 	if err != nil {
@@ -1671,6 +1726,55 @@ func (h *Handler) deleteApplicationSecret(w http.ResponseWriter, r *http.Request
 			Name:  name,
 			Error: "The secret could not be deleted right now.",
 		}, http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=secrets", http.StatusSeeOther)
+}
+
+func (h *Handler) moveApplicationSecretToVariables(w http.ResponseWriter, r *http.Request) {
+	needsSetup, err := h.setupManager.NeedsSetup()
+	if err != nil {
+		h.logger.Error("inspect setup state", "error", err)
+		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
+		return
+	}
+	if needsSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The move secret request was invalid.", http.StatusBadRequest)
+		return
+	}
+	expectedCSRFToken := h.csrfToken
+	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
+		expectedCSRFToken = cookie.Value
+	}
+	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+		http.Error(w, "This secrets page expired. Submit the refreshed page to continue.", http.StatusForbidden)
+		return
+	}
+
+	name := r.Form.Get("name")
+	if h.applicationEditor == nil {
+		h.logger.Error("move application secret without an editor", "application_id", id)
+		h.renderApplicationSecretMoveError(w, r, id, "The secret could not be moved right now.", http.StatusInternalServerError)
+		return
+	}
+	if err := h.applicationEditor.MoveEnvironmentSecretToVariables(r.Context(), id, name); err != nil {
+		if environmentVariableMoveUserError(err) {
+			h.renderApplicationSecretMoveError(w, r, id, environmentSecretMoveMessage(err), http.StatusBadRequest)
+			return
+		}
+		h.logger.Error("move application secret to variables", "application_id", id, "error", err)
+		h.renderApplicationSecretMoveError(w, r, id, "The secret could not be moved right now.", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=secrets", http.StatusSeeOther)
@@ -1940,6 +2044,36 @@ func (h *Handler) renderApplicationVariableDeleteError(w http.ResponseWriter, r 
 	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
 }
 
+func (h *Handler) renderApplicationVariableMoveError(w http.ResponseWriter, r *http.Request, id int64, message string, status int) {
+	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
+	if errors.Is(err, application.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.logger.Error("load application details after variable move failure", "application_id", id, "error", err)
+		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
+		return
+	}
+	data.Variables.Error = message
+	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
+}
+
+func (h *Handler) renderApplicationSecretMoveError(w http.ResponseWriter, r *http.Request, id int64, message string, status int) {
+	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
+	if errors.Is(err, application.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.logger.Error("load application details after secret move failure", "application_id", id, "error", err)
+		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
+		return
+	}
+	data.Secrets.Error = message
+	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
+}
+
 func (h *Handler) renderApplicationSecretDeleteError(w http.ResponseWriter, r *http.Request, id int64, deleteData *secretDeletePageData, status int) {
 	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
@@ -2000,6 +2134,58 @@ func environmentVariableDeleteMessage(err error) string {
 		return "The variable appears more than once in vars.env."
 	default:
 		return "The variable could not be deleted."
+	}
+}
+
+func environmentVariableMoveUserError(err error) bool {
+	return errors.Is(err, application.ErrEnvironmentVariableNameRequired) ||
+		errors.Is(err, application.ErrEnvironmentVariableNameInvalid) ||
+		errors.Is(err, application.ErrEnvironmentVariableValueInvalid) ||
+		errors.Is(err, application.ErrEnvironmentVariableNotFound) ||
+		errors.Is(err, application.ErrEnvironmentVariableAlreadyExists) ||
+		errors.Is(err, application.ErrEnvironmentVariableDuplicate) ||
+		errors.Is(err, application.ErrEnvironmentFileNotFound)
+}
+
+func environmentVariableMoveMessage(err error) string {
+	switch {
+	case errors.Is(err, application.ErrEnvironmentVariableNameRequired):
+		return "The variable name is required."
+	case errors.Is(err, application.ErrEnvironmentVariableNameInvalid):
+		return "The variable name is invalid."
+	case errors.Is(err, application.ErrEnvironmentVariableValueInvalid):
+		return "The variable value contains unsupported control characters."
+	case errors.Is(err, application.ErrEnvironmentVariableAlreadyExists):
+		return "A secret with that name already exists."
+	case errors.Is(err, application.ErrEnvironmentVariableDuplicate):
+		return "The variable appears more than once in vars.env."
+	case errors.Is(err, application.ErrEnvironmentFileNotFound):
+		return "The vars.env or secrets.env file is unavailable."
+	case errors.Is(err, application.ErrEnvironmentVariableNotFound):
+		return "The variable could not be found. Refresh the page and try again."
+	default:
+		return "The variable could not be moved."
+	}
+}
+
+func environmentSecretMoveMessage(err error) string {
+	switch {
+	case errors.Is(err, application.ErrEnvironmentVariableNameRequired):
+		return "The secret name is required."
+	case errors.Is(err, application.ErrEnvironmentVariableNameInvalid):
+		return "The secret name is invalid."
+	case errors.Is(err, application.ErrEnvironmentVariableValueInvalid):
+		return "The secret value contains unsupported control characters."
+	case errors.Is(err, application.ErrEnvironmentVariableAlreadyExists):
+		return "A variable with that name already exists."
+	case errors.Is(err, application.ErrEnvironmentVariableDuplicate):
+		return "The secret appears more than once in secrets.env."
+	case errors.Is(err, application.ErrEnvironmentFileNotFound):
+		return "The vars.env or secrets.env file is unavailable."
+	case errors.Is(err, application.ErrEnvironmentVariableNotFound):
+		return "The secret could not be found. Refresh the page and try again."
+	default:
+		return "The secret could not be moved."
 	}
 }
 
@@ -4202,6 +4388,7 @@ type applicationRoutingPageData struct {
 
 type environmentFilePageData struct {
 	ID              string
+	ApplicationID   int64
 	Title           string
 	Description     string
 	ApplicationName string
@@ -4209,6 +4396,8 @@ type environmentFilePageData struct {
 	Available       bool
 	Editable        bool
 	MaskValues      bool
+	Error           string
+	CSRFToken       string
 }
 
 type variableEditPageData struct {
@@ -4421,6 +4610,14 @@ func (noApplicationService) DeleteEnvironmentVariable(context.Context, int64, st
 	return errors.New("application service is not configured")
 }
 
+func (noApplicationService) MoveEnvironmentVariableToSecrets(context.Context, int64, string) error {
+	return errors.New("application service is not configured")
+}
+
+func (noApplicationService) MoveEnvironmentSecretToVariables(context.Context, int64, string) error {
+	return errors.New("application service is not configured")
+}
+
 func (noApplicationService) UpdateEnvironmentSecret(context.Context, int64, string, string, string) error {
 	return errors.New("application service is not configured")
 }
@@ -4544,6 +4741,8 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	})
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
+	data.Variables.CSRFToken = csrfToken
+	data.Secrets.CSRFToken = csrfToken
 	page := h.shellPageData(r)
 	page.ActivePage = "applications"
 	page.ApplicationDetailsPage = &data
