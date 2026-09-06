@@ -45,6 +45,15 @@ callback URI.
 For an external HTTPS reverse proxy that is not configured through Redlaunch's
 Public access setting, set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
 
+To update an existing installation, run this from the Redlaunch directory:
+
+```sh
+make update
+```
+
+This pulls the latest Git changes and rebuilds and restarts the Docker Compose
+deployment.
+
 ## What it can do
 
 - Create and manage Docker Compose applications.

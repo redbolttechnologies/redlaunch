@@ -1,4 +1,4 @@
-.PHONY: build test lint run setup fmt compose-config docker-build clean add-authorized-email auth-add-email
+.PHONY: build test lint run setup update fmt compose-config docker-build clean add-authorized-email auth-add-email
 
 BINARY := bin/redlaunch
 GO_PACKAGES := ./cmd/... ./internal/...
@@ -23,6 +23,10 @@ run: build ## Build and run with local defaults
 
 setup: ## Configure a fresh VPS and start Redlaunch with Docker Compose
 	bash scripts/setup.sh
+
+update: ## Pull the latest changes and rebuild the Docker Compose deployment
+	git pull
+	docker compose up -d --build
 
 compose-config: ## Validate the Docker Compose configuration
 	docker compose config
