@@ -212,6 +212,14 @@ session secret. The <code>redlaunch_app-data</code> volume is external to the
 Compose project and must not be removed when cleaning up Docker resources; it
 contains the Redlaunch SQLite database.
 
+The Docker deployment mounts the managed <code>projects</code> directory at the
+same absolute path inside the Redlaunch container and on the VPS. Redlaunch
+starts managed Compose projects through the host Docker socket, so this shared
+path is required for bind-mounted files such as the Caddyfile. The default is
+the <code>projects</code> directory beside the Compose file. If you set
+<code>PROJECTS_ROOT</code> in <code>.env</code>, use an absolute path on the VPS
+and run the Compose commands from the installation directory.
+
 The generated <code>.env</code> uses this default callback:
 
 ~~~text
@@ -392,6 +400,18 @@ Longer path matchers take precedence when multiple routes share a host.
 - **Caddy routing is unavailable**: confirm that Caddy was selected during
   first-run setup, the domain resolves to the VPS, ports 80/443 are reachable,
   and the target service is running.
+- **Caddy reports “mount ... Caddyfile ... not a directory”**: update the
+  deployment so the managed-project path is shared with the host Docker
+  daemon, then recreate Redlaunch and start the proxy again:
+
+  ~~~sh
+  cd ~/redlaunch
+  git pull
+  docker compose up -d --build
+  docker compose -f projects/core/proxy/compose.yaml up -d --force-recreate
+  ~~~
+
+  Replace <code>~/redlaunch</code> with the installation directory when needed.
 - **<code>make setup</code> cannot run Docker**: reconnect after adding the SSH
   user to the <code>docker</code> group, or verify the Docker daemon with
   <code>docker info</code>.
