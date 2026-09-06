@@ -49,6 +49,8 @@ Public access setting, set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
 
 - Create and manage Docker Compose applications.
 - Add PostgreSQL, Redis, and custom application containers.
+- Configure application container entrypoints, healthchecks, restart policies,
+  dependencies, port mappings, and volumes.
 - Import an existing Compose project.
 - Start, stop, restart, and remove managed services.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.

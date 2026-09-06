@@ -3741,6 +3741,135 @@ func TestApplicationContainerPageRendersLocalRegistryDefault(t *testing.T) {
 	}
 }
 
+func TestApplicationContainerPageRendersAdvancedSettingsAndDependencyOptions(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services: []application.Service{
+			{Name: "db", Type: application.ServiceTypePostgreSQL},
+			{Name: "cache", Type: application.ServiceTypeRedis},
+		},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/application/new", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET advanced application container page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		"Advanced settings",
+		"Custom entrypoint command",
+		`name="healthcheck_command"`,
+		`name="healthcheck_interval"`,
+		`name="restart_policy"`,
+		`name="depends_on_service"`,
+		`option value="db">db</option>`,
+		`option value="cache">cache</option>`,
+		`option value="service_started" selected>Service started (default)</option>`,
+		`data-repeatable-add="application-container-dependencies"`,
+		`data-repeatable-add="application-container-ports"`,
+		`data-repeatable-add="application-container-volumes"`,
+		`name="volume_options"`,
+		`/static/application-container.js`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET advanced application container page did not render %q: %s", expected, body)
+		}
+	}
+	previous := -1
+	for _, legend := range []string{
+		"<legend>Volumes</legend>",
+		"<legend>Port mappings</legend>",
+		"<legend>Dependencies</legend>",
+		"<legend>Process</legend>",
+		"<legend>Healthcheck</legend>",
+	} {
+		position := strings.Index(body, legend)
+		if position <= previous {
+			t.Fatalf("GET advanced application container groups are out of order at %q", legend)
+		}
+		previous = position
+	}
+}
+
+func TestCreateApplicationContainerPassesAdvancedSettings(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:             []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		applicationContainerDone: make(chan struct{}),
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token":               {web.csrfToken},
+		"service_name":             {"web"},
+		"image_name":               {"ghcr.io/example/web:v1"},
+		"use_docker_registry":      {"on"},
+		"entrypoint":               {"/usr/local/bin/start --serve"},
+		"healthcheck_command":      {"curl --fail http://localhost/health"},
+		"healthcheck_interval":     {"10s"},
+		"healthcheck_timeout":      {"3s"},
+		"healthcheck_retries":      {"5"},
+		"healthcheck_start_period": {"20s"},
+		"depends_on_service":       {"db", "cache"},
+		"depends_on_condition":     {"service_healthy", "service_started"},
+		"restart_policy":           {"on-failure"},
+		"port_host":                {"8080", "8443"},
+		"port_container":           {"80", "443"},
+		"port_protocol":            {"tcp", "udp"},
+		"volume_source":            {"app-data", "./cache"},
+		"volume_target":            {"/var/lib/app", "/cache"},
+		"volume_options":           {"ro", "rw,z"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/services/application/new", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST advanced application container status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	select {
+	case <-applications.applicationContainerDone:
+	case <-time.After(time.Second):
+		t.Fatal("advanced application container job did not finish")
+	}
+
+	want := application.ApplicationServiceInput{
+		ServiceName: "web",
+		ImageName:   "ghcr.io/example/web:v1",
+		Entrypoint:  "/usr/local/bin/start --serve",
+		Healthcheck: application.ApplicationHealthcheck{
+			Command:     "curl --fail http://localhost/health",
+			Interval:    "10s",
+			Timeout:     "3s",
+			Retries:     "5",
+			StartPeriod: "20s",
+		},
+		DependsOn: []application.ApplicationServiceDependency{
+			{ServiceName: "db", Condition: "service_healthy"},
+			{ServiceName: "cache", Condition: "service_started"},
+		},
+		RestartPolicy: "on-failure",
+		PortMappings: []application.ApplicationPortMapping{
+			{HostPort: "8080", ContainerPort: "80", Protocol: "tcp"},
+			{HostPort: "8443", ContainerPort: "443", Protocol: "udp"},
+		},
+		VolumeMappings: []application.ApplicationVolumeMapping{
+			{Source: "app-data", Target: "/var/lib/app", Options: "ro"},
+			{Source: "./cache", Target: "/cache", Options: "rw,z"},
+		},
+	}
+	if !reflect.DeepEqual(applications.applicationContainerInput, want) {
+		t.Fatalf("application container input = %#v, want %#v", applications.applicationContainerInput, want)
+	}
+}
+
 func TestCreateApplicationContainerRequiresCSRFAndRedirects(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications:             []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},

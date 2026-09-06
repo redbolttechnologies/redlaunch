@@ -2791,7 +2791,15 @@ func (h *Handler) applicationContainerPage(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	h.writeApplicationContainerPage(w, r, http.StatusOK, newApplicationContainerPageData(item))
+	services, err := h.applicationDetails.ListServices(r.Context(), item.ID)
+	if err != nil {
+		h.logger.Error("list application services for application container", "application_id", item.ID, "error", err)
+		http.Error(w, "The application services could not be read.", http.StatusInternalServerError)
+		return
+	}
+	data := newApplicationContainerPageData(item)
+	data.Services = services
+	h.writeApplicationContainerPage(w, r, http.StatusOK, data)
 }
 
 func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request) {
@@ -2987,12 +2995,34 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 		ImageName:         firstFormValue(r.Form, "image_name", "image"),
 		UseDockerRegistry: r.Form.Get("use_docker_registry") == "on",
 		AutoStart:         r.Form.Get("auto_start") == "on",
+		Entrypoint:        firstFormValue(r.Form, "entrypoint", "entrypoint_command"),
+		Healthcheck: application.ApplicationHealthcheck{
+			Command:     firstFormValue(r.Form, "healthcheck_command", "healthcheck_test"),
+			Interval:    firstFormValue(r.Form, "healthcheck_interval"),
+			Timeout:     firstFormValue(r.Form, "healthcheck_timeout"),
+			Retries:     firstFormValue(r.Form, "healthcheck_retries"),
+			StartPeriod: firstFormValue(r.Form, "healthcheck_start_period"),
+		},
+		DependsOn:      applicationContainerDependenciesFromForm(r.Form),
+		RestartPolicy:  firstFormValue(r.Form, "restart_policy", "restart"),
+		PortMappings:   applicationContainerPortsFromForm(r.Form),
+		VolumeMappings: applicationContainerVolumesFromForm(r.Form),
 	}
+	services, err := h.applicationDetails.ListServices(r.Context(), item.ID)
+	if err != nil {
+		h.logger.Error("list application services for application container", "application_id", id, "error", err)
+		http.Error(w, "The application services could not be read.", http.StatusInternalServerError)
+		return
+	}
+	data.Services = services
 	if strings.TrimSpace(data.ServiceName) == "" {
 		data.ServiceName = "app"
 	}
 	if strings.TrimSpace(data.ImageName) == "" {
 		data.ImageName = defaultApplicationContainerImageName(data.ServiceName)
+	}
+	if strings.TrimSpace(data.RestartPolicy) == "" {
+		data.RestartPolicy = application.ApplicationRestartPolicyUnlessStopped
 	}
 	expectedCSRFToken := h.csrfToken
 	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
@@ -3005,9 +3035,15 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 	}
 
 	input := application.ApplicationServiceInput{
-		ServiceName: data.ServiceName,
-		ImageName:   applicationContainerImageName(data.ImageName, data.UseDockerRegistry),
-		AutoStart:   data.AutoStart,
+		ServiceName:    data.ServiceName,
+		ImageName:      applicationContainerImageName(data.ImageName, data.UseDockerRegistry),
+		AutoStart:      data.AutoStart,
+		Entrypoint:     data.Entrypoint,
+		Healthcheck:    data.Healthcheck,
+		DependsOn:      applicationContainerNonEmptyDependencies(data.DependsOn),
+		RestartPolicy:  data.RestartPolicy,
+		PortMappings:   applicationContainerNonEmptyPorts(data.PortMappings),
+		VolumeMappings: applicationContainerNonEmptyVolumes(data.VolumeMappings),
 	}
 	if validator, ok := h.applicationContainerManager.(applicationContainerInputValidator); ok {
 		if err := validator.ValidateApplicationServiceInput(input); err != nil {
@@ -3509,6 +3545,48 @@ func applicationContainerUserMessage(err error) string {
 		return "Image names must be 255 characters or fewer."
 	case errors.Is(err, application.ErrImageNameInvalid):
 		return "Enter a valid Docker image reference."
+	case errors.Is(err, application.ErrApplicationEntrypointTooLong):
+		return "Entrypoint commands must be 4096 characters or fewer."
+	case errors.Is(err, application.ErrApplicationEntrypointInvalid):
+		return "Entrypoint commands cannot contain control characters."
+	case errors.Is(err, application.ErrApplicationHealthcheckCommandTooLong):
+		return "Healthcheck commands must be 4096 characters or fewer."
+	case errors.Is(err, application.ErrApplicationHealthcheckCommandInvalid):
+		return "Healthcheck commands cannot contain control characters."
+	case errors.Is(err, application.ErrApplicationHealthcheckIntervalInvalid):
+		return "Enter a valid positive healthcheck interval, such as 30s."
+	case errors.Is(err, application.ErrApplicationHealthcheckTimeoutInvalid):
+		return "Enter a valid positive healthcheck timeout, such as 5s."
+	case errors.Is(err, application.ErrApplicationHealthcheckRetriesInvalid):
+		return "Healthcheck retries must be a number from 1 to 1000."
+	case errors.Is(err, application.ErrApplicationHealthcheckStartPeriodInvalid):
+		return "Enter a valid non-negative healthcheck start period, such as 0s."
+	case errors.Is(err, application.ErrApplicationDependencyServiceRequired):
+		return "Choose a service for each dependency."
+	case errors.Is(err, application.ErrApplicationDependencyServiceInvalid):
+		return "Choose a valid dependency service."
+	case errors.Is(err, application.ErrApplicationDependencyServiceNotFound):
+		return "Dependencies must use services already registered in this application."
+	case errors.Is(err, application.ErrApplicationDependencyConditionInvalid):
+		return "Choose a valid dependency condition."
+	case errors.Is(err, application.ErrApplicationDependencyDuplicate):
+		return "Each dependency service can be selected only once."
+	case errors.Is(err, application.ErrApplicationDependencySelf):
+		return "A container cannot depend on itself."
+	case errors.Is(err, application.ErrApplicationRestartPolicyInvalid):
+		return "Choose a valid restart policy."
+	case errors.Is(err, application.ErrApplicationPortMappingInvalid):
+		return "Port mappings must use ports from 1 to 65535 and a valid protocol."
+	case errors.Is(err, application.ErrApplicationVolumeSourceRequired):
+		return "Enter a volume source."
+	case errors.Is(err, application.ErrApplicationVolumeSourceInvalid):
+		return "Volume sources must be named volumes or paths inside the application directory."
+	case errors.Is(err, application.ErrApplicationVolumeTargetRequired):
+		return "Enter a container path for each volume."
+	case errors.Is(err, application.ErrApplicationVolumeTargetInvalid):
+		return "Volume container paths must be absolute paths without parent traversal."
+	case errors.Is(err, application.ErrApplicationVolumeOptionsInvalid):
+		return "Mount options may contain comma-separated Compose options such as rw or ro,z."
 	case errors.Is(err, application.ErrServiceAlreadyExists):
 		return "A service with that name already exists."
 	default:
@@ -3852,6 +3930,136 @@ func applicationContainerImageName(imageName string, useDockerRegistry bool) str
 	return localRegistryPrefix + imageName
 }
 
+func applicationContainerFormValues(values url.Values, names ...string) []string {
+	for _, name := range names {
+		if value, ok := values[name]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func applicationContainerDependenciesFromForm(values url.Values) []application.ApplicationServiceDependency {
+	services := applicationContainerFormValues(values, "depends_on_service", "depends_on_service[]")
+	conditions := applicationContainerFormValues(values, "depends_on_condition", "depends_on_condition[]")
+	count := maxApplicationContainerFormValues(len(services), len(conditions))
+	if count == 0 {
+		return nil
+	}
+	dependencies := make([]application.ApplicationServiceDependency, count)
+	for index := range dependencies {
+		if index < len(services) {
+			dependencies[index].ServiceName = services[index]
+		}
+		if index < len(conditions) {
+			dependencies[index].Condition = conditions[index]
+		}
+		if strings.TrimSpace(dependencies[index].ServiceName) != "" && strings.TrimSpace(dependencies[index].Condition) == "" {
+			dependencies[index].Condition = application.ApplicationDependencyConditionStarted
+		}
+	}
+	return dependencies
+}
+
+func applicationContainerPortsFromForm(values url.Values) []application.ApplicationPortMapping {
+	hostPorts := applicationContainerFormValues(values, "port_host", "port_published", "port_host[]")
+	containerPorts := applicationContainerFormValues(values, "port_container", "port_target", "port_container[]")
+	protocols := applicationContainerFormValues(values, "port_protocol", "port_protocol[]")
+	count := maxApplicationContainerFormValues(len(hostPorts), len(containerPorts), len(protocols))
+	if count == 0 {
+		return nil
+	}
+	ports := make([]application.ApplicationPortMapping, count)
+	for index := range ports {
+		if index < len(hostPorts) {
+			ports[index].HostPort = hostPorts[index]
+		}
+		if index < len(containerPorts) {
+			ports[index].ContainerPort = containerPorts[index]
+		}
+		if index < len(protocols) {
+			ports[index].Protocol = protocols[index]
+		}
+		if strings.TrimSpace(ports[index].HostPort) != "" || strings.TrimSpace(ports[index].ContainerPort) != "" {
+			if strings.TrimSpace(ports[index].Protocol) == "" {
+				ports[index].Protocol = "tcp"
+			}
+		}
+	}
+	return ports
+}
+
+func applicationContainerVolumesFromForm(values url.Values) []application.ApplicationVolumeMapping {
+	sources := applicationContainerFormValues(values, "volume_source", "volume_name", "volume_source[]")
+	targets := applicationContainerFormValues(values, "volume_target", "volume_path", "volume_target[]")
+	options := applicationContainerFormValues(values, "volume_options", "volume_mode", "volume_options[]")
+	count := maxApplicationContainerFormValues(len(sources), len(targets), len(options))
+	if count == 0 {
+		return nil
+	}
+	volumes := make([]application.ApplicationVolumeMapping, count)
+	for index := range volumes {
+		if index < len(sources) {
+			volumes[index].Source = sources[index]
+		}
+		if index < len(targets) {
+			volumes[index].Target = targets[index]
+		}
+		if index < len(options) {
+			volumes[index].Options = options[index]
+		}
+		if strings.TrimSpace(volumes[index].Source) != "" || strings.TrimSpace(volumes[index].Target) != "" {
+			if strings.TrimSpace(volumes[index].Options) == "" {
+				volumes[index].Options = "rw"
+			}
+		}
+	}
+	return volumes
+}
+
+func maxApplicationContainerFormValues(lengths ...int) int {
+	maximum := 0
+	for _, length := range lengths {
+		if length > maximum {
+			maximum = length
+		}
+	}
+	return maximum
+}
+
+func applicationContainerNonEmptyDependencies(values []application.ApplicationServiceDependency) []application.ApplicationServiceDependency {
+	result := make([]application.ApplicationServiceDependency, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.ServiceName) == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func applicationContainerNonEmptyPorts(values []application.ApplicationPortMapping) []application.ApplicationPortMapping {
+	result := make([]application.ApplicationPortMapping, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.HostPort) == "" && strings.TrimSpace(value.ContainerPort) == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func applicationContainerNonEmptyVolumes(values []application.ApplicationVolumeMapping) []application.ApplicationVolumeMapping {
+	result := make([]application.ApplicationVolumeMapping, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.Source) == "" && strings.TrimSpace(value.Target) == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
 type pageData struct {
 	ActivePage                   string
 	Server                       ServerInfo
@@ -4096,12 +4304,19 @@ type redisServicePageData struct {
 
 type applicationContainerPageData struct {
 	Application       application.Application
+	Services          []application.Service
 	CSRFToken         string
 	Error             string
 	ServiceName       string
 	ImageName         string
 	UseDockerRegistry bool
 	AutoStart         bool
+	Entrypoint        string
+	Healthcheck       application.ApplicationHealthcheck
+	DependsOn         []application.ApplicationServiceDependency
+	RestartPolicy     string
+	PortMappings      []application.ApplicationPortMapping
+	VolumeMappings    []application.ApplicationVolumeMapping
 }
 
 type noSetupManager struct{}
@@ -4438,11 +4653,29 @@ func (h *Handler) writeApplicationContainerPage(w http.ResponseWriter, r *http.R
 		Secure:   r.TLS != nil,
 	})
 	w.Header().Set("Cache-Control", "no-store")
+	ensureApplicationContainerFormRows(&data)
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
 	page.ActivePage = "applications"
 	page.ApplicationContainerPage = &data
 	h.writeTemplateStatus(w, "application-container.html", page, status)
+}
+
+func ensureApplicationContainerFormRows(data *applicationContainerPageData) {
+	if len(data.DependsOn) == 0 {
+		data.DependsOn = []application.ApplicationServiceDependency{{
+			Condition: application.ApplicationDependencyConditionStarted,
+		}}
+	}
+	if data.RestartPolicy == "" {
+		data.RestartPolicy = application.ApplicationRestartPolicyUnlessStopped
+	}
+	if len(data.PortMappings) == 0 {
+		data.PortMappings = []application.ApplicationPortMapping{{Protocol: "tcp"}}
+	}
+	if len(data.VolumeMappings) == 0 {
+		data.VolumeMappings = []application.ApplicationVolumeMapping{{Options: "rw"}}
+	}
 }
 
 func newRedisServicePageData(item application.Application) redisServicePageData {
@@ -4461,6 +4694,16 @@ func newApplicationContainerPageData(item application.Application) applicationCo
 		ImageName:         defaultApplicationContainerImageName("app"),
 		UseDockerRegistry: false,
 		AutoStart:         false,
+		DependsOn: []application.ApplicationServiceDependency{{
+			Condition: application.ApplicationDependencyConditionStarted,
+		}},
+		RestartPolicy: application.ApplicationRestartPolicyUnlessStopped,
+		PortMappings: []application.ApplicationPortMapping{{
+			Protocol: "tcp",
+		}},
+		VolumeMappings: []application.ApplicationVolumeMapping{{
+			Options: "rw",
+		}},
 	}
 }
 

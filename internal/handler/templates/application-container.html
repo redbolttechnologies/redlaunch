@@ -3,7 +3,7 @@
 {{end}}
 
 {{define "application-container-content.html"}}
-<section class="service-form-page" aria-labelledby="page-title">
+<section class="service-form-page application-container-form-page" aria-labelledby="page-title">
   <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
     <a href="/applications">Applications</a>
     <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -74,6 +74,285 @@
           </label>
         </div>
       </div>
+
+      <section class="advanced-settings" aria-labelledby="advanced-settings-title">
+        <header class="advanced-settings-header">
+          <div>
+            <h2 id="advanced-settings-title">Advanced settings</h2>
+            <p>Optional Compose overrides for how this container starts, connects, and stores data.</p>
+          </div>
+        </header>
+
+        <div class="advanced-settings-groups">
+          <fieldset class="advanced-settings-group">
+            <legend>Volumes</legend>
+            <div class="advanced-settings-group-header">
+              <div>
+                <p>Mount a named volume or a path inside this application directory.</p>
+              </div>
+              <button class="button button-secondary repeatable-add" type="button" data-repeatable-add="application-container-volumes" data-repeatable-template="application-container-volume-template">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                <span>Add volume</span>
+              </button>
+            </div>
+            <div class="repeatable-list" id="application-container-volumes">
+              {{range .ApplicationContainerPage.VolumeMappings}}
+              <div class="repeatable-row volume-row">
+                <div class="field">
+                  <label>Volume source
+                  <input name="volume_source" type="text" maxlength="255" value="{{.Source}}" placeholder="app-data or ./data" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Volume source">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Container path
+                  <input name="volume_target" type="text" maxlength="255" value="{{.Target}}" placeholder="/var/lib/app" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Container path">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Mount options
+                  <input name="volume_options" type="text" maxlength="128" value="{{.Options}}" data-default-value="rw" placeholder="rw" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Mount options">
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove volume" title="Remove volume">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+              {{end}}
+            </div>
+            <template id="application-container-volume-template">
+              <div class="repeatable-row volume-row">
+                <div class="field">
+                  <label>Volume source
+                  <input name="volume_source" type="text" maxlength="255" placeholder="app-data or ./data" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Volume source">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Container path
+                  <input name="volume_target" type="text" maxlength="255" placeholder="/var/lib/app" autocomplete="off" spellcheck="false" aria-label="Container path">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Mount options
+                  <input name="volume_options" type="text" maxlength="128" value="rw" data-default-value="rw" placeholder="rw" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Mount options">
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove volume" title="Remove volume">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <span class="field-help">Use <code>ro</code> for read-only, or comma-separated Compose options such as <code>rw,z</code>. Parent paths and absolute host paths are not allowed.</span>
+          </fieldset>
+
+          <fieldset class="advanced-settings-group">
+            <legend>Port mappings</legend>
+            <div class="advanced-settings-group-header">
+              <div>
+                <p>Publish a host port to a port inside the container.</p>
+              </div>
+              <button class="button button-secondary repeatable-add" type="button" data-repeatable-add="application-container-ports" data-repeatable-template="application-container-port-template">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                <span>Add port</span>
+              </button>
+            </div>
+            <div class="repeatable-list" id="application-container-ports">
+              {{range .ApplicationContainerPage.PortMappings}}
+              <div class="repeatable-row port-row">
+                <div class="field">
+                  <label>Host port
+                  <input name="port_host" type="number" min="1" max="65535" value="{{.HostPort}}" placeholder="8080" inputmode="numeric" aria-label="Host port">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Container port
+                  <input name="port_container" type="number" min="1" max="65535" value="{{.ContainerPort}}" placeholder="80" inputmode="numeric" aria-label="Container port">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Protocol
+                  <select name="port_protocol" aria-label="Port protocol">
+                    <option value="tcp"{{if eq .Protocol "tcp"}} selected{{end}}>TCP</option>
+                    <option value="udp"{{if eq .Protocol "udp"}} selected{{end}}>UDP</option>
+                    <option value="sctp"{{if eq .Protocol "sctp"}} selected{{end}}>SCTP</option>
+                  </select>
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove port mapping" title="Remove port mapping">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+              {{end}}
+            </div>
+            <template id="application-container-port-template">
+              <div class="repeatable-row port-row">
+                <div class="field">
+                  <label>Host port
+                  <input name="port_host" type="number" min="1" max="65535" placeholder="8080" inputmode="numeric" aria-label="Host port">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Container port
+                  <input name="port_container" type="number" min="1" max="65535" placeholder="80" inputmode="numeric" aria-label="Container port">
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Protocol
+                  <select name="port_protocol" aria-label="Port protocol">
+                    <option value="tcp" selected>TCP</option>
+                    <option value="udp">UDP</option>
+                    <option value="sctp">SCTP</option>
+                  </select>
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove port mapping" title="Remove port mapping">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <span class="field-help">Ports must be numbers from 1 to 65535. TCP is the default protocol.</span>
+          </fieldset>
+
+          <fieldset class="advanced-settings-group">
+            <legend>Dependencies</legend>
+            <div class="advanced-settings-group-header">
+              <div>
+                <p>Choose services this container waits for before starting.</p>
+              </div>
+              <button class="button button-secondary repeatable-add" type="button" data-repeatable-add="application-container-dependencies" data-repeatable-template="application-container-dependency-template">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                <span>Add dependency</span>
+              </button>
+            </div>
+            <div class="repeatable-list" id="application-container-dependencies">
+              {{range $dependency := .ApplicationContainerPage.DependsOn}}
+              <div class="repeatable-row dependency-row">
+                <div class="field">
+                  <label>Service
+                  <select name="depends_on_service" aria-label="Dependency service">
+                    <option value="">Choose a service</option>
+                    {{range $.ApplicationContainerPage.Services}}
+                    <option value="{{.Name}}"{{if eq .Name $dependency.ServiceName}} selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                  </select>
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Condition
+                  <select name="depends_on_condition" aria-label="Dependency condition">
+                    <option value="service_started"{{if eq $dependency.Condition "service_started"}} selected{{end}}>Service started (default)</option>
+                    <option value="service_healthy"{{if eq $dependency.Condition "service_healthy"}} selected{{end}}>Service is healthy</option>
+                    <option value="service_completed_successfully"{{if eq $dependency.Condition "service_completed_successfully"}} selected{{end}}>Service completed successfully</option>
+                  </select>
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove dependency" title="Remove dependency">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+              {{end}}
+            </div>
+            <template id="application-container-dependency-template">
+              <div class="repeatable-row dependency-row">
+                <div class="field">
+                  <label>Service
+                  <select name="depends_on_service" aria-label="Dependency service">
+                    <option value="">Choose a service</option>
+                    {{range .ApplicationContainerPage.Services}}
+                    <option value="{{.Name}}">{{.Name}}</option>
+                    {{end}}
+                  </select>
+                  </label>
+                </div>
+                <div class="field">
+                  <label>Condition
+                  <select name="depends_on_condition" aria-label="Dependency condition">
+                    <option value="service_started" selected>Service started (default)</option>
+                    <option value="service_healthy">Service is healthy</option>
+                    <option value="service_completed_successfully">Service completed successfully</option>
+                  </select>
+                  </label>
+                </div>
+                <button class="icon-button repeatable-remove" type="button" data-repeatable-remove aria-label="Remove dependency" title="Remove dependency">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12h14"></path>
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <span class="field-help">Dependencies are limited to services already registered in this application.</span>
+          </fieldset>
+
+          <fieldset class="advanced-settings-group">
+            <legend>Process</legend>
+            <div class="advanced-settings-grid">
+              <div class="field advanced-field-wide">
+                <label for="application-container-entrypoint">Custom entrypoint command <span class="field-label-optional">(optional)</span></label>
+                <textarea id="application-container-entrypoint" name="entrypoint" maxlength="4096" rows="2" placeholder="/usr/local/bin/start" autocomplete="off" autocapitalize="none" spellcheck="false">{{.ApplicationContainerPage.Entrypoint}}</textarea>
+                <span class="field-help">Replaces the image entrypoint. Compose interpolation is preserved; use <code>$$</code> for a variable expanded inside the container.</span>
+              </div>
+
+              <div class="field">
+                <label for="application-container-restart-policy">Restart policy</label>
+                <select id="application-container-restart-policy" name="restart_policy">
+                  <option value="no"{{if eq .ApplicationContainerPage.RestartPolicy "no"}} selected{{end}}>Do not restart</option>
+                  <option value="always"{{if eq .ApplicationContainerPage.RestartPolicy "always"}} selected{{end}}>Always</option>
+                  <option value="on-failure"{{if eq .ApplicationContainerPage.RestartPolicy "on-failure"}} selected{{end}}>On failure</option>
+                  <option value="unless-stopped"{{if eq .ApplicationContainerPage.RestartPolicy "unless-stopped"}} selected{{end}}>Unless stopped (default)</option>
+                </select>
+                <span class="field-help">Controls when Docker should restart the container.</span>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset class="advanced-settings-group">
+            <legend>Healthcheck</legend>
+            <div class="advanced-settings-grid">
+              <div class="field advanced-field-wide">
+                <label for="application-container-healthcheck-command">Custom healthcheck command <span class="field-label-optional">(optional)</span></label>
+                <textarea id="application-container-healthcheck-command" name="healthcheck_command" maxlength="4096" rows="2" placeholder="curl --fail http://localhost/health" autocomplete="off" autocapitalize="none" spellcheck="false">{{.ApplicationContainerPage.Healthcheck.Command}}</textarea>
+                <span class="field-help">Runs through <code>CMD-SHELL</code>. Leave empty to use no custom healthcheck; blank settings use Compose defaults.</span>
+              </div>
+
+              <div class="field">
+                <label for="application-container-healthcheck-interval">Interval</label>
+                <input id="application-container-healthcheck-interval" name="healthcheck_interval" type="text" maxlength="32" value="{{.ApplicationContainerPage.Healthcheck.Interval}}" placeholder="30s" autocomplete="off" spellcheck="false">
+              </div>
+
+              <div class="field">
+                <label for="application-container-healthcheck-timeout">Timeout</label>
+                <input id="application-container-healthcheck-timeout" name="healthcheck_timeout" type="text" maxlength="32" value="{{.ApplicationContainerPage.Healthcheck.Timeout}}" placeholder="5s" autocomplete="off" spellcheck="false">
+              </div>
+
+              <div class="field">
+                <label for="application-container-healthcheck-retries">Retries</label>
+                <input id="application-container-healthcheck-retries" name="healthcheck_retries" type="number" min="1" max="1000" value="{{.ApplicationContainerPage.Healthcheck.Retries}}" placeholder="3" inputmode="numeric">
+              </div>
+
+              <div class="field">
+                <label for="application-container-healthcheck-start-period">Start period</label>
+                <input id="application-container-healthcheck-start-period" name="healthcheck_start_period" type="text" maxlength="32" value="{{.ApplicationContainerPage.Healthcheck.StartPeriod}}" placeholder="0s" autocomplete="off" spellcheck="false">
+              </div>
+            </div>
+          </fieldset>
+
+        </div>
+      </section>
 
       <div class="application-form-note">
         <span class="application-form-note-mark" aria-hidden="true">i</span>

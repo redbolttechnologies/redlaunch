@@ -47,6 +47,13 @@ const (
 	ServiceLogLineLimit       = LogLineLimit
 )
 
+const (
+	MaxApplicationCommandLength      = 4096
+	MaxApplicationVolumeSourceLength = 255
+	MaxApplicationVolumeTargetLength = 255
+	MaxApplicationMountOptionsLength = 128
+)
+
 var (
 	ErrNameRequired                     = errors.New("application name is required")
 	ErrNameTooLong                      = errors.New("application name is too long")
@@ -130,6 +137,41 @@ var (
 	ErrComposeFileInvalid               = errors.New("Docker Compose file is invalid")
 	ErrComposeProjectHasNoServices      = errors.New("Docker Compose file does not define any services")
 	ErrComposeServicesAlreadyExist      = errors.New("application already has services")
+)
+
+var (
+	ErrApplicationEntrypointTooLong             = errors.New("application entrypoint is too long")
+	ErrApplicationEntrypointInvalid             = errors.New("application entrypoint is invalid")
+	ErrApplicationHealthcheckCommandTooLong     = errors.New("application healthcheck command is too long")
+	ErrApplicationHealthcheckCommandInvalid     = errors.New("application healthcheck command is invalid")
+	ErrApplicationHealthcheckIntervalInvalid    = errors.New("application healthcheck interval is invalid")
+	ErrApplicationHealthcheckTimeoutInvalid     = errors.New("application healthcheck timeout is invalid")
+	ErrApplicationHealthcheckRetriesInvalid     = errors.New("application healthcheck retries are invalid")
+	ErrApplicationHealthcheckStartPeriodInvalid = errors.New("application healthcheck start period is invalid")
+	ErrApplicationDependencyServiceRequired     = errors.New("application dependency service is required")
+	ErrApplicationDependencyServiceInvalid      = errors.New("application dependency service is invalid")
+	ErrApplicationDependencyServiceNotFound     = errors.New("application dependency service was not found")
+	ErrApplicationDependencyConditionInvalid    = errors.New("application dependency condition is invalid")
+	ErrApplicationDependencyDuplicate           = errors.New("application dependency is duplicated")
+	ErrApplicationDependencySelf                = errors.New("application service cannot depend on itself")
+	ErrApplicationRestartPolicyInvalid          = errors.New("application restart policy is invalid")
+	ErrApplicationPortMappingInvalid            = errors.New("application port mapping is invalid")
+	ErrApplicationVolumeSourceRequired          = errors.New("application volume source is required")
+	ErrApplicationVolumeSourceInvalid           = errors.New("application volume source is invalid")
+	ErrApplicationVolumeTargetRequired          = errors.New("application volume target is required")
+	ErrApplicationVolumeTargetInvalid           = errors.New("application volume target is invalid")
+	ErrApplicationVolumeOptionsInvalid          = errors.New("application volume options are invalid")
+)
+
+const (
+	ApplicationRestartPolicyNo            = "no"
+	ApplicationRestartPolicyAlways        = "always"
+	ApplicationRestartPolicyOnFailure     = "on-failure"
+	ApplicationRestartPolicyUnlessStopped = "unless-stopped"
+
+	ApplicationDependencyConditionStarted               = "service_started"
+	ApplicationDependencyConditionHealthy               = "service_healthy"
+	ApplicationDependencyConditionCompletedSuccessfully = "service_completed_successfully"
 )
 
 // Application is the metadata needed to locate a managed application.
@@ -380,12 +422,50 @@ type RedisServiceInput struct {
 	PersistToDisk bool
 }
 
+// ApplicationHealthcheck contains the optional healthcheck command and Compose
+// timing settings for a custom application container.
+type ApplicationHealthcheck struct {
+	Command     string
+	Interval    string
+	Timeout     string
+	Retries     string
+	StartPeriod string
+}
+
+// ApplicationServiceDependency maps a custom application container to one of
+// the application's existing services.
+type ApplicationServiceDependency struct {
+	ServiceName string
+	Condition   string
+}
+
+// ApplicationPortMapping publishes one container port on the host.
+type ApplicationPortMapping struct {
+	HostPort      string
+	ContainerPort string
+	Protocol      string
+}
+
+// ApplicationVolumeMapping mounts a named volume or an application-relative
+// host path at a container path.
+type ApplicationVolumeMapping struct {
+	Source  string
+	Target  string
+	Options string
+}
+
 // ApplicationServiceInput contains the user-supplied values needed to create
 // a custom application container.
 type ApplicationServiceInput struct {
-	ServiceName string
-	ImageName   string
-	AutoStart   bool
+	ServiceName    string
+	ImageName      string
+	AutoStart      bool
+	Entrypoint     string
+	Healthcheck    ApplicationHealthcheck
+	DependsOn      []ApplicationServiceDependency
+	RestartPolicy  string
+	PortMappings   []ApplicationPortMapping
+	VolumeMappings []ApplicationVolumeMapping
 }
 
 // ValidateName trims and validates a human-readable application name.
