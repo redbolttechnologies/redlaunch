@@ -81,6 +81,17 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create application service: %w", err)
 	}
+	githubActions, err := service.NewGitHubActionsService(
+		cfg.ProjectsRoot,
+		database,
+		applications,
+		setupService,
+		compose.CommandRunner{},
+		service.CommandSSHKeyGenerator{},
+	)
+	if err != nil {
+		return fmt.Errorf("create GitHub Actions service: %w", err)
+	}
 	systemdManager, err := systemd.NewManagerWithScope(cfg.SystemdUnitDirectory, cfg.SystemdBinary, cfg.SystemdScope)
 	if err != nil {
 		return fmt.Errorf("create systemd manager: %w", err)
@@ -117,12 +128,19 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Google authentication service: %w", err)
 	}
 
-	dependencies := []any{setupService, applications, backupManager, metrics.New()}
+	dependencies := []any{setupService, applications, backupManager, githubActions, metrics.New()}
 	dependencies = append(dependencies, googleAuth)
 	web, err := handler.New(logger, dependencies...)
 	if err != nil {
 		return fmt.Errorf("create web handler: %w", err)
 	}
+	defer func() {
+		jobsCtx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		if err := web.Shutdown(jobsCtx); err != nil {
+			logger.Error("shutdown background jobs", "error", err)
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -147,10 +165,21 @@ func run(ctx context.Context) error {
 		}
 		return fmt.Errorf("serve HTTP: %w", err)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("shutdown HTTP server: %w", err)
+		serverShutdownCtx, cancelServerShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		serverShutdownErr := server.Shutdown(serverShutdownCtx)
+		cancelServerShutdown()
+		jobsShutdownCtx, cancelJobsShutdown := context.WithTimeout(context.Background(), 35*time.Second)
+		jobsShutdownErr := web.Shutdown(jobsShutdownCtx)
+		cancelJobsShutdown()
+		if serverShutdownErr != nil || jobsShutdownErr != nil {
+			var shutdownErr error
+			if serverShutdownErr != nil {
+				shutdownErr = fmt.Errorf("shutdown HTTP server: %w", serverShutdownErr)
+			}
+			if jobsShutdownErr != nil {
+				shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shutdown background jobs: %w", jobsShutdownErr))
+			}
+			return shutdownErr
 		}
 		return nil
 	}

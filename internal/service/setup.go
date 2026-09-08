@@ -155,6 +155,28 @@ func (s *SetupService) Setup(ctx context.Context, installProxy, installRegistry 
 	return s.SetupWithProgress(ctx, installProxy, installRegistry, nil)
 }
 
+// EnsureRegistry makes the local registry available for integrations that
+// need to reach it from another managed core project. It is safe to call
+// after first-run setup and intentionally does not alter the setup marker.
+func (s *SetupService) EnsureRegistry(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.initializeLocked(); err != nil {
+		return err
+	}
+	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
+	composePath := filepath.Join(directory, "compose.yaml")
+	if info, err := os.Lstat(composePath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("registry Compose file is not a regular file")
+		}
+		return s.runner.Up(ctx, directory)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect registry Compose file: %w", err)
+	}
+	return s.installRegistry(ctx, nil)
+}
+
 // SetupWithProgress performs setup and reports each active stage before it
 // begins. The callback is synchronous and may be nil.
 func (s *SetupService) SetupWithProgress(ctx context.Context, installProxy, installRegistry bool, progress func(stage, message string)) error {

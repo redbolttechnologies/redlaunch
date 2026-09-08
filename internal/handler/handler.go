@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"redlaunch/internal/application"
@@ -66,6 +67,11 @@ type Handler struct {
 	postgresManager                postgresqlService
 	redisManager                   redisService
 	applicationContainerManager    applicationContainerService
+	githubActions                  githubActionsService
+	githubActionsJobs              *githubActionsJobStore
+	githubActionsJobContext        context.Context
+	githubActionsJobCancel         context.CancelFunc
+	githubActionsJobWorkers        sync.WaitGroup
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	dashboardMetrics               dashboardMetricsService
@@ -227,6 +233,14 @@ type applicationContainerInputValidator interface {
 	ValidateApplicationServiceInput(application.ApplicationServiceInput) error
 }
 
+type githubActionsService interface {
+	Get(context.Context, int64) (application.GitHubActionsIntegration, error)
+	Configure(context.Context, int64, application.GitHubActionsInput) (application.GitHubActionsSetup, error)
+	RenderWorkflow(context.Context, int64) (string, error)
+	Revoke(context.Context, int64) error
+	CleanupApplicationKey(context.Context, int64) error
+}
+
 // ServerInfo contains the local machine identity shown in the application shell.
 type ServerInfo struct {
 	Hostname  string
@@ -297,6 +311,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	postgres := postgresqlService(noApplicationService{})
 	redis := redisService(noApplicationService{})
 	applicationContainer := applicationContainerService(noApplicationService{})
+	githubActions := githubActionsService(noGitHubActionsService{})
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
@@ -479,6 +494,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				applicationContainer = dependency
 			}
+		case githubActionsService:
+			if dependency != nil {
+				githubActions = dependency
+			}
 		case proxyDetailsService:
 			if dependency != nil {
 				proxy = dependency
@@ -502,6 +521,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			return nil, fmt.Errorf("unsupported handler dependency %T", dependency)
 		}
 	}
+	githubActionsJobContext, githubActionsJobCancel := context.WithCancel(context.Background())
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -524,6 +544,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		postgresManager:                postgres,
 		redisManager:                   redis,
 		applicationContainerManager:    applicationContainer,
+		githubActions:                  githubActions,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		dashboardMetrics:               dashboardMetrics,
@@ -534,6 +555,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationContainerJobs:       newApplicationContainerJobStore(),
 		serviceDeleteJobs:              newServiceDeleteJobStore(),
 		applicationDeleteJobs:          newApplicationDeleteJobStore(),
+		githubActionsJobs:              newGitHubActionsJobStore(),
+		githubActionsJobContext:        githubActionsJobContext,
+		githubActionsJobCancel:         githubActionsJobCancel,
 		csrfToken:                      csrfToken,
 	}, nil
 }
@@ -573,6 +597,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing", h.saveApplicationRouting)
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing/delete", h.deleteApplicationRouting)
 	mux.HandleFunc("POST /applications/{id}/settings/public-access", h.updateRedlaunchPublicAccess)
+	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
+	mux.HandleFunc("POST /applications/{id}/deployments/github-actions", h.configureGitHubActions)
+	mux.HandleFunc("POST /applications/{id}/deployments/github-actions/revoke", h.revokeGitHubActions)
+	mux.HandleFunc("GET /applications/{id}/deployments/github-actions/workflow", h.downloadGitHubActionsWorkflow)
+	mux.HandleFunc("GET /applications/{id}/deployments/github-actions/status", h.githubActionsStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/start", h.startService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/stop", h.stopService)
@@ -4258,6 +4287,7 @@ type pageData struct {
 	ApplicationContainerProgress *applicationContainerProgressData
 	ServiceDeleteProgress        *serviceDeleteProgressData
 	ApplicationDeleteProgress    *applicationDeleteProgressData
+	GitHubActionsProgress        *githubActionsProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData
@@ -4266,6 +4296,7 @@ type pageData struct {
 	PostgreSQLServicePage        *postgresqlServicePageData
 	RedisServicePage             *redisServicePageData
 	ApplicationContainerPage     *applicationContainerPageData
+	GitHubActionsPage            *githubActionsPageData
 	DashboardPage                *dashboardPageData
 }
 
@@ -4516,6 +4547,28 @@ func (noSetupManager) NeedsSetup() (bool, error) {
 
 func (noSetupManager) Setup(context.Context, bool, bool) error {
 	return errors.New("setup service is not configured")
+}
+
+type noGitHubActionsService struct{}
+
+func (noGitHubActionsService) Get(context.Context, int64) (application.GitHubActionsIntegration, error) {
+	return application.GitHubActionsIntegration{}, application.ErrGitHubActionsNotConfigured
+}
+
+func (noGitHubActionsService) Configure(context.Context, int64, application.GitHubActionsInput) (application.GitHubActionsSetup, error) {
+	return application.GitHubActionsSetup{}, errors.New("GitHub Actions service is not configured")
+}
+
+func (noGitHubActionsService) RenderWorkflow(context.Context, int64) (string, error) {
+	return "", application.ErrGitHubActionsNotConfigured
+}
+
+func (noGitHubActionsService) Revoke(context.Context, int64) error {
+	return application.ErrGitHubActionsNotConfigured
+}
+
+func (noGitHubActionsService) CleanupApplicationKey(context.Context, int64) error {
+	return application.ErrGitHubActionsNotConfigured
 }
 
 type noProxyService struct{}

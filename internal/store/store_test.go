@@ -148,6 +148,56 @@ func TestStoreRedlaunchPublicAccessRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreGitHubActionsRoundTrip(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	created, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := application.GitHubActionsIntegration{
+		ApplicationID:  created.ID,
+		Repository:     "acme/status-page",
+		Branch:         "master",
+		Dockerfile:     "Dockerfile",
+		BuildContext:   ".",
+		ServiceName:    "web",
+		ImageName:      "status-page/web",
+		ServerHost:     "203.0.113.10",
+		ServerPort:     2222,
+		SSHUsername:    "redlaunch-deploy",
+		PublicKey:      "ssh-ed25519 AAAATEST",
+		KeyFingerprint: "SHA256:fingerprint",
+	}
+	got, err := database.SaveGitHubActions(t.Context(), want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ApplicationID != want.ApplicationID || got.Repository != want.Repository || got.PublicKey != want.PublicKey {
+		t.Fatalf("saved integration = %#v, want %#v", got, want)
+	}
+	loaded, err := database.GetGitHubActions(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Repository != want.Repository || loaded.ImageName != want.ImageName || loaded.ServerPort != 2222 {
+		t.Fatalf("loaded integration = %#v, want %#v", loaded, want)
+	}
+	if _, err := database.GetGitHubActions(t.Context(), 999); !errors.Is(err, application.ErrGitHubActionsNotConfigured) {
+		t.Fatalf("missing integration error = %v, want %v", err, application.ErrGitHubActionsNotConfigured)
+	}
+	if err := database.DeleteGitHubActions(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.GetGitHubActions(t.Context(), created.ID); !errors.Is(err, application.ErrGitHubActionsNotConfigured) {
+		t.Fatalf("deleted integration error = %v, want %v", err, application.ErrGitHubActionsNotConfigured)
+	}
+}
+
 func TestStoreListsApplicationServiceMetadata(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {

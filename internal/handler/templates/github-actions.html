@@ -1,0 +1,209 @@
+{{define "github-actions.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "github-actions-content.html"}}
+<section class="service-form-page github-actions-page" aria-labelledby="page-title">
+  <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
+    <a href="/applications">Applications</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <a href="/applications/{{.GitHubActionsPage.Application.ID}}">{{.GitHubActionsPage.Application.Name}}</a>
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+    <span aria-current="page">GitHub Actions</span>
+  </nav>
+
+  <header class="page-heading service-form-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">GitHub Actions deployment</h1>
+      <p>Build <strong>{{.GitHubActionsPage.Application.Name}}</strong> in GitHub Actions and push the image through a restricted SSH tunnel.</p>
+    </div>
+  </header>
+
+  {{if .GitHubActionsPage.Notice}}
+  <div class="application-alert" role="status"><span>{{.GitHubActionsPage.Notice}}</span></div>
+  {{end}}
+  {{if .GitHubActionsPage.Error}}
+  <div class="application-alert" role="alert">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M12 8v4M12 16h.01"></path>
+    </svg>
+    <span>{{.GitHubActionsPage.Error}}</span>
+  </div>
+  {{end}}
+
+  {{if .GitHubActionsPage.Setup}}
+  <section class="service-widget github-actions-handoff" aria-labelledby="github-actions-handoff-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="github-actions-handoff-title">Finish setup in GitHub</h2>
+        <p>Copy these values now. The private key is kept only in memory for this setup job and is not saved by Redlaunch.</p>
+      </div>
+    </header>
+    <div class="service-widget-body github-actions-handoff-body">
+      <div class="application-alert" role="alert">
+        <strong>Keep the private key secret.</strong>
+        <span>Do not paste it into the repository, an issue, or a log. Store it only as the GitHub Actions secret shown below.</span>
+      </div>
+
+      <section class="github-actions-handoff-section" aria-labelledby="github-actions-secrets-title">
+        <h3 id="github-actions-secrets-title">Repository secrets</h3>
+        <div class="field">
+          <label for="github-actions-private-key">REDLAUNCH_DEPLOY_SSH_KEY</label>
+          <textarea id="github-actions-private-key" class="github-actions-secret" rows="8" readonly autocomplete="off" spellcheck="false">{{.GitHubActionsPage.Setup.PrivateKey}}</textarea>
+          <button class="button button-secondary" type="button" data-copy-target="github-actions-private-key">Copy private key</button>
+        </div>
+        <div class="field">
+          <label for="github-actions-known-hosts">REDLAUNCH_DEPLOY_KNOWN_HOSTS</label>
+          <textarea id="github-actions-known-hosts" class="github-actions-technical" rows="2" readonly autocomplete="off" spellcheck="false">{{.GitHubActionsPage.Setup.KnownHosts}}</textarea>
+          <button class="button button-secondary" type="button" data-copy-target="github-actions-known-hosts">Copy known-hosts entry</button>
+          <span class="field-help">Verify the gateway fingerprint before trusting this entry: <code>{{.GitHubActionsPage.Setup.HostKey}}</code>.</span>
+        </div>
+      </section>
+
+      <section class="github-actions-handoff-section" aria-labelledby="github-actions-variables-title">
+        <h3 id="github-actions-variables-title">Repository variables</h3>
+        <dl class="github-actions-values">
+          <div><dt>REDLAUNCH_SERVER_HOST</dt><dd><code>{{.GitHubActionsPage.Setup.Integration.ServerHost}}</code></dd></div>
+          <div><dt>REDLAUNCH_SERVER_USERNAME</dt><dd><code>{{.GitHubActionsPage.Setup.Integration.SSHUsername}}</code></dd></div>
+          <div><dt>REDLAUNCH_SERVER_SSH_PORT</dt><dd><code>{{.GitHubActionsPage.Setup.Integration.ServerPort}}</code></dd></div>
+        </dl>
+      </section>
+
+      <section class="github-actions-handoff-section" aria-labelledby="github-actions-workflow-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h3 id="github-actions-workflow-title">Workflow file</h3>
+            <p>Save this file in the selected repository at <code>.github/workflows/redlaunch-push-image.yml</code>.</p>
+          </div>
+          <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions/workflow">Download workflow</a>
+        </header>
+        <textarea id="github-actions-workflow" class="github-actions-workflow" rows="28" readonly autocomplete="off" spellcheck="false">{{.GitHubActionsPage.Setup.Workflow}}</textarea>
+        <button class="button button-secondary" type="button" data-copy-target="github-actions-workflow">Copy workflow</button>
+      </section>
+
+      <section class="github-actions-handoff-section" aria-labelledby="github-actions-instructions-title">
+        <h3 id="github-actions-instructions-title">GitHub account steps</h3>
+        <ol class="github-actions-instructions">
+          <li>Open <code>{{.GitHubActionsPage.Setup.Integration.Repository}}</code> on GitHub and go to <strong>Settings → Secrets and variables → Actions</strong>.</li>
+          <li>Create the three repository variables shown above.</li>
+          <li>Create the two repository secrets and paste their complete values, including all key boundary lines.</li>
+          <li>Add the downloaded workflow file, commit it to <code>{{.GitHubActionsPage.Setup.Integration.Branch}}</code>, and push.</li>
+          <li>Open <strong>Actions</strong> and run the workflow manually once. It publishes an image tagged with the commit SHA.</li>
+        </ol>
+      </section>
+
+      <div class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}">Back to application</a>
+        <form method="post" action="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions/revoke" data-github-actions-revoke>
+          <input type="hidden" name="csrf_token" value="{{.GitHubActionsPage.CSRFToken}}">
+          <button class="button button-destructive" type="submit">Revoke repository key</button>
+        </form>
+      </div>
+    </div>
+  </section>
+  {{else if .GitHubActionsPage.Integration}}
+  <section class="service-widget github-actions-current" aria-labelledby="github-actions-current-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="github-actions-current-title">Deployment configured</h2>
+        <p>The repository key is active on this Redlaunch server. The private key is not retained here.</p>
+      </div>
+    </header>
+    <div class="service-widget-body github-actions-handoff-body">
+      <dl class="github-actions-values">
+        <div><dt>Repository</dt><dd><code>{{.GitHubActionsPage.Integration.Repository}}</code></dd></div>
+        <div><dt>Branch</dt><dd><code>{{.GitHubActionsPage.Integration.Branch}}</code></dd></div>
+        <div><dt>Build</dt><dd><code>{{.GitHubActionsPage.Integration.Dockerfile}}</code> · context <code>{{.GitHubActionsPage.Integration.BuildContext}}</code></dd></div>
+        <div><dt>Service</dt><dd><code>{{.GitHubActionsPage.Integration.ServiceName}}</code> → <code>localhost:5000/{{.GitHubActionsPage.Integration.ImageName}}:&lt;commit-sha&gt;</code></dd></div>
+        <div><dt>SSH key fingerprint</dt><dd><code>{{.GitHubActionsPage.Integration.KeyFingerprint}}</code></dd></div>
+      </dl>
+      <div class="application-alert" role="status">
+        <span>To rotate the key or change the workflow settings, use the form below. The new handoff remains available from its setup job for up to one hour.</span>
+      </div>
+      <div class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions/workflow">Download current workflow</a>
+        <form method="post" action="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions/revoke" data-github-actions-revoke>
+          <input type="hidden" name="csrf_token" value="{{.GitHubActionsPage.CSRFToken}}">
+          <button class="button button-destructive" type="submit">Revoke repository key</button>
+        </form>
+      </div>
+    </div>
+  </section>
+  {{template "github-actions-configure-form.html" .}}
+  {{else}}
+  {{template "github-actions-configure-form.html" .}}
+  {{end}}
+
+  {{if .GitHubActionsPage.Progress}}
+  {{template "github-actions-progress.html" .}}
+  {{end}}
+</section>
+{{end}}
+
+{{define "github-actions-configure-form.html"}}
+<section class="service-widget" aria-labelledby="github-actions-form-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading">
+      <h2 id="github-actions-form-title">{{if .GitHubActionsPage.Integration}}Rotate or update configuration{{else}}Configure repository{{end}}</h2>
+      <p>{{if .GitHubActionsPage.Integration}}Saving this form replaces the active repository key and generates a new GitHub handoff.{{else}}Redlaunch will create a unique forwarding key for this repository and start the local SSH gateway.{{end}}</p>
+    </div>
+  </header>
+  <div class="service-widget-body">
+    <form class="application-form" method="post" action="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions">
+      <input type="hidden" name="csrf_token" value="{{.GitHubActionsPage.CSRFToken}}">
+      <div class="service-form-grid">
+        <div class="field">
+          <label for="github-actions-repository">GitHub repository</label>
+          <input id="github-actions-repository" name="repository" type="text" value="{{.GitHubActionsPage.Repository}}" maxlength="201" placeholder="owner/repository" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">Use the exact <code>owner/repository</code> name.</span>
+        </div>
+        <div class="field">
+          <label for="github-actions-branch">Branch</label>
+          <input id="github-actions-branch" name="branch" type="text" value="{{.GitHubActionsPage.Branch}}" maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="github-actions-dockerfile">Dockerfile path</label>
+          <input id="github-actions-dockerfile" name="dockerfile" type="text" value="{{.GitHubActionsPage.Dockerfile}}" maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="github-actions-build-context">Build context</label>
+          <input id="github-actions-build-context" name="build_context" type="text" value="{{.GitHubActionsPage.BuildContext}}" maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="github-actions-service">Redlaunch service</label>
+          <select id="github-actions-service" name="service_name" required>
+            <option value="">Choose a service</option>
+            {{range .GitHubActionsPage.Services}}
+            <option value="{{.Name}}"{{if eq .Name $.GitHubActionsPage.ServiceName}} selected{{end}}>{{.Name}}</option>
+            {{end}}
+          </select>
+          <span class="field-help">The workflow publishes the image for this service.</span>
+        </div>
+        <div class="field">
+          <label for="github-actions-image">Registry image repository</label>
+          <input id="github-actions-image" name="image_name" type="text" value="{{.GitHubActionsPage.ImageName}}" maxlength="255" placeholder="my-application/web" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">Do not include <code>localhost:5000</code>, a tag, or a digest.</span>
+        </div>
+        <div class="field">
+          <label for="github-actions-server-host">Public server host</label>
+          <input id="github-actions-server-host" name="server_host" type="text" value="{{.GitHubActionsPage.ServerHost}}" maxlength="253" placeholder="203.0.113.10" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <span class="field-help">This host must expose TCP port <code>2222</code> to GitHub-hosted runners.</span>
+        </div>
+      </div>
+      <div class="application-form-note">
+        <span class="application-form-note-mark" aria-hidden="true">!</span>
+        <span>{{if .GitHubActionsPage.Integration}}The active key is replaced only after the gateway starts successfully. Copy the new handoff before leaving the response.{{else}}The gateway only permits forwarding to the local registry. It does not provide a shell, but the key can push to the registry's available repositories.{{end}}</span>
+      </div>
+      <div class="application-form-actions">
+        <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}">{{if .GitHubActionsPage.Integration}}Back to application{{else}}Cancel{{end}}</a>
+        <button class="button button-primary" type="submit">{{if .GitHubActionsPage.Integration}}Rotate key and regenerate handoff{{else}}Create SSH tunnel and workflow{{end}}</button>
+      </div>
+    </form>
+  </div>
+</section>
+{{end}}

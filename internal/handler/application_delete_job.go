@@ -208,6 +208,15 @@ func (h *Handler) runApplicationDeleteJob(job *applicationDeleteJob) {
 	} else {
 		err = h.applicationDeletion.DeleteApplication(context.Background(), job.applicationID)
 	}
+	if h.githubActions != nil {
+		if cleanupErr := h.githubActions.CleanupApplicationKey(context.Background(), job.applicationID); cleanupErr != nil && !errors.Is(cleanupErr, application.ErrGitHubActionsNotConfigured) {
+			if err == nil {
+				err = cleanupErr
+			} else {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
+	}
 	if err != nil {
 		job.fail(err)
 		snapshot := job.snapshot()

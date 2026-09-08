@@ -33,6 +33,7 @@ The included Compose deployment uses the following ports:
 | <code>80/tcp</code> | Caddy HTTP and certificate challenges, when Caddy is installed |
 | <code>443/tcp</code> and <code>443/udp</code> | Caddy HTTPS and HTTP/3, when Caddy is installed |
 | <code>5000/tcp</code> | Local Docker Registry, bound to loopback only |
+| <code>2222/tcp</code> | Restricted GitHub Actions SSH forwarding gateway, when configured |
 
 ## 1. Install Docker and host tools
 
@@ -269,13 +270,25 @@ After the first login, Redlaunch shows **Set up your server**:
 - Click **Complete setup** and wait for the progress dialog to finish.
 
 The selected core services are stored under the configured projects root in
-<code>core/proxy</code> and <code>core/registry</code>.
+<code>core/proxy</code> and <code>core/registry</code>. The GitHub Actions wizard
+later adds <code>core/github-actions-tunnel</code> when you configure a
+repository deployment.
 
 For Caddy to obtain certificates for public domains, point the domains' DNS
 records to the VPS and make TCP ports 80 and 443 reachable. Add UDP 443 if you
 want HTTP/3.
 
 ## 5. First steps in Redlaunch
+
+### Configure a GitHub Actions image build
+
+After the local Docker Registry is running, open an application, select its
+**Settings** tab, and choose **GitHub Actions deployment**. The wizard starts a
+restricted forwarding gateway, generates a repository-specific SSH key, and
+shows the exact GitHub Actions variables, secrets, and workflow file to add.
+Allow inbound TCP port <code>2222</code> to the VPS before running the workflow.
+See the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md) for the
+complete handoff and troubleshooting steps.
 
 ### Create an application
 
