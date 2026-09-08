@@ -283,7 +283,7 @@ want HTTP/3.
 ### Configure a GitHub Actions image build
 
 After the local Docker Registry is running, open an application, select its
-**Settings** tab, and choose **GitHub Actions deployment**. The wizard starts a
+**Deployment** tab, and choose **GitHub Actions deployment**. The wizard starts a
 restricted forwarding gateway, generates a repository-specific SSH key, and
 shows the exact GitHub Actions variables, secrets, and workflow file to add.
 Allow inbound TCP port <code>2222</code> to the VPS before running the workflow.

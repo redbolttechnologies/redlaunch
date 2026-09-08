@@ -3260,6 +3260,14 @@ h1 {
   max-width: 64rem;
 }
 
+.github-actions-page > .service-form-heading .page-heading-copy {
+  gap: var(--space-3);
+}
+
+.github-actions-page > .service-form-heading + .service-widget {
+  margin-top: var(--space-6);
+}
+
 .github-actions-page > .application-alert {
   margin-bottom: var(--space-4);
 }

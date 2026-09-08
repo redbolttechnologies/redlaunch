@@ -161,6 +161,9 @@
       {{if .ApplicationDeleteProgress}}
       {{template "application-delete-progress.html" .}}
       {{end}}
+      {{if .GitHubActionsProgress}}
+      {{template "github-actions-progress.html" .}}
+      {{end}}
     </main>
   </div>
 </body>

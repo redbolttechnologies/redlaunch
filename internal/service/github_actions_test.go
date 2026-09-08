@@ -344,6 +344,9 @@ func TestGitHubActionsGatewayAcceptsGeneratedKey(t *testing.T) {
 	}
 	run := exec.Command(
 		docker, "run", "--detach", "--rm", "--name", containerName,
+		"--read-only", "--security-opt", "no-new-privileges:true",
+		"--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "SYS_CHROOT",
+		"--tmpfs", "/run/sshd", "--tmpfs", "/run/ssh", "--tmpfs", "/tmp",
 		"--publish", "127.0.0.1::2222", "--env-file", filepath.Join(directory, "secrets.env"),
 		"--volume", filepath.Join(directory, "authorized_keys")+":/etc/ssh/authorized_keys:ro", imageName,
 	)

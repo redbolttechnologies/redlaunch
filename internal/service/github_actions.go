@@ -40,6 +40,7 @@ const githubActionsGatewayCompose = `services:
     cap_add:
       - SETUID
       - SETGID
+      - SYS_CHROOT
     env_file:
       - vars.env
       - secrets.env

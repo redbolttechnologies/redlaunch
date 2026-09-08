@@ -1,7 +1,7 @@
 # GitHub Actions image deployment
 
 Redlaunch can configure a repository-specific GitHub Actions workflow from an
-application's **Settings → GitHub Actions deployment** page. The wizard starts
+application's **Deployment → GitHub Actions deployment** page. The wizard starts
 a managed SSH gateway, creates a separate Ed25519 client key for the selected
 repository, and gives you the exact GitHub variables, secrets, and workflow
 file to add.
@@ -29,7 +29,7 @@ has no shell, no Docker socket, and permits forwarding only to
 
 ## Run the wizard
 
-1. Open an application in Redlaunch and select **Settings**.
+1. Open an application in Redlaunch and select **Deployment**.
 2. In **GitHub Actions deployment**, select **Set up or manage**.
 3. Enter the exact GitHub repository as `owner/repository`.
 4. Choose the branch, Dockerfile path, build context, Redlaunch service, and

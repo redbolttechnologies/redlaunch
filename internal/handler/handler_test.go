@@ -1279,6 +1279,10 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 		`id="domains-tab"`,
 		`id="domains-panel"`,
 		`<h2 id="domains-title">Domains</h2>`,
+		`id="deployment-tab"`,
+		`id="deployment-panel"`,
+		`<h2 id="github-actions-title">GitHub Actions deployment</h2>`,
+		`href="/applications/7/deployments/github-actions"`,
 		`id="settings-tab"`,
 		`<h2 id="services-title">Services</h2>`,
 		`id="settings-panel"`,
@@ -1332,6 +1336,17 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	}
 	if !strings.Contains(body, `id="settings-panel"`) || !strings.Contains(body, `hidden`) {
 		t.Fatalf("GET /applications/7 did not hide the Settings panel by default: %s", body)
+	}
+	deploymentPanelStart := strings.Index(body, `<section class="application-tab-panel" id="deployment-panel"`)
+	settingsPanelStart := strings.Index(body, `<section class="application-tab-panel application-settings-panel" id="settings-panel"`)
+	if deploymentPanelStart < 0 || settingsPanelStart < 0 || deploymentPanelStart >= settingsPanelStart {
+		t.Fatalf("GET /applications/7 did not render Deployment before Settings: %s", body)
+	}
+	if deploymentPanel := body[deploymentPanelStart:settingsPanelStart]; !strings.Contains(deploymentPanel, `class="service-widget application-github-actions"`) {
+		t.Fatalf("GET /applications/7 did not render GitHub Actions in Deployment: %s", body)
+	}
+	if settingsPanel := body[settingsPanelStart:]; strings.Contains(settingsPanel, `class="service-widget application-github-actions"`) {
+		t.Fatalf("GET /applications/7 still rendered GitHub Actions in Settings: %s", body)
 	}
 	if strings.Contains(body, `service-split-button-main" type="button" disabled`) {
 		t.Fatalf("GET /applications/7 rendered the Create service button disabled: %s", body)
@@ -1725,8 +1740,10 @@ func TestApplicationDetailsRendersDomains(t *testing.T) {
 	}
 	if domainsTab := strings.Index(body, `id="domains-tab"`); domainsTab < 0 {
 		t.Fatalf("GET /applications/7 did not render the Domains tab: %s", body)
-	} else if settingsTab := strings.Index(body, `id="settings-tab"`); settingsTab < 0 || domainsTab > settingsTab {
-		t.Fatalf("GET /applications/7 rendered Domains after Settings: %s", body)
+	} else if deploymentTab := strings.Index(body, `id="deployment-tab"`); deploymentTab < 0 || domainsTab > deploymentTab {
+		t.Fatalf("GET /applications/7 rendered Domains after Deployment: %s", body)
+	} else if settingsTab := strings.Index(body, `id="settings-tab"`); settingsTab < 0 || deploymentTab > settingsTab {
+		t.Fatalf("GET /applications/7 rendered Deployment after Settings: %s", body)
 	}
 }
 
@@ -2127,8 +2144,8 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	if got := strings.Count(body, `data-secret-add`); got != 1 {
 		t.Fatalf("GET /applications/7 rendered %d add secret buttons, want 1: %s", got, body)
 	}
-	if strings.Count(body, `class="application-tab"`) != 5 {
-		t.Fatalf("GET /applications/7 rendered %d tabs, want 5: %s", strings.Count(body, `class="application-tab"`), body)
+	if strings.Count(body, `class="application-tab"`) != 6 {
+		t.Fatalf("GET /applications/7 rendered %d tabs, want 6: %s", strings.Count(body, `class="application-tab"`), body)
 	}
 	if strings.Count(body, `class="service-environment-masked"`) != 1 {
 		t.Fatalf("GET /applications/7 rendered %d masked values, want 1: %s", strings.Count(body, `class="service-environment-masked"`), body)
@@ -5213,6 +5230,15 @@ func TestConfigureGitHubActionsDuplicateSubmissionUsesExistingJob(t *testing.T) 
 	}
 	if first.Code != http.StatusSeeOther || second.Code != http.StatusSeeOther || firstLocation.Query().Get("github_actions_job") != secondLocation.Query().Get("github_actions_job") {
 		t.Fatalf("duplicate setup redirects = (%d, %q) and (%d, %q), want the same job", first.Code, firstLocation.String(), second.Code, secondLocation.String())
+	}
+	progressRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(progressRecorder, httptest.NewRequest(http.MethodGet, firstLocation.String(), nil))
+	if progressRecorder.Code != http.StatusOK {
+		t.Fatalf("GET GitHub Actions progress status = %d, want %d", progressRecorder.Code, http.StatusOK)
+	}
+	compactProgressBody := strings.Join(strings.Fields(progressRecorder.Body.String()), " ")
+	if !strings.Contains(compactProgressBody, "data-progress-close>Close</button> </div> </section> </div> </main>") {
+		t.Fatalf("GitHub Actions progress dialog is not a sibling of the inert page content: %s", progressRecorder.Body.String())
 	}
 	close(githubActions.configureRelease)
 	jobID := firstLocation.Query().Get("github_actions_job")

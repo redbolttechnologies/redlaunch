@@ -98,7 +98,7 @@
       </section>
 
       <div class="application-form-actions">
-        <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}">Back to application</a>
+        <a class="button button-secondary" href="/applications/{{.GitHubActionsPage.Application.ID}}?tab=deployment">Back to application</a>
         <form method="post" action="/applications/{{.GitHubActionsPage.Application.ID}}/deployments/github-actions/revoke" data-github-actions-revoke>
           <input type="hidden" name="csrf_token" value="{{.GitHubActionsPage.CSRFToken}}">
           <button class="button button-destructive" type="submit">Revoke repository key</button>
@@ -139,9 +139,6 @@
   {{template "github-actions-configure-form.html" .}}
   {{end}}
 
-  {{if .GitHubActionsPage.Progress}}
-  {{template "github-actions-progress.html" .}}
-  {{end}}
 </section>
 {{end}}
 

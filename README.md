@@ -79,7 +79,7 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 On the first visit, choose whether Redlaunch should install a Caddy reverse
 proxy, a local Docker Registry, or both. You can then create an application and
 add services from its **Services** tab. To configure a repository-specific
-image build, open an application's **Settings → GitHub Actions deployment**
+image build, open an application's **Deployment → GitHub Actions deployment**
 panel after the registry is running.
 
 Managed projects use this directory layout:
