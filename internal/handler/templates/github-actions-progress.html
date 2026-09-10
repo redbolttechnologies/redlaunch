@@ -1,0 +1,43 @@
+{{define "github-actions-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-github-actions-progress data-progress-content-selector=".github-actions-page" data-close-url="{{.GitHubActionsProgress.CloseURL}}" data-state="{{.GitHubActionsProgress.State}}" data-status-url="{{.GitHubActionsProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="github-actions-progress-title" aria-busy="{{if eq .GitHubActionsProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.GitHubActionsProgress.State}}" aria-hidden="true">
+        {{if eq .GitHubActionsProgress.State "complete"}}✓{{else if eq .GitHubActionsProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="github-actions-progress-title" data-progress-title>{{if eq .GitHubActionsProgress.State "complete"}}{{.GitHubActionsProgress.CompleteTitle}}{{else if eq .GitHubActionsProgress.State "failed"}}{{.GitHubActionsProgress.FailedTitle}}{{else}}{{.GitHubActionsProgress.Title}}{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .GitHubActionsProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Completed{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy"><span class="setup-progress-step-label">{{.Label}}</span></span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .GitHubActionsProgress.State "complete"}}
+    <p class="setup-progress-description">{{.GitHubActionsProgress.CompleteDescription}}</p>
+    {{else if eq .GitHubActionsProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The operation stopped during <strong>{{.GitHubActionsProgress.ErrorStage}}</strong>.</p>
+      <p>{{.GitHubActionsProgress.ErrorDetail}}</p>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the GitHub Actions setup progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      {{if eq .GitHubActionsProgress.State "complete"}}
+      {{if .GitHubActionsProgress.HandoffURL}}<a class="button button-primary" href="{{.GitHubActionsProgress.HandoffURL}}">{{.GitHubActionsProgress.CompleteAction}}</a>{{end}}
+      {{end}}
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

@@ -282,6 +282,44 @@ func TestDefaultApplicationImageName(t *testing.T) {
 	}
 }
 
+func TestValidateGitHubActionsInput(t *testing.T) {
+	got, err := ValidateGitHubActionsInput(GitHubActionsInput{
+		Repository:   " Example/Status-page ",
+		Branch:       "feature/release-1",
+		Dockerfile:   "docker/Dockerfile",
+		BuildContext: "./",
+		ServiceName:  "web",
+		ImageName:    "status-page/web",
+		ServerHost:   "203.0.113.10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Repository != "Example/Status-page" || got.BuildContext != "." || got.ImageName != "status-page/web" {
+		t.Fatalf("normalized input = %#v", got)
+	}
+	if got, err := ValidateGitHubActionsHost("2001:0db8:0:0:0:0:0:1"); err != nil || got != "2001:db8::1" {
+		t.Fatalf("ValidateGitHubActionsHost(IPv6) = (%q, %v), want normalized IPv6", got, err)
+	}
+}
+
+func TestValidateGitHubActionsRejectsUnsafeValues(t *testing.T) {
+	cases := []GitHubActionsInput{
+		{Repository: "owner/repo/extra", Branch: "master", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "../main", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "feature/./release", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "master", Dockerfile: "../Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "master", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web:latest", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "master", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "ghcr.io/acme/web", ServerHost: "203.0.113.10"},
+		{Repository: "owner/repo", Branch: "master", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "web", ServerHost: "203.0.113.10;evil"},
+	}
+	for index, input := range cases {
+		if _, err := ValidateGitHubActionsInput(input); err == nil {
+			t.Errorf("case %d accepted unsafe input", index)
+		}
+	}
+}
+
 func TestIsSensitiveEnvironmentKey(t *testing.T) {
 	for _, key := range []string{"POSTGRES_PASSWORD", "API-TOKEN", "database.url", "AWS_ACCESS_KEY_ID"} {
 		if !IsSensitiveEnvironmentKey(key) {

@@ -5,18 +5,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Redlaunch application control plane">
-  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
+  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .GitHubActionsPage}} · GitHub Actions{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
   {{if .DashboardPage}}<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>{{end}}
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
   {{if .DashboardPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
-  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress}}<script src="/static/setup.js" defer></script>{{end}}
+  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .GitHubActionsProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-settings.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script>{{end}}
   {{if .ApplicationRoutingPage}}<script src="/static/application-routings.js" defer></script>{{end}}
   {{if .ApplicationContainerPage}}<script src="/static/application-container.js" defer></script>{{end}}
   {{if .ServiceDetailsPage}}<script src="/static/backup-schedule.js" defer></script><script src="/static/service-details.js" defer></script>{{end}}
+  {{if .GitHubActionsPage}}<script src="/static/github-actions.js" defer></script>{{end}}
 </head>
 <body>
   <div class="app-shell">
@@ -118,7 +119,7 @@
       </section>
     </header>
 
-    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
+    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .GitHubActionsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
       {{if .Setup}}
       {{template "setup.html" .}}
       {{else if .DashboardPage}}
@@ -131,6 +132,8 @@
       {{template "application-container-content.html" .}}
       {{else if .ApplicationRoutingPage}}
       {{template "application-routing-content.html" .}}
+      {{else if .GitHubActionsPage}}
+      {{template "github-actions-content.html" .}}
       {{else if .ServiceDetailsPage}}
       {{template "service-details-content.html" .}}
       {{else if .ApplicationDetailsPage}}
@@ -157,6 +160,9 @@
       {{end}}
       {{if .ApplicationDeleteProgress}}
       {{template "application-delete-progress.html" .}}
+      {{end}}
+      {{if .GitHubActionsProgress}}
+      {{template "github-actions-progress.html" .}}
       {{end}}
     </main>
   </div>

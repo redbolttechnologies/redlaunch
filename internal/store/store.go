@@ -1092,6 +1092,42 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record Redlaunch settings migration: %w", err)
 		}
 	}
+
+	var githubActionsMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 11`).Scan(&githubActionsMigrationApplied); err != nil {
+		return fmt.Errorf("check GitHub Actions migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS github_actions_integrations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			application_id INTEGER NOT NULL UNIQUE,
+			repository TEXT NOT NULL,
+			branch TEXT NOT NULL,
+			dockerfile TEXT NOT NULL,
+			build_context TEXT NOT NULL,
+			service_name TEXT NOT NULL,
+			image_name TEXT NOT NULL,
+			server_host TEXT NOT NULL,
+			server_port INTEGER NOT NULL,
+			ssh_username TEXT NOT NULL,
+			public_key TEXT NOT NULL,
+			key_fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (application_id) REFERENCES applications (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create GitHub Actions integrations table: %w", err)
+	}
+	if githubActionsMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (11, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record GitHub Actions migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

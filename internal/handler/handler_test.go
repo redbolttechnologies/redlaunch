@@ -44,6 +44,70 @@ type fakeDashboardMetricsService struct {
 	calls    int
 }
 
+type fakeGitHubActionsService struct {
+	integration                  application.GitHubActionsIntegration
+	configured                   application.GitHubActionsSetup
+	configureErr                 error
+	configureInput               application.GitHubActionsInput
+	configureCalls               int
+	configureStarted             chan struct{}
+	configureRelease             chan struct{}
+	configureWaitForCancellation bool
+	revokeCalls                  int
+	cleanupCalls                 int
+	workflow                     string
+}
+
+func (s *fakeGitHubActionsService) Get(context.Context, int64) (application.GitHubActionsIntegration, error) {
+	if s.integration.ApplicationID == 0 {
+		return application.GitHubActionsIntegration{}, application.ErrGitHubActionsNotConfigured
+	}
+	return s.integration, nil
+}
+
+func (s *fakeGitHubActionsService) Configure(ctx context.Context, _ int64, input application.GitHubActionsInput) (application.GitHubActionsSetup, error) {
+	s.configureInput = input
+	s.configureCalls++
+	if s.configureStarted != nil {
+		select {
+		case s.configureStarted <- struct{}{}:
+		default:
+		}
+	}
+	if s.configureRelease != nil {
+		<-s.configureRelease
+	}
+	if s.configureWaitForCancellation {
+		<-ctx.Done()
+		return application.GitHubActionsSetup{}, ctx.Err()
+	}
+	if s.configureErr != nil {
+		return application.GitHubActionsSetup{}, s.configureErr
+	}
+	if s.configured.Integration.ApplicationID != 0 {
+		s.integration = s.configured.Integration
+	}
+	return s.configured, nil
+}
+
+func (s *fakeGitHubActionsService) RenderWorkflow(context.Context, int64) (string, error) {
+	if s.workflow == "" {
+		return "", application.ErrGitHubActionsNotConfigured
+	}
+	return s.workflow, nil
+}
+
+func (s *fakeGitHubActionsService) Revoke(context.Context, int64) error {
+	s.revokeCalls++
+	s.integration = application.GitHubActionsIntegration{}
+	return nil
+}
+
+func (s *fakeGitHubActionsService) CleanupApplicationKey(context.Context, int64) error {
+	s.cleanupCalls++
+	return nil
+}
+
 type fakeAuthenticationService struct {
 	enabled                  bool
 	completeUser             redlaunchauth.User
@@ -1215,6 +1279,10 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 		`id="domains-tab"`,
 		`id="domains-panel"`,
 		`<h2 id="domains-title">Domains</h2>`,
+		`id="deployment-tab"`,
+		`id="deployment-panel"`,
+		`<h2 id="github-actions-title">GitHub Actions deployment</h2>`,
+		`href="/applications/7/deployments/github-actions"`,
 		`id="settings-tab"`,
 		`<h2 id="services-title">Services</h2>`,
 		`id="settings-panel"`,
@@ -1268,6 +1336,17 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	}
 	if !strings.Contains(body, `id="settings-panel"`) || !strings.Contains(body, `hidden`) {
 		t.Fatalf("GET /applications/7 did not hide the Settings panel by default: %s", body)
+	}
+	deploymentPanelStart := strings.Index(body, `<section class="application-tab-panel" id="deployment-panel"`)
+	settingsPanelStart := strings.Index(body, `<section class="application-tab-panel application-settings-panel" id="settings-panel"`)
+	if deploymentPanelStart < 0 || settingsPanelStart < 0 || deploymentPanelStart >= settingsPanelStart {
+		t.Fatalf("GET /applications/7 did not render Deployment before Settings: %s", body)
+	}
+	if deploymentPanel := body[deploymentPanelStart:settingsPanelStart]; !strings.Contains(deploymentPanel, `class="service-widget application-github-actions"`) {
+		t.Fatalf("GET /applications/7 did not render GitHub Actions in Deployment: %s", body)
+	}
+	if settingsPanel := body[settingsPanelStart:]; strings.Contains(settingsPanel, `class="service-widget application-github-actions"`) {
+		t.Fatalf("GET /applications/7 still rendered GitHub Actions in Settings: %s", body)
 	}
 	if strings.Contains(body, `service-split-button-main" type="button" disabled`) {
 		t.Fatalf("GET /applications/7 rendered the Create service button disabled: %s", body)
@@ -1661,8 +1740,10 @@ func TestApplicationDetailsRendersDomains(t *testing.T) {
 	}
 	if domainsTab := strings.Index(body, `id="domains-tab"`); domainsTab < 0 {
 		t.Fatalf("GET /applications/7 did not render the Domains tab: %s", body)
-	} else if settingsTab := strings.Index(body, `id="settings-tab"`); settingsTab < 0 || domainsTab > settingsTab {
-		t.Fatalf("GET /applications/7 rendered Domains after Settings: %s", body)
+	} else if deploymentTab := strings.Index(body, `id="deployment-tab"`); deploymentTab < 0 || domainsTab > deploymentTab {
+		t.Fatalf("GET /applications/7 rendered Domains after Deployment: %s", body)
+	} else if settingsTab := strings.Index(body, `id="settings-tab"`); settingsTab < 0 || deploymentTab > settingsTab {
+		t.Fatalf("GET /applications/7 rendered Deployment after Settings: %s", body)
 	}
 }
 
@@ -2063,8 +2144,8 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	if got := strings.Count(body, `data-secret-add`); got != 1 {
 		t.Fatalf("GET /applications/7 rendered %d add secret buttons, want 1: %s", got, body)
 	}
-	if strings.Count(body, `class="application-tab"`) != 5 {
-		t.Fatalf("GET /applications/7 rendered %d tabs, want 5: %s", strings.Count(body, `class="application-tab"`), body)
+	if strings.Count(body, `class="application-tab"`) != 6 {
+		t.Fatalf("GET /applications/7 rendered %d tabs, want 6: %s", strings.Count(body, `class="application-tab"`), body)
 	}
 	if strings.Count(body, `class="service-environment-masked"`) != 1 {
 		t.Fatalf("GET /applications/7 rendered %d masked values, want 1: %s", strings.Count(body, `class="service-environment-masked"`), body)
@@ -3328,7 +3409,8 @@ func TestDeleteApplicationShowsFailedProgressStage(t *testing.T) {
 		applicationDeleteDone:   make(chan struct{}),
 		applicationDeleteStages: []string{"resources"},
 	}
-	web, err := New(nil, applications)
+	githubActions := &fakeGitHubActionsService{integration: application.GitHubActionsIntegration{ApplicationID: 7}}
+	web, err := New(nil, applications, githubActions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3360,6 +3442,68 @@ func TestDeleteApplicationShowsFailedProgressStage(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("failed application deletion response did not render %q: %s", expected, body)
 		}
+	}
+	if githubActions.revokeCalls != 0 {
+		t.Fatalf("GitHub Actions revoke calls after failed deletion = %d, want zero", githubActions.revokeCalls)
+	}
+	if githubActions.cleanupCalls != 1 {
+		t.Fatalf("GitHub Actions cleanup calls after failed deletion = %d, want one idempotent check", githubActions.cleanupCalls)
+	}
+}
+
+func TestDeleteApplicationCleansUpGitHubActionsAccessAfterDeletion(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:               []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		applicationDeleteRemoveApp: true,
+		applicationDeleteDone:      make(chan struct{}),
+	}
+	githubActions := &fakeGitHubActionsService{
+		integration: application.GitHubActionsIntegration{ApplicationID: 7, Repository: "acme/status-page"},
+	}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}, "confirmation": {"Status page"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST application delete status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := location.Query().Get("application_delete_job")
+	if jobID == "" {
+		t.Fatalf("POST application delete Location = %q, want deletion job", location.String())
+	}
+	select {
+	case <-applications.applicationDeleteDone:
+	case <-time.After(time.Second):
+		t.Fatal("application deletion job did not finish")
+	}
+	deadline := time.Now().Add(time.Second)
+	var completed bool
+	for time.Now().Before(deadline) {
+		job := web.applicationDeleteJobs.get(7, jobID)
+		if job != nil && job.snapshot().State != applicationDeleteJobStateRunning {
+			completed = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !completed {
+		t.Fatal("application deletion job did not reach a terminal state")
+	}
+	if githubActions.revokeCalls != 0 {
+		t.Fatalf("GitHub Actions revoke calls = %d, want zero before deletion", githubActions.revokeCalls)
+	}
+	if githubActions.cleanupCalls != 1 {
+		t.Fatalf("GitHub Actions cleanup calls = %d, want one", githubActions.cleanupCalls)
 	}
 }
 
@@ -4935,5 +5079,320 @@ func TestSetupAcceptsCSRFTokenFromCookieAfterHandlerRestart(t *testing.T) {
 	case <-secondManager.done:
 	case <-time.After(time.Second):
 		t.Fatal("setup job did not finish")
+	}
+}
+
+func TestGitHubActionsPageShowsSetupForm(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "web", Type: application.ServiceTypeApplication}},
+	}
+	githubActions := &fakeGitHubActionsService{}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET GitHub Actions page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{"GitHub Actions deployment", "owner/repository", "Create SSH tunnel and workflow"} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("GitHub Actions page does not contain %q: %s", expected, body)
+		}
+	}
+}
+
+func TestConfigureGitHubActionsPageReturnsAsyncHandoff(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "web", Type: application.ServiceTypeApplication}},
+	}
+	githubActions := &fakeGitHubActionsService{
+		configured: application.GitHubActionsSetup{
+			Integration: application.GitHubActionsIntegration{ApplicationID: 7, Repository: "acme/status-page", Branch: "master", ServerHost: "203.0.113.10", ServerPort: 2222, SSHUsername: "redlaunch-deploy"},
+			PrivateKey:  "private-key",
+			KnownHosts:  "[203.0.113.10]:2222 ssh-ed25519 host-key",
+			HostKey:     "ssh-ed25519 host-key",
+			Workflow:    "name: generated",
+		},
+	}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	csrfCookie := getRecorder.Result().Cookies()[0]
+	form := url.Values{
+		"csrf_token":    {csrfCookie.Value},
+		"repository":    {"acme/status-page"},
+		"branch":        {"master"},
+		"dockerfile":    {"Dockerfile"},
+		"build_context": {"."},
+		"service_name":  {"web"},
+		"image_name":    {"status-page/web"},
+		"server_host":   {"203.0.113.10"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/deployments/github-actions", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(csrfCookie)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST GitHub Actions status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := location.Query().Get("github_actions_job")
+	if jobID == "" {
+		t.Fatalf("POST GitHub Actions Location = %q, want setup job", location.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	var completed bool
+	for time.Now().Before(deadline) {
+		job := web.githubActionsJobs.get(7, jobID)
+		if job != nil && job.snapshot().State != githubActionsJobStateRunning {
+			completed = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !completed {
+		t.Fatal("GitHub Actions setup job did not finish")
+	}
+	handoffLocation := location.Path + "?github_actions_job=" + url.QueryEscape(jobID) + "&github_actions_handoff=1"
+	handoffRecorder := httptest.NewRecorder()
+	handoffRequest := httptest.NewRequest(http.MethodGet, handoffLocation, nil)
+	web.Routes().ServeHTTP(handoffRecorder, handoffRequest)
+	if handoffRecorder.Code != http.StatusOK {
+		t.Fatalf("GET GitHub Actions handoff status = %d, want %d", handoffRecorder.Code, http.StatusOK)
+	}
+	if !strings.Contains(handoffRecorder.Body.String(), "private-key") || !strings.Contains(handoffRecorder.Body.String(), "Finish setup in GitHub") {
+		t.Fatalf("handoff page did not include expected async handoff content: %s", handoffRecorder.Body.String())
+	}
+	if githubActions.configureInput.Repository != "acme/status-page" {
+		t.Fatalf("configure input = %#v", githubActions.configureInput)
+	}
+	if got := handoffRecorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestConfigureGitHubActionsDuplicateSubmissionUsesExistingJob(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "web", Type: application.ServiceTypeApplication}},
+	}
+	githubActions := &fakeGitHubActionsService{
+		configured:       application.GitHubActionsSetup{Integration: application.GitHubActionsIntegration{ApplicationID: 7}},
+		configureStarted: make(chan struct{}, 1),
+		configureRelease: make(chan struct{}),
+	}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	csrfCookie := getRecorder.Result().Cookies()[0]
+	form := url.Values{
+		"csrf_token": {csrfCookie.Value}, "repository": {"acme/status-page"}, "branch": {"master"},
+		"dockerfile": {"Dockerfile"}, "build_context": {"."}, "service_name": {"web"},
+		"image_name": {"status-page/web"}, "server_host": {"203.0.113.10"},
+	}
+	post := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/applications/7/deployments/github-actions", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(csrfCookie)
+		recorder := httptest.NewRecorder()
+		web.Routes().ServeHTTP(recorder, request)
+		return recorder
+	}
+	first := post()
+	select {
+	case <-githubActions.configureStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first GitHub Actions job did not start")
+	}
+	second := post()
+	firstLocation, err := url.Parse(first.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLocation, err := url.Parse(second.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Code != http.StatusSeeOther || second.Code != http.StatusSeeOther || firstLocation.Query().Get("github_actions_job") != secondLocation.Query().Get("github_actions_job") {
+		t.Fatalf("duplicate setup redirects = (%d, %q) and (%d, %q), want the same job", first.Code, firstLocation.String(), second.Code, secondLocation.String())
+	}
+	progressRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(progressRecorder, httptest.NewRequest(http.MethodGet, firstLocation.String(), nil))
+	if progressRecorder.Code != http.StatusOK {
+		t.Fatalf("GET GitHub Actions progress status = %d, want %d", progressRecorder.Code, http.StatusOK)
+	}
+	compactProgressBody := strings.Join(strings.Fields(progressRecorder.Body.String()), " ")
+	if !strings.Contains(compactProgressBody, "data-progress-close>Close</button> </div> </section> </div> </main>") {
+		t.Fatalf("GitHub Actions progress dialog is not a sibling of the inert page content: %s", progressRecorder.Body.String())
+	}
+	close(githubActions.configureRelease)
+	jobID := firstLocation.Query().Get("github_actions_job")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if job := web.githubActionsJobs.get(7, jobID); job != nil && job.snapshot().State != githubActionsJobStateRunning {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if githubActions.configureCalls != 1 {
+		t.Fatalf("configure calls = %d, want one", githubActions.configureCalls)
+	}
+}
+
+func TestHandlerShutdownCancelsGitHubActionsJobs(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "web", Type: application.ServiceTypeApplication}},
+	}
+	githubActions := &fakeGitHubActionsService{
+		configureStarted:             make(chan struct{}, 1),
+		configureWaitForCancellation: true,
+	}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	csrfCookie := getRecorder.Result().Cookies()[0]
+	form := url.Values{
+		"csrf_token": {csrfCookie.Value}, "repository": {"acme/status-page"}, "branch": {"master"},
+		"dockerfile": {"Dockerfile"}, "build_context": {"."}, "service_name": {"web"},
+		"image_name": {"status-page/web"}, "server_host": {"203.0.113.10"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/deployments/github-actions", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(csrfCookie)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	select {
+	case <-githubActions.configureStarted:
+	case <-time.After(time.Second):
+		t.Fatal("GitHub Actions job did not start")
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := web.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown handler: %v", err)
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := web.githubActionsJobs.get(7, location.Query().Get("github_actions_job"))
+	if job == nil || job.snapshot().State != githubActionsJobStateFailed {
+		t.Fatalf("job after shutdown = %#v, want failed terminal state", job)
+	}
+}
+
+func TestDownloadGitHubActionsWorkflow(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	githubActions := &fakeGitHubActionsService{workflow: "name: generated\n"}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions/workflow", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "name: generated\n" {
+		t.Fatalf("workflow response = (%d, %q)", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Disposition"), "redlaunch-push-image.yml") {
+		t.Fatalf("Content-Disposition = %q", recorder.Header().Get("Content-Disposition"))
+	}
+}
+
+func TestGitHubActionsConfiguredPageDoesNotRedisplayPrivateKey(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "web", Type: application.ServiceTypeApplication}},
+	}
+	githubActions := &fakeGitHubActionsService{
+		integration: application.GitHubActionsIntegration{
+			ApplicationID: 7, Repository: "acme/status-page", Branch: "master", Dockerfile: "Dockerfile", BuildContext: ".", ServiceName: "web", ImageName: "status-page/web", ServerHost: "203.0.113.10", KeyFingerprint: "SHA256:public",
+		},
+	}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("configured GitHub Actions page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{"Deployment configured", "Rotate or update configuration", "Revoke repository key", "SHA256:public"} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("configured GitHub Actions page does not contain %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "private-key") {
+		t.Fatal("configured GitHub Actions page redisplayed a private key")
+	}
+}
+
+func TestRevokeGitHubActionsRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	githubActions := &fakeGitHubActionsService{integration: application.GitHubActionsIntegration{ApplicationID: 7, Repository: "acme/status-page"}}
+	web, err := New(nil, applications, githubActions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions", nil))
+	cookies := getRecorder.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("GET GitHub Actions cookies = %d, want one", len(cookies))
+	}
+	form := url.Values{"csrf_token": {cookies[0].Value}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/deployments/github-actions/revoke", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(cookies[0])
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("revoke response = (%d, %q), want redirect", recorder.Code, recorder.Header().Get("Location"))
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := location.Query().Get("github_actions_job")
+	if location.Path != "/applications/7/deployments/github-actions" || jobID == "" {
+		t.Fatalf("revoke Location = %q, want revoke progress job", location.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if job := web.githubActionsJobs.get(7, jobID); job != nil && job.snapshot().State != githubActionsJobStateRunning {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if githubActions.revokeCalls != 1 {
+		t.Fatalf("revoke calls = %d, want one", githubActions.revokeCalls)
+	}
+	statusRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/deployments/github-actions/status?id="+url.QueryEscape(jobID), nil))
+	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), "Repository key revoked") {
+		t.Fatalf("revoke progress response = (%d, %s), want completed revocation", statusRecorder.Code, statusRecorder.Body.String())
+	}
+	if strings.Contains(statusRecorder.Body.String(), "Open GitHub handoff") {
+		t.Fatal("completed revocation incorrectly offered a private-key handoff")
 	}
 }

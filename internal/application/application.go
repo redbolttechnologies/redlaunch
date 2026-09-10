@@ -4,7 +4,9 @@ package application
 
 import (
 	"errors"
+	"net"
 	"net/mail"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -137,6 +139,17 @@ var (
 	ErrComposeFileInvalid               = errors.New("Docker Compose file is invalid")
 	ErrComposeProjectHasNoServices      = errors.New("Docker Compose file does not define any services")
 	ErrComposeServicesAlreadyExist      = errors.New("application already has services")
+	ErrGitHubActionsRepositoryRequired  = errors.New("GitHub repository is required")
+	ErrGitHubActionsRepositoryInvalid   = errors.New("GitHub repository is invalid")
+	ErrGitHubActionsBranchRequired      = errors.New("GitHub Actions branch is required")
+	ErrGitHubActionsBranchInvalid       = errors.New("GitHub Actions branch is invalid")
+	ErrGitHubActionsPathInvalid         = errors.New("GitHub Actions path is invalid")
+	ErrGitHubActionsHostRequired        = errors.New("GitHub Actions server host is required")
+	ErrGitHubActionsHostInvalid         = errors.New("GitHub Actions server host is invalid")
+	ErrGitHubActionsImageRequired       = errors.New("GitHub Actions image repository is required")
+	ErrGitHubActionsImageInvalid        = errors.New("GitHub Actions image repository is invalid")
+	ErrGitHubActionsServiceRequired     = errors.New("GitHub Actions service is required")
+	ErrGitHubActionsNotConfigured       = errors.New("GitHub Actions deployment is not configured")
 )
 
 var (
@@ -182,6 +195,215 @@ type Application struct {
 	CreatedAt  time.Time
 	// ServiceCount is derived from the application's registered services.
 	ServiceCount int
+}
+
+// GitHubActionsInput contains the repository-specific values used to render
+// a build-and-push workflow. It deliberately contains no credentials.
+type GitHubActionsInput struct {
+	Repository   string
+	Branch       string
+	Dockerfile   string
+	BuildContext string
+	ServiceName  string
+	ImageName    string
+	ServerHost   string
+}
+
+// GitHubActionsIntegration stores the non-secret state of one repository
+// integration. The private client key is never persisted.
+type GitHubActionsIntegration struct {
+	ID             int64
+	ApplicationID  int64
+	Repository     string
+	Branch         string
+	Dockerfile     string
+	BuildContext   string
+	ServiceName    string
+	ImageName      string
+	ServerHost     string
+	ServerPort     int
+	SSHUsername    string
+	PublicKey      string
+	KeyFingerprint string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// GitHubActionsSetup is returned only immediately after provisioning. The
+// private key is intentionally transient and must not be stored or logged.
+type GitHubActionsSetup struct {
+	Integration  GitHubActionsIntegration
+	PrivateKey   string
+	KnownHosts   string
+	HostKey      string
+	Workflow     string
+	Instructions []string
+}
+
+// ValidateGitHubActionsInput normalizes and validates the values used by the
+// GitHub Actions setup wizard. Paths are restricted to the repository's
+// relative namespace and hosts are restricted to IP addresses or DNS names.
+func ValidateGitHubActionsInput(input GitHubActionsInput) (GitHubActionsInput, error) {
+	repository, err := ValidateGitHubRepository(input.Repository)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	branch, err := ValidateGitHubActionsBranch(input.Branch)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	dockerfile, err := ValidateGitHubActionsPath(input.Dockerfile, false)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	buildContext, err := ValidateGitHubActionsPath(input.BuildContext, true)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	serviceName, err := ValidateServiceName(input.ServiceName)
+	if err != nil {
+		return GitHubActionsInput{}, ErrGitHubActionsServiceRequired
+	}
+	imageName, err := ValidateGitHubActionsImageName(input.ImageName)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	serverHost, err := ValidateGitHubActionsHost(input.ServerHost)
+	if err != nil {
+		return GitHubActionsInput{}, err
+	}
+	return GitHubActionsInput{
+		Repository:   repository,
+		Branch:       branch,
+		Dockerfile:   dockerfile,
+		BuildContext: buildContext,
+		ServiceName:  serviceName,
+		ImageName:    imageName,
+		ServerHost:   serverHost,
+	}, nil
+}
+
+// ValidateGitHubRepository accepts the owner/repository form used by GitHub.
+func ValidateGitHubRepository(value string) (string, error) {
+	repository := strings.TrimSpace(value)
+	if repository == "" {
+		return "", ErrGitHubActionsRepositoryRequired
+	}
+	parts := strings.Split(repository, "/")
+	if len(parts) != 2 || !validGitHubName(parts[0]) || !validGitHubName(parts[1]) {
+		return "", ErrGitHubActionsRepositoryInvalid
+	}
+	return parts[0] + "/" + parts[1], nil
+}
+
+func validGitHubName(value string) bool {
+	if value == "" || len(value) > 100 || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range value {
+		if !isASCIIAlphaNumeric(character) && character != '-' && character != '_' && character != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateGitHubActionsBranch accepts a branch path without shell or YAML
+// metacharacters. The value remains case-sensitive because Git refs are.
+func ValidateGitHubActionsBranch(value string) (string, error) {
+	branch := strings.TrimSpace(value)
+	if branch == "" {
+		return "", ErrGitHubActionsBranchRequired
+	}
+	if len(branch) > 255 || branch == "." || strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") || strings.HasSuffix(branch, ".") || strings.Contains(branch, "..") || strings.Contains(branch, "@{") || strings.ContainsAny(branch, `\\ ~^:?*[]`) || containsControlCharacter(branch) {
+		return "", ErrGitHubActionsBranchInvalid
+	}
+	for _, character := range branch {
+		if !isASCIIAlphaNumeric(character) && character != '-' && character != '_' && character != '.' && character != '/' {
+			return "", ErrGitHubActionsBranchInvalid
+		}
+	}
+	for _, component := range strings.Split(branch, "/") {
+		if component == "" || component == "." || strings.HasSuffix(component, ".lock") {
+			return "", ErrGitHubActionsBranchInvalid
+		}
+	}
+	return branch, nil
+}
+
+// ValidateGitHubActionsPath accepts a repository-relative path. A build
+// context may be "."; Dockerfile paths may not be empty.
+func ValidateGitHubActionsPath(value string, allowDot bool) (string, error) {
+	pathValue := strings.TrimSpace(value)
+	if pathValue == "" && allowDot {
+		pathValue = "."
+	}
+	if pathValue == "" || strings.Contains(pathValue, "\\") || containsControlCharacter(pathValue) {
+		return "", ErrGitHubActionsPathInvalid
+	}
+	cleaned := path.Clean(pathValue)
+	if cleaned == "." && !allowDot || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
+		return "", ErrGitHubActionsPathInvalid
+	}
+	for _, component := range strings.Split(cleaned, "/") {
+		if component == ".." || component == "" || containsControlCharacter(component) {
+			return "", ErrGitHubActionsPathInvalid
+		}
+	}
+	return cleaned, nil
+}
+
+// ValidateGitHubActionsHost accepts a public IP address or DNS host name.
+func ValidateGitHubActionsHost(value string) (string, error) {
+	host := strings.TrimSpace(value)
+	if host == "" {
+		return "", ErrGitHubActionsHostRequired
+	}
+	if containsControlCharacter(host) {
+		return "", ErrGitHubActionsHostInvalid
+	}
+	if parsedIP := net.ParseIP(host); parsedIP != nil {
+		return parsedIP.String(), nil
+	}
+	if len(host) > 253 || strings.ContainsAny(host, `/\\:@[]`) {
+		return "", ErrGitHubActionsHostInvalid
+	}
+	if strings.HasSuffix(host, ".") {
+		host = strings.TrimSuffix(host, ".")
+	}
+	if host == "" {
+		return "", ErrGitHubActionsHostInvalid
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrGitHubActionsHostInvalid
+		}
+		for _, character := range label {
+			if !isASCIIAlphaNumeric(character) && character != '-' {
+				return "", ErrGitHubActionsHostInvalid
+			}
+		}
+	}
+	return strings.ToLower(host), nil
+}
+
+// ValidateGitHubActionsImageName validates a repository path without a
+// registry, tag, or digest. The workflow adds the local registry and SHA tag.
+func ValidateGitHubActionsImageName(value string) (string, error) {
+	image := strings.TrimSpace(strings.ToLower(value))
+	if image == "" {
+		return "", ErrGitHubActionsImageRequired
+	}
+	if strings.ContainsAny(image, `:@\\$;{}#'"`) || strings.Contains(image, "://") || len(image) > MaxImageNameLength {
+		return "", ErrGitHubActionsImageInvalid
+	}
+	if firstComponent := strings.SplitN(image, "/", 2)[0]; looksLikeImageRegistry(firstComponent) {
+		return "", ErrGitHubActionsImageInvalid
+	}
+	if !validImageRepositoryName(image) {
+		return "", ErrGitHubActionsImageInvalid
+	}
+	return image, nil
 }
 
 // Domain is a domain name associated with an application.

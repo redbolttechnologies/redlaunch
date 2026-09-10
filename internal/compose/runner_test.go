@@ -66,6 +66,31 @@ func TestCommandRunnerUpServiceUsesExplicitComposeArguments(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerRestartProjectBuildsRecreatesAndWaits(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).RestartProject(context.Background(), projectDir); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	want := []string{"compose", "-f", "compose.yml", "up", "-d", "--build", "--force-recreate", "--wait", "--wait-timeout", "30"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
+	}
+}
+
 func TestCommandRunnerConfigServicesUsesMachineReadableComposeConfiguration(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {

@@ -54,8 +54,7 @@ make update
 This pulls the latest Git changes and rebuilds and restarts the Docker Compose
 deployment.
 
-For a sample GitHub Actions workflow that builds the root `Dockerfile` and
-pushes an image through a trusted SSH tunnel to the server's local registry,
+For the GitHub Actions wizard, generated workflow, and secure handoff steps,
 see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 
 ## What it can do
@@ -71,13 +70,17 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
+- Configure repository-specific GitHub Actions image builds through a restricted
+  SSH tunnel to the local registry.
 - Limit access to an allowlist of Google accounts.
 
 ## First steps
 
 On the first visit, choose whether Redlaunch should install a Caddy reverse
 proxy, a local Docker Registry, or both. You can then create an application and
-add services from its **Services** tab.
+add services from its **Services** tab. To configure a repository-specific
+image build, open an application's **Deployment → GitHub Actions deployment**
+panel after the registry is running.
 
 Managed projects use this directory layout:
 
@@ -90,7 +93,8 @@ projects/
 │       └── secrets.env
 └── core/
     ├── proxy/
-    └── registry/
+    ├── registry/
+    └── github-actions-tunnel/
 ```
 
 Each application has its own Compose file and environment files. Secret values

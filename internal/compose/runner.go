@@ -59,6 +59,14 @@ func (r CommandRunner) Up(ctx context.Context, projectDir string) error {
 	return r.runComposeUp(ctx, projectDir, "")
 }
 
+// RestartProject rebuilds and force-recreates a Compose project in detached mode.
+// This is used for managed gateways whose image embeds security-sensitive
+// configuration and whose active connections must be dropped during key
+// rotation or revocation.
+func (r CommandRunner) RestartProject(ctx context.Context, projectDir string) error {
+	return r.runComposeUpWithOptions(ctx, projectDir, "", "--build", "--force-recreate", "--wait", "--wait-timeout", "30")
+}
+
 // UpService starts one service in a Compose project in detached mode without
 // starting unrelated services from the same project.
 func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName string) error {
@@ -119,6 +127,10 @@ func (r CommandRunner) ConfigServices(ctx context.Context, projectDir string) ([
 }
 
 func (r CommandRunner) runComposeUp(ctx context.Context, projectDir, serviceName string) error {
+	return r.runComposeUpWithOptions(ctx, projectDir, serviceName)
+}
+
+func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, serviceName string, options ...string) error {
 	binary := r.Binary
 	if binary == "" {
 		binary = "docker"
@@ -129,6 +141,7 @@ func (r CommandRunner) runComposeUp(ctx context.Context, projectDir, serviceName
 		return fmt.Errorf("find Compose file: %w", err)
 	}
 	args := []string{"compose", "-f", composeFile, "up", "-d"}
+	args = append(args, options...)
 	operation := "run compose project"
 	if serviceName != "" {
 		args = append(args, serviceName)

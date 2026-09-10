@@ -3256,6 +3256,118 @@ h1 {
   color: hsl(var(--foreground));
 }
 
+.github-actions-page {
+  max-width: 64rem;
+}
+
+.github-actions-page > .service-form-heading .page-heading-copy {
+  gap: var(--space-3);
+}
+
+.github-actions-page > .service-form-heading + .service-widget {
+  margin-top: var(--space-6);
+}
+
+.github-actions-page > .application-alert {
+  margin-bottom: var(--space-4);
+}
+
+.github-actions-handoff-body {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.github-actions-handoff-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.github-actions-handoff-section h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.github-actions-handoff-section .service-widget-header {
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.github-actions-values {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.github-actions-values div {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(0, 2fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--muted) / 0.35);
+}
+
+.github-actions-values dt,
+.github-actions-values dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+}
+
+.github-actions-values dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.github-actions-values dd {
+  color: hsl(var(--foreground));
+}
+
+.github-actions-secret,
+.github-actions-technical,
+.github-actions-workflow {
+  min-height: 0 !important;
+  padding: var(--space-3) !important;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+  color: hsl(var(--code-foreground)) !important;
+  background: hsl(var(--code)) !important;
+  line-height: 1.45;
+}
+
+.github-actions-secret {
+  min-height: 11rem !important;
+}
+
+.github-actions-technical {
+  min-height: 4rem !important;
+}
+
+.github-actions-workflow {
+  min-height: 28rem !important;
+}
+
+.github-actions-handoff-section .button {
+  justify-self: start;
+}
+
+.github-actions-instructions {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: var(--space-6);
+  color: hsl(var(--muted-foreground));
+}
+
+.github-actions-instructions code {
+  color: hsl(var(--foreground));
+}
+
 .application-form-actions {
   display: flex;
   justify-content: flex-end;
@@ -3506,6 +3618,11 @@ h1 {
   .service-widget-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .github-actions-values div {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
   }
 
   .service-widget-header-actions {

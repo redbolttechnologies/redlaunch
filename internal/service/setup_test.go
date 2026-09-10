@@ -185,6 +185,43 @@ func TestSetupCanCompleteWithoutOptionalServices(t *testing.T) {
 	}
 }
 
+func TestEnsureRegistryInstallsWithoutCompletingFirstRunSetup(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	runner := &recordingRunner{}
+	setup, err := NewSetupService(root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := setup.EnsureRegistry(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := setup.EnsureRegistry(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.directories) != 2 {
+		t.Fatalf("registry starts = %v, want two starts", runner.directories)
+	}
+	wantDirectory := filepath.Join(root, coreDir, registryDir)
+	for _, directory := range runner.directories {
+		if directory != wantDirectory {
+			t.Errorf("registry directory = %q, want %q", directory, wantDirectory)
+		}
+	}
+	for _, name := range []string{"compose.yaml", varsEnvFile, secretsEnvFile} {
+		if _, err := os.Stat(filepath.Join(wantDirectory, name)); err != nil {
+			t.Errorf("registry file %s: %v", name, err)
+		}
+	}
+	needsSetup, err := setup.NeedsSetup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needsSetup {
+		t.Fatal("EnsureRegistry() completed first-run setup unexpectedly")
+	}
+}
+
 func TestSetupReportsProgressStages(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	setup, err := NewSetupService(root, &recordingRunner{})

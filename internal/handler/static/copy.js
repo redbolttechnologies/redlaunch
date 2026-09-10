@@ -60,4 +60,19 @@
       }
     });
   });
+
+  document.querySelectorAll('[data-copy-target]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const target = document.getElementById(button.dataset.copyTarget || '');
+      try {
+        if (!target) {
+          throw new Error('Copy target was not found');
+        }
+        await copyText(target.value || target.textContent || '');
+        showButtonFeedback(button, 'Copied');
+      } catch {
+        showButtonFeedback(button, 'Copy failed');
+      }
+    });
+  });
 })();

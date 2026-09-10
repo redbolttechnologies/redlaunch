@@ -7,7 +7,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/redlaun
 
 FROM alpine:3.22
 
-RUN apk add --no-cache docker-cli docker-cli-compose dbus
+RUN apk add --no-cache docker-cli docker-cli-compose dbus openssh-keygen
 
 COPY --from=build /out/redlaunch /usr/local/bin/redlaunch
 

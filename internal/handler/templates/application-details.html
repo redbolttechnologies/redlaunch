@@ -24,6 +24,7 @@
       <button class="application-tab" id="variables-tab" type="button" role="tab" aria-controls="variables-panel" aria-selected="false" tabindex="-1" data-application-tab="variables-panel">Variables</button>
       <button class="application-tab" id="secrets-tab" type="button" role="tab" aria-controls="secrets-panel" aria-selected="false" tabindex="-1" data-application-tab="secrets-panel">Secrets</button>
       <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="false" tabindex="-1" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="deployment-tab" type="button" role="tab" aria-controls="deployment-panel" aria-selected="false" tabindex="-1" data-application-tab="deployment-panel">Deployment</button>
       <button class="application-tab" id="settings-tab" type="button" role="tab" aria-controls="settings-panel" aria-selected="false" tabindex="-1" data-application-tab="settings-panel">Settings</button>
     </div>
 
@@ -300,6 +301,18 @@
           </div>
           {{end}}
         </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="deployment-panel" role="tabpanel" aria-labelledby="deployment-tab" tabindex="0" hidden>
+      <section class="service-widget application-github-actions" aria-labelledby="github-actions-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="github-actions-title">GitHub Actions deployment</h2>
+            <p>Build this application's image in GitHub Actions and push it through a restricted SSH tunnel.</p>
+          </div>
+          <a class="button button-secondary" href="/applications/{{.ApplicationDetailsPage.Application.ID}}/deployments/github-actions">Set up or manage</a>
+        </header>
       </section>
     </section>
 
