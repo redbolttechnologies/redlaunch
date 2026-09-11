@@ -187,6 +187,79 @@ func TestCommandRunnerDownRemovesProjectContainersAndResources(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerRefusesDestructiveActionForUnmanagedContainer(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+case "$1" in
+  ps) printf 'container-id\n' ;;
+  inspect) printf '{"com.docker.compose.project":"wrong-project"}\n' ;;
+  *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).Down(context.Background(), projectDir); err == nil {
+		t.Fatal("Down() returned nil error for an unmanaged container")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "compose-args")); !os.IsNotExist(err) {
+		t.Fatalf("Compose command marker stat error = %v, want no destructive Compose command", err)
+	}
+}
+
+func TestCommandRunnerRefusesDestructiveActionForUnownedVolume(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+case "$1:$2" in
+  ps:*) ;;
+  volume:ls) printf 'volume-name\n' ;;
+  volume:inspect) printf '{"com.docker.compose.project":"wrong-project"}\n' ;;
+  *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).Down(context.Background(), projectDir); err == nil {
+		t.Fatal("Down() returned nil error for an unowned volume")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "compose-args")); !os.IsNotExist(err) {
+		t.Fatalf("Compose command marker stat error = %v, want no destructive Compose command", err)
+	}
+}
+
+func TestCommandRunnerAllowsDestructiveActionForManagedProject(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectName := composeProjectName(projectDir)
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\ncase \"$1\" in\n  ps) printf 'container-id\\n' ;;\n  inspect) printf '{\"redlaunch.managed\":\"true\",\"com.docker.compose.project\":\"" + projectName + "\"}\\n' ;;\n  *) printf '%s\\n' \"$@\" > \"${0%/*}/compose-args\" ;;\nesac\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).Down(context.Background(), projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "compose-args")); err != nil {
+		t.Fatalf("Compose command marker stat error = %v, want destructive Compose command", err)
+	}
+}
+
 func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
@@ -383,15 +456,16 @@ func TestComposeProjectNamesSeparateApplicationAndCoreResources(t *testing.T) {
 
 func TestCommandRunnerExcludesManagerOnlyEnvironment(t *testing.T) {
 	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    environment:\n      APP_VALUE: ${APP_INTERPOLATION_VALUE}\n      MANAGER_VALUE: ${AUTH_SESSION_SECRET}\n      GOOGLE_VALUE: ${GOOGLE_CLIENT_SECRET}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AUTH_SESSION_SECRET", "manager-only-marker")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "manager-google-marker")
 	t.Setenv("APP_INTERPOLATION_VALUE", "application-marker")
 
 	binary := filepath.Join(t.TempDir(), "docker")
 	script := `#!/bin/sh
-printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}"
+printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s","GOOGLE_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}" "${GOOGLE_CLIENT_SECRET-unset}"
 `
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -407,6 +481,9 @@ printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s"
 	}
 	if values["MANAGER_VALUE"] != "unset" {
 		t.Fatal("manager-only authentication environment reached Docker Compose")
+	}
+	if values["GOOGLE_VALUE"] != "unset" {
+		t.Fatal("manager-only OAuth environment reached Docker Compose")
 	}
 	if values["APP_VALUE"] != "application-marker" {
 		t.Fatalf("application interpolation environment = %q, want application-marker", values["APP_VALUE"])
@@ -437,6 +514,6 @@ func environmentPairs(values []EnvironmentVariable) []string {
 }
 
 func expectedComposeArguments(projectDir string, args ...string) []string {
-	expected := []string{"compose", "--project-name", composeProjectName(projectDir), "-f", "compose.yml"}
+	expected := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", "compose.yml"}
 	return append(expected, args...)
 }

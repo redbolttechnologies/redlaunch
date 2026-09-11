@@ -149,8 +149,8 @@ contains the current credential and redirect-URI rules.
 
 ### Choosing the callback URL
 
-The bundled Compose file exposes Redlaunch on port <code>8080</code>; it does
-not make the Redlaunch management UI public over HTTPS. The simplest secure
+The bundled Compose file defaults to <code>MANAGEMENT_ACCESS_MODE=ssh-only</code>
+and binds port <code>8080</code> to <code>127.0.0.1</code>. The simplest secure
 first login on a VPS is an SSH tunnel:
 
 ~~~sh
@@ -160,11 +160,28 @@ ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
 With that tunnel open, visit <code>http://localhost:8080</code> in your local
 browser and use the default callback URL above.
 
+For a managed HTTPS deployment through the bundled Caddy proxy, set these
+values in <code>.env</code> before restarting the stack:
+
+~~~text
+MANAGEMENT_ACCESS_MODE='managed-https'
+APP_BIND_ADDRESS='0.0.0.0'
+~~~
+
+The wider bind is required because Caddy reaches the manager through the host
+gateway. Restrict the VPS firewall to the intended entry points and do not use
+managed HTTPS without a reachable TLS proxy. Managed HTTPS forces secure
+session and CSRF cookies; SSH-only keeps the loopback HTTP callback usable.
+When running the binary outside Docker, the default HTTP listener is also
+loopback; set <code>HTTP_ADDR</code> explicitly only when a local reverse proxy
+needs to reach that listener.
+
 When Redlaunch public access is enabled in Settings, a login started at the
 configured public hostname automatically uses that hostname for the HTTPS
 callback URL. Keep <code>GOOGLE_REDIRECT_URL</code> as the local fallback and
 register both callback URLs in Google. Set
-<code>AUTH_COOKIE_SECURE=true</code> when using the public HTTPS URL. The Caddy
+<code>AUTH_COOKIE_SECURE=true</code> is optional in managed HTTPS because the
+mode forces secure cookies. The Caddy
 service installed from Redlaunch's first-run screen is for routing managed
 application services until public access is enabled; it is not an automatic
 reverse proxy for the Redlaunch UI itself.
@@ -235,11 +252,12 @@ The generated <code>.env</code> uses this local fallback callback:
 GOOGLE_REDIRECT_URL='http://localhost:8080/auth/google/callback'
 ~~~
 
-If you are using a public HTTPS management URL, set secure cookies before
-signing in through it:
+If you are using a public HTTPS management URL through the bundled proxy, use
+the managed deployment mode before signing in through it:
 
 ~~~text
-AUTH_COOKIE_SECURE='true'
+MANAGEMENT_ACCESS_MODE='managed-https'
+APP_BIND_ADDRESS='0.0.0.0'
 ~~~
 
 ~~~sh
@@ -360,6 +378,25 @@ and adds the managed container names, labels, <code>vars.env</code>, and
 <code>secrets.env</code> references. Imported services are not started
 automatically; start them from the Services tab when ready.
 
+Imports intentionally support a local, managed subset: service definitions,
+declared images, local build contexts, relative
+<code>env_file</code>/<code>dockerfile</code> paths, and named or
+application-directory bind volumes. Remote file sources, Compose
+includes/extensions, file-backed Compose secrets/configs, host capabilities
+such as privileged mode/devices/host namespaces or Docker socket mounts, and
+paths that escape the application directory are rejected before the upload is
+written or Compose is run. Declared image references may still be pulled when
+an operator starts a service. The upload also cannot choose its Compose project
+name; Redlaunch supplies a stable installation-, scope-, and
+resource-specific identity.
+
+Compose is invoked with project-level <code>.env</code> loading disabled. Its
+configuration subprocess receives Docker settings and explicitly referenced
+application interpolation variables, while Redlaunch session, OAuth, database,
+and listener settings are filtered out. Policy errors identify the rejected
+Compose line and leave the existing files and SQLite service metadata
+unchanged.
+
 To import application configuration, choose **Import variables...** on the
 Variables tab or **Import secrets...** on the Secrets tab. Upload a dotenv file
 for the matching managed file. Redlaunch validates the entries, keeps both
@@ -453,6 +490,13 @@ folder such as <code>proxy</code>. Review <code>volumes.tsv</code> before any
 container recreation; a named volume is part of the data identity even when a
 Compose project name changes.
 
+Redlaunch derives each managed Compose project name from the absolute projects
+root, its <code>applications</code>/<code>core</code> scope, and the resource
+folder. Destructive service and project operations also require both the
+derived Compose project label and <code>redlaunch.managed=true</code>. A legacy
+container without that label is refused rather than guessed at; inventory it,
+map its volumes, and perform a reviewed adoption before removing anything.
+
 Stop the manager so SQLite is closed, then copy the complete data volume,
 managed project tree, and installation settings without displaying their
 contents:
@@ -500,7 +544,7 @@ identities, use the recorded project label and absolute configuration path to
 stop each old project once, without deleting volumes:
 
 ~~~sh
-docker compose --project-name OLD_PROJECT -f ABSOLUTE_CONFIG_FILE down --remove-orphans
+  docker compose --project-name OLD_PROJECT --env-file /dev/null -f ABSOLUTE_CONFIG_FILE down --remove-orphans
 ~~~
 
 Do not proceed when <code>volumes.tsv</code> shows a project-scoped volume whose
@@ -519,7 +563,7 @@ while IFS= read -r project_dir; do
   fi
   project_name=$(docker compose exec -T app \
     redlaunch compose-project-name --directory "$project_dir")
-  docker compose --project-name "$project_name" -f "$compose_file" up -d
+  docker compose --project-name "$project_name" --env-file /dev/null -f "$compose_file" up -d
 done < "$backup_dir/project-directories.txt"
 ~~~
 
@@ -546,7 +590,7 @@ projects-root path stable: it is part of the installation-scoped identity.
   cd ~/redlaunch
   git pull
   docker compose up -d --build
-  docker compose -f projects/core/proxy/compose.yaml up -d --force-recreate
+  docker compose -f projects/core/proxy/compose.yml up -d --force-recreate
   ~~~
 
   Replace <code>~/redlaunch</code> with the installation directory when needed.

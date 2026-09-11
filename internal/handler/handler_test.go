@@ -266,6 +266,7 @@ type fakeApplicationService struct {
 	secretOriginalName            string
 	secretUpdateName              string
 	secretUpdateValue             string
+	secretUpdateReplaceValue      bool
 	secretUpdateErr               error
 	secretAddID                   int64
 	secretAddName                 string
@@ -480,10 +481,19 @@ func (s *fakeApplicationService) MoveEnvironmentVariableToSecrets(_ context.Cont
 }
 
 func (s *fakeApplicationService) UpdateEnvironmentSecret(_ context.Context, id int64, originalName, name, value string) error {
+	return s.updateEnvironmentSecret(id, originalName, name, value, true)
+}
+
+func (s *fakeApplicationService) UpdateEnvironmentSecretValue(_ context.Context, id int64, originalName, name, value string, replaceValue bool) error {
+	return s.updateEnvironmentSecret(id, originalName, name, value, replaceValue)
+}
+
+func (s *fakeApplicationService) updateEnvironmentSecret(id int64, originalName, name, value string, replaceValue bool) error {
 	s.secretUpdateID = id
 	s.secretOriginalName = originalName
 	s.secretUpdateName = name
 	s.secretUpdateValue = value
+	s.secretUpdateReplaceValue = replaceValue
 	return s.secretUpdateErr
 }
 
@@ -1424,6 +1434,7 @@ func TestUpdateRedlaunchPublicAccessRequiresCSRFAndRedirects(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("POST public access status = %d, want %d", recorder.Code, http.StatusSeeOther)
@@ -1454,6 +1465,7 @@ func TestUpdateRedlaunchPublicAccessRendersValidationError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
@@ -2586,6 +2598,57 @@ func TestApplicationSecretUpdateRequiresCSRFAndRedirects(t *testing.T) {
 	}
 	if applications.secretUpdateID != 7 || applications.secretOriginalName != "API_TOKEN" || applications.secretUpdateName != "API_KEY" || applications.secretUpdateValue != "new-secret" {
 		t.Fatalf("secret update = (%d, %q, %q, %q), want (7, API_TOKEN, API_KEY, new-secret)", applications.secretUpdateID, applications.secretOriginalName, applications.secretUpdateName, applications.secretUpdateValue)
+	}
+}
+
+func TestApplicationSecretUpdateLeavesBlankValueUnchanged(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token":    {web.csrfToken},
+		"original_name": {"API_TOKEN"},
+		"name":          {"API_KEY"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST blank secret value status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if applications.secretUpdateValue != "" || applications.secretUpdateReplaceValue {
+		t.Fatalf("blank secret update = value %q replace=%v, want unchanged", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
+	}
+}
+
+func TestApplicationSecretUpdateRequiresExplicitClear(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token":    {web.csrfToken},
+		"original_name": {"API_TOKEN"},
+		"name":          {"API_TOKEN"},
+		"clear_value":   {"on"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST clear secret status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if applications.secretUpdateValue != "" || !applications.secretUpdateReplaceValue {
+		t.Fatalf("clear secret update = value %q replace=%v, want explicit empty replacement", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
 	}
 }
 
@@ -4770,6 +4833,7 @@ func TestLogoutExpiresSessionCookieAndRedirectsToLogin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "signed-session"})
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -4912,6 +4976,7 @@ func TestSetupAcceptsSelectedCoreServices(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -4942,6 +5007,7 @@ func TestSetupStatusReportsFailureStageAndDetails(t *testing.T) {
 	form := url.Values{"csrf_token": {web.csrfToken}, "proxy": {"on"}}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	postRecorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(postRecorder, request)
 	if postRecorder.Code != http.StatusSeeOther {
@@ -5033,6 +5099,7 @@ func TestSetupRendersFreshFormForExpiredCSRFToken(t *testing.T) {
 	form := url.Values{"csrf_token": {"expired-token"}, "proxy": {"on"}}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -5084,6 +5151,71 @@ func TestSetupAcceptsCSRFTokenFromCookieAfterHandlerRestart(t *testing.T) {
 	case <-secondManager.done:
 	case <-time.After(time.Second):
 		t.Fatal("setup job did not finish")
+	}
+}
+
+func TestManagedHTTPSUsesSecureCSRFCookieBehindConfiguredTLSProxy(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager, SecurityConfig{AccessMode: accessModeManagedHTTPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://manager.example/", nil)
+	web.Routes().ServeHTTP(recorder, request)
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil || !csrfCookie.Secure || csrfCookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("managed HTTPS CSRF cookie = %#v, want Secure and SameSite=Strict", csrfCookie)
+	}
+}
+
+func TestStateChangingRequestRejectsCrossOriginRequest(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://manager.example/setup", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://evil.example")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("cross-origin POST setup calls = %d, want 0", manager.setupCalls)
+	}
+}
+
+func TestStateChangingRequestRejectsMalformedReferer(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://manager.example/setup", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Referer", "not-an-origin")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("malformed Referer POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("malformed Referer setup calls = %d, want 0", manager.setupCalls)
 	}
 }
 

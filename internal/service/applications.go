@@ -234,8 +234,16 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 }
 
 // UpdateEnvironmentSecret changes one entry in an application's secrets.env
-// file while preserving the rest of the file and its permissions.
+// file while preserving the rest of the file and its permissions. It is kept
+// as the replace-value compatibility form for non-HTTP callers.
 func (s *Applications) UpdateEnvironmentSecret(ctx context.Context, applicationID int64, originalName, name, value string) error {
+	return s.UpdateEnvironmentSecretValue(ctx, applicationID, originalName, name, value, true)
+}
+
+// UpdateEnvironmentSecretValue renames a secret and optionally replaces its
+// value. When replaceValue is false, the existing value token is preserved;
+// this is the explicit unchanged-value path used by the web form.
+func (s *Applications) UpdateEnvironmentSecretValue(ctx context.Context, applicationID int64, originalName, name, value string, replaceValue bool) error {
 	originalName, err := application.ValidateEnvironmentVariableName(originalName)
 	if err != nil {
 		return err
@@ -244,14 +252,19 @@ func (s *Applications) UpdateEnvironmentSecret(ctx context.Context, applicationI
 	if err != nil {
 		return err
 	}
-	value, err = application.ValidateEnvironmentVariableValue(value)
-	if err != nil {
-		return err
+	if replaceValue {
+		value, err = application.ValidateEnvironmentVariableValue(value)
+		if err != nil {
+			return err
+		}
 	}
 	if s.detailsRepository == nil {
 		return errors.New("application details repository is not configured")
 	}
 	return s.modifyApplicationEnvironmentFile(ctx, applicationID, secretsEnvFile, "secrets", func(contents string) (string, error) {
+		if !replaceValue {
+			return renameEnvironmentFile(contents, originalName, name)
+		}
 		return updateEnvironmentFile(contents, originalName, name, value)
 	})
 }

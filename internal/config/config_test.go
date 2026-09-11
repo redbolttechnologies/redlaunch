@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,7 @@ func setBackupConfigTestEnvironment(t *testing.T) {
 	t.Setenv("GOOGLE_REDIRECT_URL", "")
 	t.Setenv("AUTH_SESSION_SECRET", "")
 	t.Setenv("AUTH_COOKIE_SECURE", "false")
+	t.Setenv("MANAGEMENT_ACCESS_MODE", AccessModeSSHOnly)
 }
 
 func TestLoadAcceptsGoogleAuthenticationConfiguration(t *testing.T) {
@@ -37,6 +39,21 @@ func TestLoadAcceptsGoogleAuthenticationConfiguration(t *testing.T) {
 	}
 	if !cfg.GoogleAuthEnabled() || cfg.GoogleClientID != "client-id" || cfg.GoogleClientSecret != "client-secret" || cfg.GoogleRedirectURL != "https://redlaunch.example.com/auth/google/callback" || !cfg.AuthCookieSecure {
 		t.Fatalf("Google authentication configuration = %#v", cfg)
+	}
+}
+
+func TestLoadDefaultsStandaloneHTTPListenerToLoopback(t *testing.T) {
+	setBackupConfigTestEnvironment(t)
+	if err := os.Unsetenv("HTTP_ADDR"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPAddr != "127.0.0.1:8080" {
+		t.Fatalf("HTTPAddr = %q, want loopback default", cfg.HTTPAddr)
 	}
 }
 
@@ -113,5 +130,27 @@ func TestLoadRejectsUnsafeBackupContainerName(t *testing.T) {
 				t.Fatalf("Load() with BACKUP_CONTAINER_NAME=%q returned nil error", value)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsManagedHTTPSAccessMode(t *testing.T) {
+	setBackupConfigTestEnvironment(t)
+	t.Setenv("MANAGEMENT_ACCESS_MODE", "MANAGED-HTTPS")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ManagementAccessMode != AccessModeManagedHTTPS {
+		t.Fatalf("ManagementAccessMode = %q, want %q", cfg.ManagementAccessMode, AccessModeManagedHTTPS)
+	}
+}
+
+func TestLoadRejectsUnsupportedManagementAccessMode(t *testing.T) {
+	setBackupConfigTestEnvironment(t)
+	t.Setenv("MANAGEMENT_ACCESS_MODE", "public-http")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() returned nil error for unsupported management access mode")
 	}
 }

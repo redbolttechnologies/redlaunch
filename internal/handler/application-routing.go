@@ -100,11 +100,7 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "The routing save request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This routing page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -194,11 +190,7 @@ func (h *Handler) deleteApplicationRouting(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "The routing delete request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This routing page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -326,18 +318,7 @@ func (h *Handler) renderApplicationRoutingDeleteError(w http.ResponseWriter, r *
 }
 
 func (h *Handler) writeApplicationRoutingPage(w http.ResponseWriter, r *http.Request, status int, data applicationRoutingPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)

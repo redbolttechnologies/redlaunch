@@ -122,14 +122,24 @@ chmod 600 "$dotenv_tmp"
 	write_dotenv_value "$auth_session_secret"
 	printf '\nAUTH_COOKIE_SECURE='
 	write_dotenv_value 'false'
+	printf '\nMANAGEMENT_ACCESS_MODE='
+	write_dotenv_value 'ssh-only'
+	printf '\nAPP_BIND_ADDRESS='
+	write_dotenv_value '127.0.0.1'
 	printf '\n'
 } >"$dotenv_tmp" || fail 'could not write .env'
 mv "$dotenv_tmp" "$dotenv_file" || fail 'could not install .env'
 dotenv_tmp=
 
+for manager_env_file in vars.env secrets.env; do
+	if [[ ! -e $manager_env_file && ! -L $manager_env_file ]]; then
+		(umask 077; : >"$manager_env_file") || fail "could not create $manager_env_file"
+	fi
+done
+
 # Ensure values already exported in the VPS shell cannot override the values
 # entered during this setup run when Compose interpolates the .env file.
-unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SECRET AUTH_COOKIE_SECURE
+unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SECRET AUTH_COOKIE_SECURE MANAGEMENT_ACCESS_MODE APP_BIND_ADDRESS
 
 printf '\nEnsuring the persistent application data volume exists...\n' >&2
 docker volume create "$app_data_volume" >/dev/null

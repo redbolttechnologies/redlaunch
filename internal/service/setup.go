@@ -165,14 +165,16 @@ func (s *SetupService) EnsureRegistry(ctx context.Context) error {
 		return err
 	}
 	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
-	composePath := filepath.Join(directory, "compose.yaml")
-	if info, err := os.Lstat(composePath); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return errors.New("registry Compose file is not a regular file")
+	for _, name := range []string{"compose.yml", "compose.yaml"} {
+		composePath := filepath.Join(directory, name)
+		if info, err := os.Lstat(composePath); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return errors.New("registry Compose file is not a regular file")
+			}
+			return s.runner.Up(ctx, directory)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect registry Compose file: %w", err)
 		}
-		return s.runner.Up(ctx, directory)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect registry Compose file: %w", err)
 	}
 	return s.installRegistry(ctx, nil)
 }
@@ -234,7 +236,7 @@ func (s *SetupService) installProxy(ctx context.Context, progress func(stage, me
 	if err := writeEmptyEnvironmentFiles(directory); err != nil {
 		return fmt.Errorf("write proxy environment files: %w", err)
 	}
-	if err := writeManagedFile(filepath.Join(directory, "compose.yaml"), proxyCompose, 0o644); err != nil {
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), proxyCompose, 0o644); err != nil {
 		return fmt.Errorf("write proxy Compose file: %w", err)
 	}
 	if err := writeManagedFile(filepath.Join(directory, "Caddyfile"), "# Routes managed by Redlaunch.\n", 0o644); err != nil {
@@ -255,7 +257,7 @@ func (s *SetupService) installRegistry(ctx context.Context, progress func(stage,
 	if err := writeEmptyEnvironmentFiles(directory); err != nil {
 		return fmt.Errorf("write registry environment files: %w", err)
 	}
-	if err := writeManagedFile(filepath.Join(directory, "compose.yaml"), registryCompose, 0o644); err != nil {
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), registryCompose, 0o644); err != nil {
 		return fmt.Errorf("write registry Compose file: %w", err)
 	}
 	reportSetupProgress(progress, "registry-start", "Starting the Docker Registry with Docker Compose")

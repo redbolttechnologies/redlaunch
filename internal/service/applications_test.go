@@ -488,6 +488,62 @@ func TestApplicationsImportDockerComposeProjectRollsBackOnValidationFailure(t *t
 	}
 }
 
+func TestApplicationsImportDockerComposeProjectRejectsUnsafeSourcesBeforeCompose(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		contents string
+	}{
+		{name: "escaping env file", contents: "services:\n  web:\n    image: nginx:1.27\n    env_file: ../outside.env\n"},
+		{name: "escaping bind mount", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ../../outside:/data\n"},
+		{name: "remote build context", contents: "services:\n  web:\n    build: https://example.com/source.git\n"},
+		{name: "remote additional build context", contents: "services:\n  web:\n    build:\n      context: .\n      additional_contexts:\n        shared: https://example.com/source.git\n"},
+		{name: "host capability", contents: "services:\n  web:\n    image: nginx:1.27\n    privileged: true\n"},
+		{name: "docker socket bind", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./docker.sock:/var/run/docker.sock\n"},
+		{name: "compose include", contents: "include: https://example.com/compose.yml\nservices:\n  web:\n    image: nginx:1.27\n"},
+		{name: "external volume", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - data:/data\nvolumes:\n  data:\n    external: true\n"},
+		{name: "volume driver options", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - data:/data\nvolumes:\n  data:\n    driver_opts:\n      device: /var/lib/data\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "projects")
+			repository := &applicationRepositoryStub{}
+			runner := &serviceRuntimeRunner{configured: []compose.ConfiguredService{{Name: "web", Image: "nginx:1.27"}}}
+			applications, err := NewApplications(repository, root, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			createdApplication, err := applications.Create(t.Context(), "Status", "status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(root, applicationsDir, "status")
+			composePath := filepath.Join(directory, "compose.yml")
+			varsPath := filepath.Join(directory, varsEnvFile)
+			secretsPath := filepath.Join(directory, secretsEnvFile)
+			before := map[string]string{
+				composePath: readServiceFile(t, composePath),
+				varsPath:    readServiceFile(t, varsPath),
+				secretsPath: readServiceFile(t, secretsPath),
+			}
+
+			_, err = applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, []byte(testCase.contents))
+			if !errors.Is(err, application.ErrComposeFileInvalid) {
+				t.Fatalf("ImportDockerComposeProject() error = %v, want %v", err, application.ErrComposeFileInvalid)
+			}
+			if runner.configCalls != 0 {
+				t.Fatalf("ConfigServices() calls = %d, want 0 for rejected policy", runner.configCalls)
+			}
+			if len(repository.services) != 0 {
+				t.Fatalf("persisted services = %#v, want none", repository.services)
+			}
+			for path, want := range before {
+				if got := readServiceFile(t, path); got != want {
+					t.Fatalf("%s after rejected import = %q, want %q", filepath.Base(path), got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestApplicationsImportDockerComposeProjectRejectsMappingAliasWithoutChanges(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
@@ -1518,6 +1574,65 @@ func TestApplicationsUpdateEnvironmentSecretPreservesFileStructure(t *testing.T)
 	}
 	if got := readServiceFile(t, varsPath); got != vars {
 		t.Fatalf("vars.env after secret update = %q, want unchanged contents %q", got, vars)
+	}
+}
+
+func TestApplicationsUpdateEnvironmentSecretCanRenameWithoutReplacingValue(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	original := "export API_TOKEN='old value #1' # keep\n"
+	if err := os.WriteFile(secretsPath, []byte(original), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, varsEnvFile), nil, envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateEnvironmentSecretValue(t.Context(), 7, "API_TOKEN", "API_KEY", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, secretsPath); got != "export API_KEY='old value #1' # keep\n" {
+		t.Fatalf("renamed secrets.env = %q, want original value token preserved", got)
+	}
+}
+
+func TestApplicationsUpdateEnvironmentSecretCanClearValueExplicitly(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	if err := os.WriteFile(secretsPath, []byte("API_TOKEN=old\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, varsEnvFile), nil, envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateEnvironmentSecretValue(t.Context(), 7, "API_TOKEN", "API_TOKEN", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, secretsPath); got != "API_TOKEN=\"\"\n" {
+		t.Fatalf("cleared secrets.env = %q, want explicit empty value", got)
 	}
 }
 

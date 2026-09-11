@@ -74,6 +74,9 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 	if err != nil {
 		return nil, err
 	}
+	if err := validateImportedComposePolicy(string(contents), directory); err != nil {
+		return nil, err
+	}
 	composePath, err := findApplicationComposeFile(directory)
 	if err != nil {
 		return nil, fmt.Errorf("find application Compose file: %w", err)

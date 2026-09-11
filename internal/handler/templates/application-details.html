@@ -635,7 +635,7 @@
     <header class="application-dialog-header">
       <div>
         <h2 id="secret-edit-dialog-title" data-secret-edit-title>{{with .ApplicationDetailsPage.SecretEdit}}{{if .Add}}Add{{else}}Edit{{end}}{{else}}Edit{{end}} secret</h2>
-        <p id="secret-edit-dialog-description">Set the secret name and enter a replacement value in <code>secrets.env</code>.</p>
+        <p id="secret-edit-dialog-description">Set the secret name. Leave the value blank to keep the existing value, or choose clear to remove it.</p>
       </div>
       <button class="icon-button" type="button" data-secret-edit-close aria-label="Close edit secret dialog">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -661,7 +661,7 @@
         <label for="secret-edit-value">Secret value</label>
         <div class="secret-input-row">
           <div class="secret-input-wrap">
-            <input id="secret-edit-value" name="value" type="password" value="{{with .ApplicationDetailsPage.SecretEdit}}{{.Value}}{{end}}" autocomplete="new-password" spellcheck="false">
+            <input id="secret-edit-value" name="value" type="password" value="" autocomplete="new-password" spellcheck="false">
             <button class="secret-visibility-toggle" type="button" data-secret-toggle aria-controls="secret-edit-value" aria-label="Show secret" aria-pressed="false">
               <svg data-secret-show-icon aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2.06 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.88 0"></path>
@@ -684,6 +684,10 @@
             <span>Generate secret</span>
           </button>
         </div>
+        <label class="checkbox-field" data-secret-clear-wrap>
+          <input type="checkbox" name="clear_value" value="on" data-secret-clear{{with .ApplicationDetailsPage.SecretEdit}}{{if .ClearValue}} checked{{end}}{{end}}>
+          <span>Clear the existing value</span>
+        </label>
         <span class="field-help">Existing values are never loaded into this form. Generate secret creates a secure random replacement.</span>
       </div>
       <footer class="application-form-actions">
@@ -855,7 +859,7 @@
               <th scope="row"><code>{{.Key}}</code></th>
               <td>
                 {{if $.MaskValues}}
-                <span class="service-environment-masked" aria-label="Secret value masked">••••••••</span>
+                <span class="service-environment-masked" aria-label="Secret value masked">{{if .HasValue}}••••••••{{else}}(empty){{end}}</span>
                 {{else}}
                 <code class="service-environment-value">{{if .Value}}{{.Value}}{{else}}(empty){{end}}</code>
                 {{end}}

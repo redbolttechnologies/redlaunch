@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	AccessModeSSHOnly      = "ssh-only"
+	AccessModeManagedHTTPS = "managed-https"
+)
+
 // Config contains the application runtime configuration.
 type Config struct {
 	HTTPAddr             string
@@ -24,6 +29,7 @@ type Config struct {
 	GoogleRedirectURL    string
 	AuthSessionSecret    string
 	AuthCookieSecure     bool
+	ManagementAccessMode string
 }
 
 // Load reads configuration from the process environment and an optional dotenv
@@ -36,7 +42,7 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:             valueOrDefault(environment, "HTTP_ADDR", ":8080"),
+		HTTPAddr:             valueOrDefault(environment, "HTTP_ADDR", "127.0.0.1:8080"),
 		DatabasePath:         valueOrDefault(environment, "DB_PATH", "./data/redlaunch.db"),
 		ProjectsRoot:         valueOrDefault(environment, "PROJECTS_ROOT", "./projects"),
 		BackupRoot:           valueOrDefault(environment, "BACKUP_ROOT", "/var/backups/redlaunch"),
@@ -49,6 +55,7 @@ func Load() (Config, error) {
 		GoogleClientSecret:   valueOrDefault(environment, "GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:    strings.TrimSpace(valueOrDefault(environment, "GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/google/callback")),
 		AuthSessionSecret:    valueOrDefault(environment, "AUTH_SESSION_SECRET", ""),
+		ManagementAccessMode: strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "MANAGEMENT_ACCESS_MODE", AccessModeSSHOnly))),
 	}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
@@ -77,6 +84,9 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.BackupDockerBinary) == "" {
 		return Config{}, errors.New("BACKUP_DOCKER_BINARY must not be empty")
+	}
+	if cfg.ManagementAccessMode != AccessModeSSHOnly && cfg.ManagementAccessMode != AccessModeManagedHTTPS {
+		return Config{}, errors.New("MANAGEMENT_ACCESS_MODE must be ssh-only or managed-https")
 	}
 	authConfigured := cfg.GoogleClientID != "" || strings.TrimSpace(cfg.GoogleClientSecret) != ""
 	if authConfigured {

@@ -87,7 +87,7 @@ func TestSetupWritesAndStartsSelectedCoreServices(t *testing.T) {
 		}
 	}
 
-	proxyComposePath := filepath.Join(root, coreDir, proxyDir, "compose.yaml")
+	proxyComposePath := filepath.Join(root, coreDir, proxyDir, "compose.yml")
 	proxyCompose := readTestFile(t, proxyComposePath)
 	for _, expected := range []string{
 		"image: caddy:2.11.4-alpine",
@@ -124,7 +124,7 @@ func TestSetupWritesAndStartsSelectedCoreServices(t *testing.T) {
 		t.Fatalf("proxy Caddyfile permissions = %o, want %o", got, 0o644)
 	}
 
-	registryComposePath := filepath.Join(root, coreDir, registryDir, "compose.yaml")
+	registryComposePath := filepath.Join(root, coreDir, registryDir, "compose.yml")
 	registryCompose := readTestFile(t, registryComposePath)
 	for _, expected := range []string{
 		"image: registry:3.1.1",
@@ -208,7 +208,7 @@ func TestEnsureRegistryInstallsWithoutCompletingFirstRunSetup(t *testing.T) {
 			t.Errorf("registry directory = %q, want %q", directory, wantDirectory)
 		}
 	}
-	for _, name := range []string{"compose.yaml", varsEnvFile, secretsEnvFile} {
+	for _, name := range []string{"compose.yml", varsEnvFile, secretsEnvFile} {
 		if _, err := os.Stat(filepath.Join(wantDirectory, name)); err != nil {
 			t.Errorf("registry file %s: %v", name, err)
 		}

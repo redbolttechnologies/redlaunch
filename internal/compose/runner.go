@@ -21,21 +21,37 @@ import (
 const maxCommandOutput = 8 * 1024
 
 var managerEnvironmentKeys = map[string]struct{}{
-	"AUTH_COOKIE_SECURE":    {},
-	"AUTH_SESSION_SECRET":   {},
-	"BACKUP_CONTAINER_NAME": {},
-	"BACKUP_DOCKER_BINARY":  {},
-	"BACKUP_ROOT":           {},
-	"DB_PATH":               {},
-	"DOTENV_FILE":           {},
-	"GOOGLE_CLIENT_ID":      {},
-	"GOOGLE_CLIENT_SECRET":  {},
-	"GOOGLE_REDIRECT_URL":   {},
-	"HTTP_ADDR":             {},
-	"PROJECTS_ROOT":         {},
-	"SYSTEMD_BINARY":        {},
-	"SYSTEMD_SCOPE":         {},
-	"SYSTEMD_UNIT_DIR":      {},
+	"AUTH_COOKIE_SECURE":     {},
+	"AUTH_SESSION_SECRET":    {},
+	"BACKUP_CONTAINER_NAME":  {},
+	"BACKUP_DOCKER_BINARY":   {},
+	"BACKUP_ROOT":            {},
+	"DB_PATH":                {},
+	"DOTENV_FILE":            {},
+	"GOOGLE_CLIENT_ID":       {},
+	"GOOGLE_CLIENT_SECRET":   {},
+	"GOOGLE_REDIRECT_URL":    {},
+	"HTTP_ADDR":              {},
+	"APP_BIND_ADDRESS":       {},
+	"APP_PORT":               {},
+	"MANAGEMENT_ACCESS_MODE": {},
+	"PROJECTS_ROOT":          {},
+	"SYSTEMD_BINARY":         {},
+	"SYSTEMD_SCOPE":          {},
+	"SYSTEMD_UNIT_DIR":       {},
+}
+
+var composeHostEnvironmentKeys = map[string]struct{}{
+	"DOCKER_API_VERSION": {},
+	"DOCKER_CERT_PATH":   {},
+	"DOCKER_CONFIG":      {},
+	"DOCKER_CONTEXT":     {},
+	"DOCKER_HOST":        {},
+	"DOCKER_TLS_VERIFY":  {},
+	"HOME":               {},
+	"PATH":               {},
+	"TMPDIR":             {},
+	"USER":               {},
 }
 
 // CommandRunner runs Docker Compose through the Docker CLI.
@@ -158,6 +174,9 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
+	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
+		return err
+	}
 	args := []string{"up", "-d"}
 	args = append(args, options...)
 	operation := "run compose project"
@@ -236,6 +255,9 @@ func (r CommandRunner) Down(ctx context.Context, projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
+	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
+		return err
+	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "down", "--volumes", "--remove-orphans")
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -257,6 +279,9 @@ func (r CommandRunner) runServiceCommandWithOptions(ctx context.Context, project
 	composeFile, err := findComposeFile(projectDir)
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
+	}
+	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
+		return err
 	}
 	args := []string{action}
 	args = append(args, options...)
@@ -678,11 +703,11 @@ func findComposeFile(projectDir string) (string, error) {
 // scopes otherwise identical application trees installed on the same host,
 // while the resource kind keeps core and application directories distinct.
 func composeCommand(ctx context.Context, binary, projectDir, composeFile string, args ...string) *exec.Cmd {
-	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir), "-f", composeFile}
+	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", composeFile}
 	composeArgs = append(composeArgs, args...)
 	command := exec.CommandContext(ctx, binary, composeArgs...)
 	command.Dir = projectDir
-	command.Env = composeProcessEnvironment(os.Environ())
+	command.Env = composeProcessEnvironment(os.Environ(), composeInterpolationVariables(projectDir, composeFile))
 	return command
 }
 
@@ -736,7 +761,7 @@ func composeProjectSlug(value string) string {
 	return result
 }
 
-func composeProcessEnvironment(environment []string) []string {
+func composeProcessEnvironment(environment []string, interpolationKeys map[string]struct{}) []string {
 	filtered := make([]string, 0, len(environment))
 	for _, entry := range environment {
 		key, _, ok := strings.Cut(entry, "=")
@@ -746,7 +771,160 @@ func composeProcessEnvironment(environment []string) []string {
 		if _, managerOnly := managerEnvironmentKeys[key]; managerOnly {
 			continue
 		}
+		if _, hostSetting := composeHostEnvironmentKeys[key]; !hostSetting {
+			if _, approvedInterpolation := interpolationKeys[key]; !approvedInterpolation {
+				continue
+			}
+		}
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+func composeInterpolationVariables(projectDir, composeFile string) map[string]struct{} {
+	contents, err := os.ReadFile(filepath.Join(projectDir, composeFile))
+	if err != nil {
+		return nil
+	}
+	variables := make(map[string]struct{})
+	for index := 0; index < len(contents); index++ {
+		if contents[index] != '$' || index+1 >= len(contents) {
+			continue
+		}
+		if contents[index+1] == '$' {
+			index++
+			continue
+		}
+		start := index + 1
+		if contents[start] == '{' {
+			nameStart := start + 1
+			closingOffset := bytes.IndexByte(contents[nameStart:], '}')
+			if closingOffset < 0 {
+				break
+			}
+			end := nameStart + closingOffset
+			name := string(contents[nameStart:end])
+			if separator := strings.IndexAny(name, ":?+-="); separator >= 0 {
+				name = name[:separator]
+			}
+			if validEnvironmentVariableName(name) {
+				variables[name] = struct{}{}
+			}
+			index = end
+			continue
+		}
+		end := start
+		for end < len(contents) && isEnvironmentVariableNameCharacter(contents[end], end == start) {
+			end++
+		}
+		if end > start {
+			name := string(contents[start:end])
+			if validEnvironmentVariableName(name) {
+				variables[name] = struct{}{}
+			}
+			index = end - 1
+		}
+	}
+	return variables
+}
+
+func validEnvironmentVariableName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_' || index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isEnvironmentVariableNameCharacter(character byte, first bool) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character == '_' || !first && character >= '0' && character <= '9'
+}
+
+func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir string) error {
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	projectName := composeProjectName(projectDir)
+	ps := exec.CommandContext(ctx, binary, "ps", "-a", "--filter", "label=com.docker.compose.project="+projectName, "--format", "{{.ID}}")
+	ps.Dir = projectDir
+	ps.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := ps.Output()
+	if err != nil {
+		return composeCommandError("verify Compose project ownership", err, nil)
+	}
+	ids := strings.Fields(string(output))
+	if len(ids) > 0 {
+		args := []string{"inspect", "--format", "{{json .Config.Labels}}"}
+		args = append(args, ids...)
+		inspect := exec.CommandContext(ctx, binary, args...)
+		inspect.Dir = projectDir
+		inspect.Env = composeProcessEnvironment(os.Environ(), nil)
+		inspectOutput, err := inspect.Output()
+		if err != nil {
+			return composeCommandError("inspect Compose project ownership", err, nil)
+		}
+		inspected := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(inspectOutput)), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			inspected++
+			var labels map[string]string
+			if err := json.Unmarshal([]byte(line), &labels); err != nil {
+				return fmt.Errorf("verify Compose project ownership: decode Docker labels: %w", err)
+			}
+			if labels["redlaunch.managed"] != "true" || labels["com.docker.compose.project"] != projectName {
+				return fmt.Errorf("refusing to modify Compose project %q: existing container is not a Redlaunch-managed resource", projectName)
+			}
+		}
+		if inspected != len(ids) {
+			return fmt.Errorf("verify Compose project ownership: Docker returned labels for %d of %d containers", inspected, len(ids))
+		}
+	}
+
+	volumeList := exec.CommandContext(ctx, binary, "volume", "ls", "--filter", "label=com.docker.compose.project="+projectName, "--format", "{{.Name}}")
+	volumeList.Dir = projectDir
+	volumeList.Env = composeProcessEnvironment(os.Environ(), nil)
+	volumeOutput, err := volumeList.Output()
+	if err != nil {
+		return composeCommandError("verify Compose volume ownership", err, nil)
+	}
+	volumes := strings.Fields(string(volumeOutput))
+	if len(volumes) == 0 {
+		return nil
+	}
+
+	volumeInspectArgs := []string{"volume", "inspect", "--format", "{{json .Labels}}"}
+	volumeInspectArgs = append(volumeInspectArgs, volumes...)
+	volumeInspect := exec.CommandContext(ctx, binary, volumeInspectArgs...)
+	volumeInspect.Dir = projectDir
+	volumeInspect.Env = composeProcessEnvironment(os.Environ(), nil)
+	volumeInspectOutput, err := volumeInspect.Output()
+	if err != nil {
+		return composeCommandError("inspect Compose volume ownership", err, nil)
+	}
+	inspected := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(volumeInspectOutput)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		inspected++
+		var labels map[string]string
+		if err := json.Unmarshal([]byte(line), &labels); err != nil {
+			return fmt.Errorf("verify Compose volume ownership: decode Docker labels: %w", err)
+		}
+		if labels["com.docker.compose.project"] != projectName {
+			return fmt.Errorf("refusing to modify Compose project %q: existing volume does not belong to the expected project", projectName)
+		}
+	}
+	if inspected != len(volumes) {
+		return fmt.Errorf("verify Compose volume ownership: Docker returned labels for %d of %d volumes", inspected, len(volumes))
+	}
+	return nil
 }

@@ -126,13 +126,23 @@ The main configuration values are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HTTP_ADDR` | `:8080` | Address used by the HTTP server |
+| `HTTP_ADDR` | `127.0.0.1:8080` | Address used by the standalone HTTP server; the bundled Compose deployment listens on `0.0.0.0:8080` inside the container |
 | `DB_PATH` | `./data/redlaunch.db` | SQLite database path |
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
-| `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies with HTTPS |
+| `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies when TLS terminates in front of Redlaunch |
+| `MANAGEMENT_ACCESS_MODE` | `ssh-only` | `ssh-only` keeps the host listener private; `managed-https` requires a configured TLS proxy |
+| `APP_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the Docker deployment; use `0.0.0.0` only with managed HTTPS and firewalling |
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
+
+The default deployment is SSH-only: Docker binds port 8080 to loopback, so use
+an SSH tunnel. To publish the management UI through the bundled Caddy proxy,
+set `MANAGEMENT_ACCESS_MODE=managed-https` and `APP_BIND_ADDRESS=0.0.0.0`,
+configure the public hostname in Redlaunch, and restrict the host firewall to
+the intended HTTP/HTTPS entry points. Managed HTTPS forces secure session and
+CSRF cookies; SSH-only keeps the local HTTP callback usable through the SSH
+tunnel. Do not rely on arbitrary forwarded headers to select a mode.
 
 See [.env.example](.env.example) for the authentication settings. Environment
 variables override values loaded from `.env`.

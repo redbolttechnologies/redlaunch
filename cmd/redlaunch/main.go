@@ -142,13 +142,23 @@ func run(ctx context.Context) error {
 		ClientSecret:  cfg.GoogleClientSecret,
 		RedirectURL:   cfg.GoogleRedirectURL,
 		SessionSecret: cfg.AuthSessionSecret,
-		CookieSecure:  cfg.AuthCookieSecure,
+		CookieSecure:  cfg.AuthCookieSecure || cfg.ManagementAccessMode == config.AccessModeManagedHTTPS,
 	}, database)
 	if err != nil {
 		return fmt.Errorf("create Google authentication service: %w", err)
 	}
 
-	dependencies := []any{setupService, applications, backupManager, githubActions, metrics.New()}
+	dependencies := []any{
+		setupService,
+		applications,
+		backupManager,
+		githubActions,
+		metrics.New(),
+		handler.SecurityConfig{
+			AccessMode:   cfg.ManagementAccessMode,
+			CookieSecure: cfg.AuthCookieSecure,
+		},
+	}
 	dependencies = append(dependencies, googleAuth)
 	web, err := handler.New(logger, dependencies...)
 	if err != nil {

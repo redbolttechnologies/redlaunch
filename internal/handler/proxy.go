@@ -60,11 +60,7 @@ func (h *Handler) proxyAction(w http.ResponseWriter, r *http.Request, action str
 		http.Error(w, "The proxy action request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This proxy action page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -128,19 +124,8 @@ func (h *Handler) downloadProxyLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeProxyPage(w http.ResponseWriter, r *http.Request, status int, data proxyPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
+	csrfToken := h.setCSRFCookie(w, r)
 	data.CSRFToken = csrfToken
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
 	w.Header().Set("Cache-Control", "no-store")
 	page := h.shellPageData(r)
 	page.ActivePage = "proxy"

@@ -258,6 +258,74 @@ func updateEnvironmentFile(contents, originalName, name, value string) (string, 
 	return bom + updated, nil
 }
 
+func renameEnvironmentFile(contents, originalName, name string) (string, error) {
+	if originalName == name {
+		if _, _, err := findEnvironmentVariableToken(contents, originalName); err != nil {
+			return "", err
+		}
+		return contents, nil
+	}
+	lineEnding := "\n"
+	if strings.Contains(contents, "\r\n") {
+		lineEnding = "\r\n"
+		contents = strings.ReplaceAll(contents, "\r\n", "\n")
+	}
+	bom := ""
+	if strings.HasPrefix(contents, "\ufeff") {
+		bom = "\ufeff"
+		contents = strings.TrimPrefix(contents, "\ufeff")
+	}
+	trailingNewline := strings.HasSuffix(contents, "\n")
+	if trailingNewline {
+		contents = strings.TrimSuffix(contents, "\n")
+	}
+
+	lines := strings.Split(contents, "\n")
+	target := -1
+	for index, line := range lines {
+		key, _, ok := parseEnvironmentEntry(line)
+		if !ok {
+			continue
+		}
+		if key == name {
+			return "", application.ErrEnvironmentVariableAlreadyExists
+		}
+		if key == originalName {
+			if target >= 0 {
+				return "", application.ErrEnvironmentVariableDuplicate
+			}
+			target = index
+		}
+	}
+	if target < 0 {
+		return "", application.ErrEnvironmentVariableNotFound
+	}
+	lines[target] = renameEnvironmentEntry(lines[target], name)
+	updated := strings.Join(lines, "\n")
+	if trailingNewline {
+		updated += "\n"
+	}
+	if lineEnding != "\n" {
+		updated = strings.ReplaceAll(updated, "\n", lineEnding)
+	}
+	return bom + updated, nil
+}
+
+func renameEnvironmentEntry(line, name string) string {
+	leading := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+	trimmed := strings.TrimSpace(line)
+	export := ""
+	if strings.HasPrefix(trimmed, "export ") {
+		export = "export "
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "export "))
+	}
+	separator := strings.IndexByte(trimmed, '=')
+	if separator < 0 {
+		return line
+	}
+	return leading + export + name + "=" + trimmed[separator+1:]
+}
+
 func appendEnvironmentVariable(contents, name, value string) (string, error) {
 	return appendEnvironmentEntry(contents, name, formatEnvironmentValue(value))
 }

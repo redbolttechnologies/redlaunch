@@ -276,27 +276,8 @@ func (h *Handler) githubActionsPageData(r *http.Request, id int64) (githubAction
 	return data, nil
 }
 
-func (h *Handler) validRequestCSRF(r *http.Request) bool {
-	expected := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expected = cookie.Value
-	}
-	return validCSRFToken(r.Form.Get("csrf_token"), expected)
-}
-
 func (h *Handler) writeGitHubActionsPage(w http.ResponseWriter, r *http.Request, status int, data githubActionsPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
