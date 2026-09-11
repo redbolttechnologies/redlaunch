@@ -492,7 +492,7 @@ func (s *Store) GetDomain(ctx context.Context, applicationID, domainID int64) (a
 func (s *Store) ListRoutings(ctx context.Context, applicationID, domainID int64) ([]application.Routing, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.id, r.application_id, r.domain_id, d.name, r.subdomain,
-			r.path, r.service_name, r.service_path
+			r.path, r.service_name, r.service_port, r.service_path
 		FROM routings r
 		JOIN domains d ON d.id = r.domain_id AND d.application_id = r.application_id
 		WHERE r.application_id = ? AND r.domain_id = ?
@@ -510,7 +510,7 @@ func (s *Store) ListRoutings(ctx context.Context, applicationID, domainID int64)
 func (s *Store) ListAllRoutings(ctx context.Context) ([]application.Routing, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.id, r.application_id, r.domain_id, d.name, r.subdomain,
-			r.path, r.service_name, r.service_path
+			r.path, r.service_name, r.service_port, r.service_path
 		FROM routings r
 		JOIN domains d ON d.id = r.domain_id AND d.application_id = r.application_id
 		ORDER BY r.id ASC`)
@@ -527,11 +527,11 @@ func (s *Store) GetRouting(ctx context.Context, applicationID, domainID, routing
 	var item application.Routing
 	err := s.db.QueryRowContext(ctx, `
 		SELECT r.id, r.application_id, r.domain_id, d.name, r.subdomain,
-			r.path, r.service_name, r.service_path
+			r.path, r.service_name, r.service_port, r.service_path
 		FROM routings r
 		JOIN domains d ON d.id = r.domain_id AND d.application_id = r.application_id
 		WHERE r.application_id = ? AND r.domain_id = ? AND r.id = ?`, applicationID, domainID, routingID).
-		Scan(&item.ID, &item.ApplicationID, &item.DomainID, &item.DomainName, &item.Subdomain, &item.Path, &item.ServiceName, &item.ServicePath)
+		Scan(&item.ID, &item.ApplicationID, &item.DomainID, &item.DomainName, &item.Subdomain, &item.Path, &item.ServiceName, &item.ServicePort, &item.ServicePath)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.Routing{}, application.ErrRoutingNotFound
 	}
@@ -553,6 +553,7 @@ func scanRoutings(rows *sql.Rows) ([]application.Routing, error) {
 			&item.Subdomain,
 			&item.Path,
 			&item.ServiceName,
+			&item.ServicePort,
 			&item.ServicePath,
 		); err != nil {
 			return nil, fmt.Errorf("scan application routing: %w", err)
@@ -635,18 +636,7 @@ func (s *Store) CreateService(ctx context.Context, item application.Service) (ap
 	if item.Type == "" {
 		item.Type = "generic"
 	}
-	redisPersistToDisk := 0
-	if item.RedisPersistToDisk {
-		redisPersistToDisk = 1
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO services (
-			application_id, name, service_type, image_name, postgres_version,
-			database_name, database_user, redis_version, redis_port,
-			redis_persist_to_disk, created_at
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	result, err := s.db.ExecContext(ctx, serviceInsertSQL,
 		item.ApplicationID,
 		item.Name,
 		item.Type,
@@ -656,7 +646,7 @@ func (s *Store) CreateService(ctx context.Context, item application.Service) (ap
 		item.DatabaseUser,
 		item.RedisVersion,
 		item.RedisPort,
-		redisPersistToDisk,
+		redisPersistValue(item.RedisPersistToDisk),
 		item.CreatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -670,6 +660,72 @@ func (s *Store) CreateService(ctx context.Context, item application.Service) (ap
 		return application.Service{}, fmt.Errorf("read application service ID: %w", err)
 	}
 	return item, nil
+}
+
+const serviceInsertSQL = `
+		INSERT INTO services (
+			application_id, name, service_type, image_name, postgres_version,
+			database_name, database_user, redis_version, redis_port,
+			redis_persist_to_disk, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+func redisPersistValue(persist bool) int {
+	if persist {
+		return 1
+	}
+	return 0
+}
+
+// CreateServices persists a set of service records in one SQLite transaction.
+// Compose import uses this path so metadata cannot be partially registered.
+func (s *Store) CreateServices(ctx context.Context, items []application.Service) ([]application.Service, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin application service transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	created := make([]application.Service, 0, len(items))
+	for _, item := range items {
+		if item.CreatedAt.IsZero() {
+			item.CreatedAt = time.Now().UTC()
+		}
+		if item.Type == "" {
+			item.Type = "generic"
+		}
+		result, err := tx.ExecContext(ctx, serviceInsertSQL,
+			item.ApplicationID,
+			item.Name,
+			item.Type,
+			item.ImageName,
+			item.PostgresVersion,
+			item.DatabaseName,
+			item.DatabaseUser,
+			item.RedisVersion,
+			item.RedisPort,
+			redisPersistValue(item.RedisPersistToDisk),
+			item.CreatedAt.Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			if isUniqueConstraint(err) {
+				return nil, application.ErrServiceAlreadyExists
+			}
+			return nil, fmt.Errorf("create application service: %w", err)
+		}
+		item.ID, err = result.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("read application service ID: %w", err)
+		}
+		created = append(created, item)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit application service transaction: %w", err)
+	}
+	return created, nil
 }
 
 // DeleteService removes one service's metadata from an application.
@@ -728,8 +784,13 @@ func (s *Store) DeleteDomain(ctx context.Context, applicationID int64, domainNam
 
 // CreateRouting persists one mapping for an application's associated domain.
 func (s *Store) CreateRouting(ctx context.Context, item application.Routing) (application.Routing, error) {
+	servicePort, err := application.ValidateRoutingPort(item.ServicePort)
+	if err != nil {
+		return application.Routing{}, err
+	}
+	item.ServicePort = servicePort
 	var exists int
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		SELECT 1
 		FROM domains
 		WHERE application_id = ? AND id = ?`, item.ApplicationID, item.DomainID).Scan(&exists)
@@ -741,13 +802,14 @@ func (s *Store) CreateRouting(ctx context.Context, item application.Routing) (ap
 	}
 
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO routings (application_id, domain_id, subdomain, path, service_name, service_path)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		INSERT INTO routings (application_id, domain_id, subdomain, path, service_name, service_port, service_path)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		item.ApplicationID,
 		item.DomainID,
 		item.Subdomain,
 		item.Path,
 		item.ServiceName,
+		item.ServicePort,
 		item.ServicePath,
 	)
 	if err != nil {
@@ -765,13 +827,19 @@ func (s *Store) CreateRouting(ctx context.Context, item application.Routing) (ap
 
 // UpdateRouting changes one mapping scoped to its application and domain.
 func (s *Store) UpdateRouting(ctx context.Context, item application.Routing) error {
+	servicePort, err := application.ValidateRoutingPort(item.ServicePort)
+	if err != nil {
+		return err
+	}
+	item.ServicePort = servicePort
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE routings
-		SET subdomain = ?, path = ?, service_name = ?, service_path = ?
+		SET subdomain = ?, path = ?, service_name = ?, service_port = ?, service_path = ?
 		WHERE id = ? AND application_id = ? AND domain_id = ?`,
 		item.Subdomain,
 		item.Path,
 		item.ServiceName,
+		item.ServicePort,
 		item.ServicePath,
 		item.ID,
 		item.ApplicationID,
@@ -1126,6 +1194,25 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (11, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record GitHub Actions migration: %w", err)
+		}
+	}
+
+	var routingPortMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 12`).Scan(&routingPortMigrationApplied); err != nil {
+		return fmt.Errorf("check routing port migration: %w", err)
+	}
+	if routingPortMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			ALTER TABLE routings ADD COLUMN service_port INTEGER NOT NULL DEFAULT 80`); err != nil {
+			return fmt.Errorf("add routing service port column: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (12, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record routing port migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

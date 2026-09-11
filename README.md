@@ -100,6 +100,12 @@ projects/
 Each application has its own Compose file and environment files. Secret values
 are stored outside SQLite and are masked in the web interface.
 
+PostgreSQL and Redis services also load service-specific
+environment files (for example, `db.vars.env` and `db.secrets.env`) after the
+project-wide files. This keeps multiple database services from overwriting one
+another's credentials. Legacy projects with ambiguous shared database
+credentials are refused for operator review.
+
 Redlaunch stores its SQLite database in the external Docker volume
 `redlaunch_app-data`. The setup script creates this volume, and it is kept
 outside the Compose project lifecycle so rebuilding or recreating the
@@ -126,7 +132,7 @@ The main configuration values are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HTTP_ADDR` | `127.0.0.1:8080` | Address used by the standalone HTTP server; the bundled Compose deployment listens on `0.0.0.0:8080` inside the container |
+| `HTTP_ADDR` | `127.0.0.1:8080` | Address used by the standalone HTTP server; the bundled Compose deployment aligns its listener with `APP_PORT` |
 | `DB_PATH` | `./data/redlaunch.db` | SQLite database path |
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
@@ -137,7 +143,9 @@ The main configuration values are:
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
 
 The default deployment is SSH-only: Docker binds port 8080 to loopback, so use
-an SSH tunnel. To publish the management UI through the bundled Caddy proxy,
+an SSH tunnel. If `APP_PORT` is changed, the bundled container listener and
+managed Caddy endpoint follow that port. To publish the management UI through
+the bundled Caddy proxy,
 set `MANAGEMENT_ACCESS_MODE=managed-https` and `APP_BIND_ADDRESS=0.0.0.0`,
 configure the public hostname in Redlaunch, and restrict the host firewall to
 the intended HTTP/HTTPS entry points. Managed HTTPS forces secure session and

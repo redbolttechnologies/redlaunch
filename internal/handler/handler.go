@@ -4546,6 +4546,7 @@ type routingEditPageData struct {
 	Subdomain   string
 	Path        string
 	ServiceName string
+	ServicePort int
 	ServicePath string
 }
 

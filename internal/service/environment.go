@@ -8,6 +8,23 @@ import (
 	"redlaunch/internal/application"
 )
 
+// The managed editor supports one logical assignment per physical line. It
+// intentionally rejects multiline dotenv continuations; Compose files that
+// need them should be edited outside the Redlaunch environment editor.
+//
+// environmentEntry is the shared intermediate representation used by the
+// reader and writers. Value is the parsed value shown to operators, while
+// rawValue is the original Compose-compatible token (quotes, dollars, and
+// expressions intact). The line index is deliberately not exposed outside
+// this package; writers use it only to replace the selected source line.
+type environmentEntry struct {
+	key                 string
+	value               string
+	rawValue            string
+	rawValueWithComment string
+	line                int
+}
+
 func readEnvironmentFile(path string, sensitive bool) ([]application.EnvironmentVariable, bool, error) {
 	snapshot, err := snapshotManagedFile(path)
 	if err != nil {
@@ -20,24 +37,42 @@ func readEnvironmentFile(path string, sensitive bool) ([]application.Environment
 }
 
 func parseEnvironmentFile(contents string, sensitive bool) []application.EnvironmentVariable {
-	contents = strings.ReplaceAll(contents, "\r\n", "\n")
-	lines := strings.Split(contents, "\n")
-	variables := make([]application.EnvironmentVariable, 0, len(lines))
-	for index, line := range lines {
-		if index == 0 {
-			line = strings.TrimPrefix(line, "\ufeff")
-		}
-		key, value, ok := parseEnvironmentEntry(line)
-		if !ok {
-			continue
-		}
+	entries := parseEnvironmentEntries(contents)
+	variables := make([]application.EnvironmentVariable, 0, len(entries))
+	for _, entry := range entries {
 		variables = append(variables, application.EnvironmentVariable{
-			Key:       key,
-			Value:     value,
+			Key:       entry.key,
+			Value:     entry.value,
 			Sensitive: sensitive,
 		})
 	}
 	return variables
+}
+
+func parseEnvironmentEntries(contents string) []environmentEntry {
+	contents = strings.ReplaceAll(contents, "\r\n", "\n")
+	contents = strings.TrimPrefix(contents, "\ufeff")
+	lines := strings.Split(contents, "\n")
+	entries := make([]environmentEntry, 0, len(lines))
+	for index, line := range lines {
+		key, value, ok := parseEnvironmentEntry(line)
+		if !ok {
+			continue
+		}
+		rawValueWithComment := strings.TrimSpace(environmentEntryValue(line))
+		rawValue := rawValueWithComment
+		if comment := environmentCommentSuffix(rawValueWithComment); comment != "" {
+			rawValue = strings.TrimSuffix(rawValueWithComment, comment)
+		}
+		entries = append(entries, environmentEntry{
+			key:                 key,
+			value:               value,
+			rawValue:            strings.TrimSpace(rawValue),
+			rawValueWithComment: rawValueWithComment,
+			line:                index,
+		})
+	}
+	return entries
 }
 
 func parseEnvironmentEntry(line string) (string, string, bool) {
@@ -65,32 +100,29 @@ func findEnvironmentVariable(contents, name string) (string, error) {
 }
 
 func findEnvironmentVariableToken(contents, name string) (string, string, error) {
-	contents = strings.ReplaceAll(contents, "\r\n", "\n")
-	contents = strings.TrimPrefix(contents, "\ufeff")
+	entry, err := findEnvironmentEntry(contents, name)
+	if err != nil {
+		return "", "", err
+	}
+	return entry.value, entry.rawValue, nil
+}
 
-	var value string
-	var token string
-	found := false
-	for _, line := range strings.Split(contents, "\n") {
-		key, parsedValue, ok := parseEnvironmentEntry(line)
-		if !ok || key != name {
+func findEnvironmentEntry(contents, name string) (environmentEntry, error) {
+	var found *environmentEntry
+	for _, entry := range parseEnvironmentEntries(contents) {
+		if entry.key != name {
 			continue
 		}
-		if found {
-			return "", "", application.ErrEnvironmentVariableDuplicate
+		if found != nil {
+			return environmentEntry{}, application.ErrEnvironmentVariableDuplicate
 		}
-		found = true
-		value = parsedValue
-		rawValue := environmentEntryValue(line)
-		if comment := environmentCommentSuffix(rawValue); comment != "" {
-			rawValue = strings.TrimSuffix(rawValue, comment)
-		}
-		token = strings.TrimSpace(rawValue)
+		entryCopy := entry
+		found = &entryCopy
 	}
-	if !found {
-		return "", "", application.ErrEnvironmentVariableNotFound
+	if found == nil {
+		return environmentEntry{}, application.ErrEnvironmentVariableNotFound
 	}
-	return value, token, nil
+	return *found, nil
 }
 
 func validateEnvironmentFileContents(contents []byte) error {
@@ -208,6 +240,17 @@ func environmentQuoteEnd(value string, quote byte) int {
 }
 
 func updateEnvironmentFile(contents, originalName, name, value string) (string, error) {
+	return updateEnvironmentFileWithMode(contents, originalName, name, value, false)
+}
+
+// replaceEnvironmentFile performs an explicit literal replacement. Unlike a
+// no-op edit, it is allowed to change the raw token even when its parsed value
+// is equal (for example, replacing an interpolation with a literal string).
+func replaceEnvironmentFile(contents, originalName, name, value string) (string, error) {
+	return updateEnvironmentFileWithMode(contents, originalName, name, value, true)
+}
+
+func updateEnvironmentFileWithMode(contents, originalName, name, value string, replaceLiteral bool) (string, error) {
 	lineEnding := "\n"
 	if strings.Contains(contents, "\r\n") {
 		lineEnding = "\r\n"
@@ -245,8 +288,10 @@ func updateEnvironmentFile(contents, originalName, name, value string) (string, 
 		return "", application.ErrEnvironmentVariableNotFound
 	}
 
-	if originalName != name || currentValue != value {
+	if currentValue != value || replaceLiteral {
 		lines[target] = formatEnvironmentEntry(lines[target], name, value)
+	} else if originalName != name {
+		lines[target] = renameEnvironmentEntry(lines[target], name)
 	}
 	updated := strings.Join(lines, "\n")
 	if trailingNewline {

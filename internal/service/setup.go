@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	applicationsDir = "applications"
-	coreDir         = "core"
-	proxyDir        = "proxy"
-	registryDir     = "registry"
-	setupMarker     = ".setup-complete"
-	varsEnvFile     = "vars.env"
-	secretsEnvFile  = "secrets.env"
-	envFileMode     = 0o600
+	applicationsDir        = "applications"
+	coreDir                = "core"
+	proxyDir               = "proxy"
+	registryDir            = "registry"
+	applicationNetworkName = "redlaunch-common"
+	setupMarker            = ".setup-complete"
+	varsEnvFile            = "vars.env"
+	secretsEnvFile         = "secrets.env"
+	envFileMode            = 0o600
 
 	proxyCompose = `services:
   proxy:
@@ -48,8 +49,8 @@ const (
 
 networks:
   redlaunch-common:
+    external: true
     name: redlaunch-common
-    driver: bridge
 
 volumes:
   caddy_data:
@@ -96,6 +97,10 @@ type SetupService struct {
 
 type composeRunner interface {
 	Up(ctx context.Context, projectDir string) error
+}
+
+type composeNetworkEnsurer interface {
+	EnsureNetwork(context.Context, string) error
 }
 
 // NewSetupService constructs a setup service for the configured projects root.
@@ -164,6 +169,11 @@ func (s *SetupService) EnsureRegistry(ctx context.Context) error {
 	if err := s.initializeLocked(); err != nil {
 		return err
 	}
+	if networkEnsurer, ok := s.runner.(composeNetworkEnsurer); ok {
+		if err := networkEnsurer.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+			return fmt.Errorf("ensure application network: %w", err)
+		}
+	}
 	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
 	for _, name := range []string{"compose.yml", "compose.yaml"} {
 		composePath := filepath.Join(directory, name)
@@ -188,6 +198,11 @@ func (s *SetupService) SetupWithProgress(ctx context.Context, installProxy, inst
 	reportSetupProgress(progress, "directories", "Creating managed application and core directories")
 	if err := s.initializeLocked(); err != nil {
 		return err
+	}
+	if networkEnsurer, ok := s.runner.(composeNetworkEnsurer); ok {
+		if err := networkEnsurer.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+			return fmt.Errorf("ensure application network: %w", err)
+		}
 	}
 
 	if installProxy {

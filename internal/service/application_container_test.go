@@ -108,6 +108,36 @@ func TestApplicationsCreateApplicationServiceDoesNotStartWhenAutoStartIsDisabled
 	}
 }
 
+func TestApplicationsCreateApplicationServiceRestoresFilesWhenStagedComposeValidationFails(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{configErr: errors.New("invalid staged Compose")}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	composePath := filepath.Join(directory, "compose.yml")
+	originalCompose := readServiceFile(t, composePath)
+
+	if _, err := applications.CreateApplicationService(t.Context(), created.ID, application.ApplicationServiceInput{ServiceName: "web"}); err == nil {
+		t.Fatal("CreateApplicationService() error = nil, want staged validation failure")
+	}
+	if got := readServiceFile(t, composePath); got != originalCompose {
+		t.Fatalf("Compose after staged validation failure = %q, want original", got)
+	}
+	if len(repository.services) != 0 {
+		t.Fatalf("services after staged validation failure = %#v, want none", repository.services)
+	}
+	if len(runner.actions) != 0 {
+		t.Fatalf("Docker actions after staged validation failure = %v, want none", runner.actions)
+	}
+}
+
 func TestApplicationsCreateApplicationServiceRestoresFilesWhenMetadataPersistenceFails(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}

@@ -12,7 +12,9 @@ import (
 type recordingRunner struct {
 	directories []string
 	services    []string
+	networks    []string
 	err         error
+	networkErr  error
 }
 
 func (r *recordingRunner) Up(_ context.Context, projectDir string) error {
@@ -24,6 +26,11 @@ func (r *recordingRunner) UpService(_ context.Context, projectDir, serviceName s
 	r.directories = append(r.directories, projectDir)
 	r.services = append(r.services, serviceName)
 	return r.err
+}
+
+func (r *recordingRunner) EnsureNetwork(_ context.Context, networkName string) error {
+	r.networks = append(r.networks, networkName)
+	return r.networkErr
 }
 
 func TestInitializeCreatesManagedDirectoriesWithExpectedPermissions(t *testing.T) {
@@ -176,12 +183,43 @@ func TestSetupCanCompleteWithoutOptionalServices(t *testing.T) {
 	if len(runner.directories) != 0 {
 		t.Fatalf("Compose projects started = %v, want none", runner.directories)
 	}
+	if len(runner.networks) != 1 {
+		t.Fatalf("application network ensures = %v, want one", runner.networks)
+	}
 	needsSetup, err := setup.NeedsSetup()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if needsSetup {
 		t.Fatal("NeedsSetup() = true after completing without services, want false")
+	}
+}
+
+func TestSetupEnsuresApplicationNetworkForEveryFirstRunChoice(t *testing.T) {
+	for _, testCase := range []struct {
+		name            string
+		installProxy    bool
+		installRegistry bool
+	}{
+		{name: "neither", installProxy: false, installRegistry: false},
+		{name: "proxy only", installProxy: true, installRegistry: false},
+		{name: "registry only", installProxy: false, installRegistry: true},
+		{name: "both", installProxy: true, installRegistry: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "projects")
+			runner := &recordingRunner{}
+			setup, err := NewSetupService(root, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := setup.Setup(t.Context(), testCase.installProxy, testCase.installRegistry); err != nil {
+				t.Fatal(err)
+			}
+			if len(runner.networks) != 1 || runner.networks[0] != applicationNetworkName {
+				t.Fatalf("application network ensures = %v, want [%s]", runner.networks, applicationNetworkName)
+			}
+		})
 	}
 }
 

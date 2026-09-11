@@ -36,10 +36,13 @@ services:
       AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET:-}"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
       MANAGEMENT_ACCESS_MODE: "${MANAGEMENT_ACCESS_MODE:-ssh-only}"
-      HTTP_ADDR: "0.0.0.0:8080"
+      # Keep the container listener aligned with the host port so managed
+      # Caddy routing through host.docker.internal works when APP_PORT is
+      # changed from the default.
+      HTTP_ADDR: "0.0.0.0:${APP_PORT:-8080}"
       DOCKER_CONFIG: "/tmp/docker"
     ports:
-      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:${APP_PORT:-8080}"
     volumes:
       - app-data:/data
       - "${PROJECTS_ROOT:-${PWD}/projects}:${PROJECTS_ROOT:-${PWD}/projects}"

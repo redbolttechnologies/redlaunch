@@ -56,15 +56,18 @@ func (s *Applications) CreateRedisServiceWithProgress(ctx context.Context, appli
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.rejectExistingDatabaseServiceType(ctx, applicationID, application.ServiceTypeRedis); err != nil {
-		return application.Service{}, err
-	}
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return application.Service{}, err
 	}
-	composePath := filepath.Join(directory, "compose.yml")
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return application.Service{}, errors.New("application Compose file does not exist")
+	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
 	composeSnapshot, err := snapshotManagedFile(composePath)
@@ -87,16 +90,30 @@ func (s *Applications) CreateRedisServiceWithProgress(ctx context.Context, appli
 	containerName := managedContainerNamePrefix + strconv.FormatInt(item.ID, 10) + "-" + serviceName
 	volumeName := managedContainerNamePrefix + strconv.FormatInt(item.ID, 10) + "-" + serviceName + "-data"
 	reportRedisProgress(progress, "files", "Writing the Redis Compose and environment files")
-	composeContents, err := addRedisService(string(composeSnapshot.contents), serviceName, redisVersion, port, password != "", input.PersistToDisk, containerName, volumeKey, volumeName)
+	sameTypeServices, err := s.listDatabaseServices(ctx, applicationID, application.ServiceTypeRedis)
+	if err != nil {
+		return application.Service{}, err
+	}
+	varsFile, secretsFile := scopedEnvironmentFileNames(serviceName)
+	scopedFiles, effectivePassword, err := prepareRedisScopedFiles(directory, serviceName, password)
+	if err != nil {
+		return application.Service{}, err
+	}
+	password = effectivePassword
+	composeContents, err := addRedisService(string(composeSnapshot.contents), serviceName, redisVersion, port, password != "", input.PersistToDisk, containerName, volumeKey, volumeName, varsFile, secretsFile)
 	if err != nil {
 		return application.Service{}, fmt.Errorf("add Redis service to Compose file: %w", err)
 	}
-	varsContents := string(varsSnapshot.contents)
-	secretsValues := make(map[string]string)
-	if password != "" {
-		secretsValues[redisEnvironmentPassword] = password
+	composeContents, legacyFiles, err := prepareLegacyDatabaseEnvironment(composeContents, directory, sameTypeServices, application.ServiceTypeRedis, string(varsSnapshot.contents), string(secretsSnapshot.contents))
+	if err != nil {
+		return application.Service{}, err
 	}
-	secretsContents := upsertEnvironmentWithKeys(string(secretsSnapshot.contents), secretsValues, []string{redisEnvironmentPassword})
+	scopedFiles = append(scopedFiles, legacyFiles...)
+	varsContents := string(varsSnapshot.contents)
+	secretsContents := string(secretsSnapshot.contents)
+	if len(sameTypeServices) == 0 && password != "" {
+		secretsContents = upsertEnvironmentWithKeys(secretsContents, map[string]string{redisEnvironmentPassword: password}, []string{redisEnvironmentPassword})
+	}
 
 	if err := writeManagedFile(composePath, composeContents, 0o644); err != nil {
 		return application.Service{}, fmt.Errorf("write application Compose file: %w", err)
@@ -110,6 +127,12 @@ func (s *Applications) CreateRedisServiceWithProgress(ctx context.Context, appli
 		_ = restoreManagedFile(varsSnapshot)
 		_ = restoreManagedFile(secretsSnapshot)
 		return application.Service{}, fmt.Errorf("write application secrets file: %w", err)
+	}
+	if err := writeScopedEnvironmentFiles(scopedFiles); err != nil {
+		return application.Service{}, errors.Join(fmt.Errorf("write Redis scoped environment files: %w", err), restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot), restoreScopedEnvironmentFiles(scopedFiles))
+	}
+	if err := s.validateStagedCompose(ctx, directory); err != nil {
+		return application.Service{}, errors.Join(err, restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot), restoreScopedEnvironmentFiles(scopedFiles))
 	}
 
 	reportRedisProgress(progress, "metadata", "Saving Redis service metadata")
@@ -127,8 +150,9 @@ func (s *Applications) CreateRedisServiceWithProgress(ctx context.Context, appli
 		composeRestoreErr := restoreManagedFile(composeSnapshot)
 		varsRestoreErr := restoreManagedFile(varsSnapshot)
 		secretsRestoreErr := restoreManagedFile(secretsSnapshot)
-		if composeRestoreErr != nil || varsRestoreErr != nil || secretsRestoreErr != nil {
-			return application.Service{}, fmt.Errorf("persist Redis service metadata: %w (restore files: compose=%v, vars=%v, secrets=%v)", err, composeRestoreErr, varsRestoreErr, secretsRestoreErr)
+		scopedRestoreErr := restoreScopedEnvironmentFiles(scopedFiles)
+		if composeRestoreErr != nil || varsRestoreErr != nil || secretsRestoreErr != nil || scopedRestoreErr != nil {
+			return application.Service{}, fmt.Errorf("persist Redis service metadata: %w (restore files: compose=%v, vars=%v, secrets=%v, scoped=%v)", err, composeRestoreErr, varsRestoreErr, secretsRestoreErr, scopedRestoreErr)
 		}
 		return application.Service{}, fmt.Errorf("persist Redis service metadata: %w", err)
 	}
@@ -168,7 +192,7 @@ func validateRedisServiceInput(input application.RedisServiceInput) (string, str
 	return serviceName, redisVersion, port, password, nil
 }
 
-func addRedisService(contents, serviceName, version, port string, passwordConfigured, persistToDisk bool, containerName, volumeKey, volumeName string) (string, error) {
+func addRedisService(contents, serviceName, version, port string, passwordConfigured, persistToDisk bool, containerName, volumeKey, volumeName, scopedVarsFile, scopedSecretsFile string) (string, error) {
 	lines := strings.Split(contents, "\n")
 	servicesIndex, servicesValue, ok := findTopLevelYAMLKey(lines, "services")
 	if !ok {
@@ -187,6 +211,8 @@ func addRedisService(contents, serviceName, version, port string, passwordConfig
 		"    env_file:",
 		"      - vars.env",
 		"      - secrets.env",
+		"      - " + scopedVarsFile,
+		"      - " + scopedSecretsFile,
 		"    healthcheck:",
 		"      test: [\"CMD-SHELL\", \"if [ -n \\\"$$REDIS_PASSWORD\\\" ]; then REDISCLI_AUTH=\\\"$$REDIS_PASSWORD\\\" redis-cli --no-auth-warning ping; else redis-cli ping; fi\"]",
 		"      interval: 10s",

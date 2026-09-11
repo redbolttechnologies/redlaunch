@@ -287,6 +287,12 @@ After the first login, Redlaunch shows **Set up your server**:
   images are already available from another registry.
 - Click **Complete setup** and wait for the progress dialog to finish.
 
+Redlaunch creates and labels the shared <code>redlaunch-common</code> Docker
+network independently of the optional services. This happens when Caddy, the
+registry, both, or neither is selected, so applications created after setup
+can use the same network. An existing network with that name is used only when
+it has the Redlaunch management labels; an unrelated network is refused.
+
 The selected core services are stored under the configured projects root in
 <code>core/proxy</code> and <code>core/registry</code>. The GitHub Actions wizard
 later adds <code>core/github-actions-tunnel</code> when you configure a
@@ -334,8 +340,10 @@ publicly (https)**, and save. Use only a hostname such as
 
 Redlaunch stores this installation-wide setting in SQLite, adds the hostname
 to the managed Caddyfile, routes it through Docker's host gateway to the
-Redlaunch listener on port 8080, and reloads Caddy. The same setting is shown
-from every application's Settings tab.
+configured Redlaunch listener port, and reloads Caddy. The default listener is
+<code>0.0.0.0:8080</code>; if <code>HTTP_ADDR</code> uses another port, Caddy
+uses that port instead. The same setting is shown from every application's
+Settings tab.
 Point the hostname's DNS record to the VPS before enabling it.
 
 Google authentication automatically uses
@@ -354,13 +362,17 @@ type from the menu:
 - **PostgreSQL database**: enter a service name, PostgreSQL image version,
   database name, and database user. Enter a password or leave it blank to have
   Redlaunch generate one. The database starts immediately and includes a
-  production-ready <code>pg_isready</code> healthcheck; its password is stored
-  in <code>secrets.env</code>.
+  production-ready <code>pg_isready</code> healthcheck. The service loads the
+  project <code>vars.env</code>/<code>secrets.env</code> files plus its own
+  <code>&lt;service&gt;.vars.env</code> and
+  <code>&lt;service&gt;.secrets.env</code> files, so multiple PostgreSQL services
+  retain separate credentials.
 - **Redis cache**: enter a service name, Redis image version, and host port.
   Password authentication is optional. Enable **Persist to disk** when the
   cache should use append-only logging and snapshots. Redis is published on
   loopback by default, includes a production-ready <code>redis-cli</code>
-  healthcheck, and starts immediately.
+  healthcheck, and starts immediately. Password-protected Redis services use
+  the same service-specific environment-file convention.
 - **Application**: enter the Compose service name and Docker image reference.
   **Automatically start container** is off by default, which is useful when
   the image is not available yet. Turn it on when the image can be pulled
@@ -370,6 +382,20 @@ Useful defaults are <code>db</code>/PostgreSQL 17, <code>redis</code>/Redis 7 on
 port 6379, and <code>app</code> for a custom application container. All managed
 services load both <code>vars.env</code> and <code>secrets.env</code>; keep
 non-secret configuration in the former and credentials in the latter.
+
+The managed environment editor supports one assignment per physical line and
+preserves comments, CRLF/BOM markers, quotes, dollar escapes, and interpolation
+tokens when a value is only renamed or moved. Multiline dotenv continuations
+are intentionally unsupported by the editor; edit those files outside
+Redlaunch and re-import them if needed. A replacement or explicit clear is a
+separate operation and may intentionally write a new literal token.
+
+When an older generated project has database services that use only the shared
+environment files, the first later database change migrates each unambiguous
+legacy service to its own files without changing its mounted volume. If more
+than one legacy service of the same database type still shares those files, or
+one of its scoped files is missing, Redlaunch stops with an ambiguity error for
+operator resolution; it does not guess or rotate credentials.
 
 To bring in an existing Compose project, open an application that has no
 registered services and choose **Import Docker Compose project...**. Upload its
@@ -396,6 +422,13 @@ application interpolation variables, while Redlaunch session, OAuth, database,
 and listener settings are filtered out. Policy errors identify the rejected
 Compose line and leave the existing files and SQLite service metadata
 unchanged.
+
+Compose anchors, aliases, merge keys, and unsupported inline structures are
+rejected where Redlaunch must edit the structure; supported inline
+<code>env_file</code>/<code>labels</code> forms are normalized while preserving
+their entries. Final Compose validation runs after Redlaunch adds managed
+container names, labels, and required environment files. A failed validation
+leaves the original files and metadata unchanged.
 
 To import application configuration, choose **Import variables...** on the
 Variables tab or **Import secrets...** on the Secrets tab. Upload a dotenv file
@@ -434,7 +467,10 @@ the public hostname.
 4. Enter the incoming **Request path**, normally <code>/</code> or
    <code>/api</code>.
 5. Select an existing application **Service** by its Compose service name.
-6. Enter the **Service path**, normally <code>/</code>, then click **Save**.
+6. Enter the **Service port**, the port the service listens on inside its
+   container (usually <code>80</code>, or <code>3000</code>/<code>8080</code> for
+   common application servers).
+7. Enter the **Service path**, normally <code>/</code>, then click **Save**.
 
 For example, this route sends all requests for <code>api.example.com</code> to
 the application's <code>api</code> service and rewrites the request path to
@@ -446,6 +482,7 @@ the application's <code>api</code> service and rewrites the request path to
 | Subdomain | <code>api</code> |
 | Request path | <code>/</code> |
 | Service | <code>api</code> |
+| Service port | <code>3000</code> |
 | Service path | <code>/</code> |
 
 Redlaunch saves the routing in SQLite, regenerates the managed Caddyfile, and
@@ -524,7 +561,7 @@ sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
   'SELECT a.id, a.folder_name, s.id AS service_id, s.name AS service_name, s.service_type FROM applications a LEFT JOIN services s ON s.application_id = a.id ORDER BY a.id, s.id' \
   > "$backup_dir/application-services.tsv"
 sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
-  'SELECT application_id, domain_id, subdomain, path, service_name, service_path FROM routings ORDER BY application_id, domain_id, id' \
+  'SELECT application_id, domain_id, subdomain, path, service_name, service_port, service_path FROM routings ORDER BY application_id, domain_id, id' \
   > "$backup_dir/routings.tsv"
 sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
   'SELECT service_id, enabled, schedule_type, hour, minute, weekday, retention_days, backup_location FROM backup_schedules ORDER BY service_id' \

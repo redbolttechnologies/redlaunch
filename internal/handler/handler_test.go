@@ -421,7 +421,7 @@ func (s *fakeApplicationService) CreateRouting(_ context.Context, applicationID,
 	if s.routingCreateErr != nil {
 		return application.Routing{}, s.routingCreateErr
 	}
-	return application.Routing{ApplicationID: applicationID, DomainID: domainID, Subdomain: input.Subdomain, Path: input.Path, ServiceName: input.ServiceName, ServicePath: input.ServicePath}, nil
+	return application.Routing{ApplicationID: applicationID, DomainID: domainID, Subdomain: input.Subdomain, Path: input.Path, ServiceName: input.ServiceName, ServicePort: input.ServicePort, ServicePath: input.ServicePath}, nil
 }
 
 func (s *fakeApplicationService) UpdateRouting(_ context.Context, applicationID, domainID, routingID int64, input application.RoutingInput) error {
@@ -1774,6 +1774,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 			Subdomain:     "api",
 			Path:          "/register",
 			ServiceName:   "identity",
+			ServicePort:   3000,
 			ServicePath:   "/",
 		}},
 	}
@@ -1800,6 +1801,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 		`>Add routing</span>`,
 		`data-routing-edit`,
 		`data-routing-service="identity"`,
+		`data-routing-service-port="3000"`,
 		`data-routing-delete`,
 		`id="routing-edit-dialog"`,
 		`name="subdomain"`,
@@ -1807,6 +1809,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 		`<option value="frontend">frontend</option>`,
 		`<option value="identity">identity</option>`,
 		`name="service_path"`,
+		`name="service_port"`,
 		`id="routing-edit-path" name="path" type="text" value="/"`,
 		`id="routing-edit-service-path" name="service_path" type="text" value="/"`,
 		`id="routing-delete-dialog"`,
@@ -1837,7 +1840,7 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	}
 	handler := web.Routes()
 
-	form := url.Values{"operation": {"add"}, "path": {"/"}, "service": {"frontend"}, "service_path": {"/"}}
+	form := url.Values{"operation": {"add"}, "path": {"/"}, "service": {"frontend"}, "service_port": {"3000"}, "service_path": {"/"}}
 	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/applications/7/domains/2/routing", strings.NewReader(form.Encode()))
 	missingTokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	missingToken := httptest.NewRecorder()
@@ -1864,6 +1867,9 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	if applications.routingCreateID != 7 || applications.routingCreateDomainID != 2 || applications.routingCreateInput.ServiceName != "frontend" {
 		t.Fatalf("routing create = %#v, want application/domain/service", applications)
 	}
+	if applications.routingCreateInput.ServicePort != 3000 {
+		t.Fatalf("routing create service port = %d, want 3000", applications.routingCreateInput.ServicePort)
+	}
 
 	editForm := url.Values{
 		"csrf_token":   {web.csrfToken},
@@ -1872,6 +1878,7 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 		"subdomain":    {"api"},
 		"path":         {"/register"},
 		"service":      {"frontend"},
+		"service_port": {"8080"},
 		"service_path": {"/app"},
 	}
 	editRequest := httptest.NewRequest(http.MethodPost, "/applications/7/domains/2/routing", strings.NewReader(editForm.Encode()))
@@ -1884,6 +1891,9 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	}
 	if applications.routingUpdateID != 11 || applications.routingUpdateDomainID != 2 || applications.routingUpdateInput.Subdomain != "api" || applications.routingUpdateInput.ServicePath != "/app" {
 		t.Fatalf("routing update = %#v, want routing ID/domain/input", applications)
+	}
+	if applications.routingUpdateInput.ServicePort != 8080 {
+		t.Fatalf("routing update service port = %d, want 8080", applications.routingUpdateInput.ServicePort)
 	}
 }
 

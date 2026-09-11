@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -205,18 +207,18 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 		return application.ErrEnvironmentFileNotFound
 	}
 
-	value, rawValue, err := findEnvironmentVariableToken(string(sourceSnapshot.contents), name)
+	entry, err := findEnvironmentEntry(string(sourceSnapshot.contents), name)
 	if err != nil {
 		return err
 	}
-	if _, err := application.ValidateEnvironmentVariableValue(value); err != nil {
+	if _, err := application.ValidateEnvironmentVariableValue(entry.value); err != nil {
 		return err
 	}
 	updatedSource, err := deleteEnvironmentVariable(string(sourceSnapshot.contents), name)
 	if err != nil {
 		return err
 	}
-	updatedDestination, err := appendRawEnvironmentVariable(string(destinationSnapshot.contents), name, rawValue)
+	updatedDestination, err := appendRawEnvironmentVariable(string(destinationSnapshot.contents), name, entry.rawValueWithComment)
 	if err != nil {
 		return err
 	}
@@ -265,7 +267,7 @@ func (s *Applications) UpdateEnvironmentSecretValue(ctx context.Context, applica
 		if !replaceValue {
 			return renameEnvironmentFile(contents, originalName, name)
 		}
-		return updateEnvironmentFile(contents, originalName, name, value)
+		return replaceEnvironmentFile(contents, originalName, name, value)
 	})
 }
 
@@ -341,6 +343,10 @@ type applicationServiceRepository interface {
 	CreateService(context.Context, application.Service) (application.Service, error)
 }
 
+type applicationServiceBatchRepository interface {
+	CreateServices(context.Context, []application.Service) ([]application.Service, error)
+}
+
 type applicationServiceDeletionRepository interface {
 	DeleteService(context.Context, int64, string) error
 }
@@ -383,6 +389,13 @@ type composeProjectRemover interface {
 	Down(context.Context, string) error
 }
 
+// ApplicationsOptions contains deployment values that affect generated
+// configuration. The HTTP address is used only to derive the port Caddy uses
+// when proxying the management interface through the host gateway.
+type ApplicationsOptions struct {
+	ManagementHTTPAddr string
+}
+
 // Applications coordinates application metadata and its managed files.
 type Applications struct {
 	repository         ApplicationRepository
@@ -393,6 +406,7 @@ type Applications struct {
 	settingsRepository redlaunchSettingsRepository
 	applicationsDir    string
 	proxyDirectory     string
+	managementPort     int
 	runner             composeRunner
 	mu                 sync.Mutex
 }
@@ -400,6 +414,13 @@ type Applications struct {
 // NewApplications constructs an application service rooted below the
 // configured projects directory.
 func NewApplications(repository ApplicationRepository, projectsRoot string, runners ...composeRunner) (*Applications, error) {
+	return NewApplicationsWithOptions(repository, projectsRoot, ApplicationsOptions{}, runners...)
+}
+
+// NewApplicationsWithOptions constructs the application service with explicit
+// deployment settings while retaining the small legacy constructor for tests
+// and callers that use the default management port.
+func NewApplicationsWithOptions(repository ApplicationRepository, projectsRoot string, options ApplicationsOptions, runners ...composeRunner) (*Applications, error) {
 	if repository == nil {
 		return nil, errors.New("application repository is required")
 	}
@@ -436,8 +457,25 @@ func NewApplications(repository ApplicationRepository, projectsRoot string, runn
 		settingsRepository: settingsRepository,
 		applicationsDir:    applicationsDirectory,
 		proxyDirectory:     filepath.Join(root, coreDir, proxyDir),
+		managementPort:     managementPortFromHTTPAddr(options.ManagementHTTPAddr),
 		runner:             runner,
 	}, nil
+}
+
+func managementPortFromHTTPAddr(address string) int {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return 8080
+	}
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return 8080
+	}
+	parsed, err := strconv.Atoi(port)
+	if err != nil || parsed < 1 || parsed > 65535 {
+		return 8080
+	}
+	return parsed
 }
 
 // startManagedService starts only the requested managed service when the
@@ -926,6 +964,20 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 			return fmt.Errorf("remove service from Compose file: %w", err)
 		}
 		composeChanged = composeContents != string(composeSnapshot.contents)
+	}
+	if composeChanged {
+		if err := writeManagedFile(composePath, composeContents, composeSnapshot.mode); err != nil {
+			return fmt.Errorf("stage service removal in Compose file: %w", err)
+		}
+		if err := s.validateStagedCompose(ctx, directory); err != nil {
+			return errors.Join(err, restoreManagedFile(composeSnapshot))
+		}
+		// Docker must still see the service definition while it stops and
+		// removes the container. The validated edit is committed after those
+		// service-scoped operations complete.
+		if err := restoreManagedFile(composeSnapshot); err != nil {
+			return fmt.Errorf("restore Compose file before service removal: %w", err)
+		}
 	}
 
 	reportServiceDeletionProgress(progress, "stop", "Stopping the service container with Docker Compose")

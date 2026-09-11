@@ -99,10 +99,13 @@ var (
 	ErrRoutingPathRequired              = errors.New("routing path is required")
 	ErrRoutingPathTooLong               = errors.New("routing path is too long")
 	ErrRoutingPathInvalid               = errors.New("routing path is invalid")
+	ErrRoutingPortInvalid               = errors.New("routing service port is invalid")
 	ErrRoutingAlreadyExists             = errors.New("routing already exists")
 	ErrRoutingNotFound                  = errors.New("routing not found")
 	ErrServiceAlreadyExists             = errors.New("service already exists")
 	ErrDatabaseServiceTypeAlreadyExists = errors.New("application already has a database service of this type")
+	ErrDatabaseCredentialsAmbiguous     = errors.New("database service credentials are ambiguous")
+	ErrDatabaseCredentialsConflict      = errors.New("database service credentials conflict with existing data")
 	ErrServiceNotFound                  = errors.New("service not found")
 	ErrEnvironmentVariableNameRequired  = errors.New("environment variable name is required")
 	ErrEnvironmentVariableNameInvalid   = errors.New("environment variable name is invalid")
@@ -438,6 +441,7 @@ type Routing struct {
 	Subdomain     string
 	Path          string
 	ServiceName   string
+	ServicePort   int
 	ServicePath   string
 }
 
@@ -447,6 +451,7 @@ type RoutingInput struct {
 	Subdomain   string
 	Path        string
 	ServiceName string
+	ServicePort int
 	ServicePath string
 }
 
@@ -1022,6 +1027,19 @@ func ValidateRoutingPath(value string) (string, error) {
 		return "", ErrRoutingPathInvalid
 	}
 	return path, nil
+}
+
+// ValidateRoutingPort validates the container port used by the reverse proxy.
+// A zero value preserves the behavior of routing records created before the
+// explicit port field was introduced.
+func ValidateRoutingPort(value int) (int, error) {
+	if value == 0 {
+		return 80, nil
+	}
+	if value < 1 || value > 65535 {
+		return 0, ErrRoutingPortInvalid
+	}
+	return value, nil
 }
 
 // ValidateEnvironmentVariableName validates a POSIX-style environment

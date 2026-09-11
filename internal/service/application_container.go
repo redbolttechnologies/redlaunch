@@ -64,7 +64,13 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 	if err != nil {
 		return application.Service{}, err
 	}
-	composePath := filepath.Join(directory, "compose.yml")
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return application.Service{}, errors.New("application Compose file does not exist")
+	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
 	composeSnapshot, err := snapshotManagedFile(composePath)
@@ -101,6 +107,9 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 		_ = restoreManagedFile(composeSnapshot)
 		_ = restoreManagedFile(varsSnapshot)
 		return application.Service{}, fmt.Errorf("write application secrets file: %w", err)
+	}
+	if err := s.validateStagedCompose(ctx, directory); err != nil {
+		return application.Service{}, errors.Join(err, restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot))
 	}
 
 	reportApplicationContainerProgress(progress, "metadata", "Saving application container metadata")

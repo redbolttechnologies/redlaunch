@@ -53,7 +53,14 @@ func validateImportedComposePolicy(contents string, applicationRoot string) erro
 	for index, line := range lines {
 		indent, key, value, ok := importedPolicyYAMLKey(line)
 		if !ok {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "&") || strings.HasPrefix(trimmed, "*") {
+				return importedComposePolicyError(index, "YAML anchors and aliases are not supported by the managed Compose editor")
+			}
 			continue
+		}
+		if key == "<<" || strings.HasPrefix(strings.TrimSpace(value), "&") || strings.HasPrefix(strings.TrimSpace(value), "*") {
+			return importedComposePolicyError(index, "YAML anchors, aliases, and merge keys are not supported by the managed Compose editor")
 		}
 		if indent == 0 {
 			topLevelSection = key

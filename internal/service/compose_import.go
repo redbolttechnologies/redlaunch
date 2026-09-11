@@ -45,8 +45,7 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 	if !ok {
 		return nil, errors.New("application service deletion repository is not configured")
 	}
-	configReader, ok := s.runner.(composeProjectConfigReader)
-	if !ok {
+	if _, ok := s.runner.(composeProjectConfigReader); !ok {
 		return nil, errors.New("Compose project configuration reader is not configured")
 	}
 
@@ -111,7 +110,11 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 		)
 	}
 
-	if err := writeManagedFile(composePath, string(contents), composeMode); err != nil {
+	processedContents, err := addManagedFieldsToImportedCompose(string(contents), parsedServices, item.ID)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("prepare imported Compose project: %w", err), rollbackFiles())
+	}
+	if err := writeManagedFile(composePath, processedContents, composeMode); err != nil {
 		return nil, fmt.Errorf("write imported Compose file: %w", err)
 	}
 	if !varsSnapshot.exists {
@@ -125,7 +128,7 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 		}
 	}
 
-	configuredServices, err := configReader.ConfigServices(ctx, directory)
+	configuredServices, err := s.runner.(composeProjectConfigReader).ConfigServices(ctx, directory)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("validate imported Compose project: %w", err), rollbackFiles())
 	}
@@ -134,26 +137,33 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 		return nil, errors.Join(err, rollbackFiles())
 	}
 
-	processedContents, err := addManagedFieldsToImportedCompose(string(contents), parsedServices, item.ID)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("prepare imported Compose project: %w", err), rollbackFiles())
-	}
-	if err := writeManagedFile(composePath, processedContents, composeMode); err != nil {
-		return nil, errors.Join(fmt.Errorf("write managed Compose file: %w", err), rollbackFiles())
-	}
-
-	created := make([]application.Service, 0, len(parsedServices))
+	metadata := make([]application.Service, 0, len(parsedServices))
 	for _, parsedService := range parsedServices {
 		configured := configuredByName[parsedService.name]
-		createdService, createErr := s.serviceRepository.CreateService(ctx, application.Service{
+		metadata = append(metadata, application.Service{
 			ApplicationID: item.ID,
 			Name:          parsedService.name,
 			Type:          application.ServiceTypeApplication,
 			ImageName:     importedImageName(configured.Image),
 			CreatedAt:     time.Now().UTC(),
 		})
+	}
+
+	if batch, ok := s.serviceRepository.(applicationServiceBatchRepository); ok {
+		created, createErr := batch.CreateServices(ctx, metadata)
 		if createErr != nil {
-			rollbackErr := rollbackImportedServiceMetadata(ctx, deleter, item.ID, created)
+			return nil, errors.Join(fmt.Errorf("persist imported service metadata: %w", createErr), rollbackFiles())
+		}
+		return created, nil
+	}
+
+	created := make([]application.Service, 0, len(metadata))
+	for _, item := range metadata {
+		createdService, createErr := s.serviceRepository.CreateService(ctx, item)
+		if createErr != nil {
+			compensationCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rollbackErr := rollbackImportedServiceMetadata(compensationCtx, deleter, item.ApplicationID, created)
+			cancel()
 			return nil, errors.Join(fmt.Errorf("persist imported service metadata: %w", createErr), rollbackErr, rollbackFiles())
 		}
 		created = append(created, createdService)

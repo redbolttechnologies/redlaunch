@@ -177,6 +177,17 @@ func TestValidateRoutingValues(t *testing.T) {
 			t.Errorf("ValidateRoutingPath(%q) error = nil, want an error", value)
 		}
 	}
+	if got, err := ValidateRoutingPort(0); err != nil || got != 80 {
+		t.Fatalf("ValidateRoutingPort(0) = (%d, %v), want (80, nil)", got, err)
+	}
+	if got, err := ValidateRoutingPort(3000); err != nil || got != 3000 {
+		t.Fatalf("ValidateRoutingPort(3000) = (%d, %v), want (3000, nil)", got, err)
+	}
+	for _, value := range []int{-1, 65536} {
+		if _, err := ValidateRoutingPort(value); !errors.Is(err, ErrRoutingPortInvalid) {
+			t.Errorf("ValidateRoutingPort(%d) error = %v, want %v", value, err, ErrRoutingPortInvalid)
+		}
+	}
 }
 
 func TestValidatePostgreSQLServiceInputFields(t *testing.T) {

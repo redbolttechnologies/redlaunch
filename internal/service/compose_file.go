@@ -1,12 +1,30 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// validateStagedCompose asks the Docker adapter to validate the Compose file
+// currently staged on disk. The caller owns the snapshots and must restore
+// them when validation or a later metadata operation fails.
+func (s *Applications) validateStagedCompose(ctx context.Context, directory string) error {
+	reader, ok := s.runner.(composeProjectConfigReader)
+	if !ok {
+		// Small test adapters and integrations that predate configuration
+		// validation remain usable. The production CommandRunner implements the
+		// reader and always validates managed mutations.
+		return nil
+	}
+	if _, err := reader.ConfigServices(ctx, directory); err != nil {
+		return fmt.Errorf("validate staged Compose project: %w", err)
+	}
+	return nil
+}
 
 // findApplicationComposeFile returns the existing Compose file for an
 // application. Older managed projects may use either supported Compose file
@@ -27,6 +45,111 @@ func findApplicationComposeFile(directory string) (string, error) {
 		return path, nil
 	}
 	return "", nil
+}
+
+// addServiceEnvironmentFiles adds relative env_file entries to a service
+// block. It is used only for migrating legacy generated database services to
+// scoped files; aliases and unsupported inline forms are rejected rather than
+// rewritten ambiguously.
+func addServiceEnvironmentFiles(contents, serviceName string, files ...string) (string, error) {
+	lines := strings.Split(contents, "\n")
+	servicesIndex, servicesValue, ok := findTopLevelYAMLKey(lines, "services")
+	if !ok || strings.TrimSpace(servicesValue) != "" {
+		return "", errors.New("Compose services must be a block mapping")
+	}
+	servicesEnd := topLevelBlockEnd(lines, servicesIndex)
+	serviceOffset := findYAMLKeyAtIndent(lines[servicesIndex+1:servicesEnd], serviceName, 2)
+	if serviceOffset < 0 {
+		return "", fmt.Errorf("Compose service %q was not found", serviceName)
+	}
+	serviceIndex := servicesIndex + 1 + serviceOffset
+	serviceEnd := servicesEnd
+	for index := serviceIndex + 1; index < servicesEnd; index++ {
+		if _, ok := yamlKeyAtIndent(lines[index], 2); ok {
+			serviceEnd = index
+			break
+		}
+	}
+	fieldIndex := -1
+	fieldEnd := serviceEnd
+	fieldValue := ""
+	for index := serviceIndex + 1; index < serviceEnd; index++ {
+		key, value, ok := yamlKeyAtIndentWithValue(lines[index], 4)
+		if !ok || key != "env_file" {
+			continue
+		}
+		fieldIndex = index
+		fieldValue = strings.TrimSpace(value)
+		for next := index + 1; next < serviceEnd; next++ {
+			if _, ok := yamlKeyAtIndent(lines[next], 4); ok {
+				fieldEnd = next
+				break
+			}
+		}
+		break
+	}
+
+	entries := make([]string, 0, len(files)+2)
+	if fieldIndex >= 0 {
+		if fieldValue != "" {
+			if strings.HasPrefix(fieldValue, "*") || strings.HasPrefix(fieldValue, "&") || strings.HasPrefix(fieldValue, "[") || strings.HasPrefix(fieldValue, "{") {
+				return "", errors.New("service env_file uses an unsupported YAML alias or collection")
+			}
+			entries = append(entries, normalizeImportedYAMLScalar(importedYAMLValueWithoutComment(fieldValue)))
+		} else {
+			for _, line := range lines[fieldIndex+1 : fieldEnd] {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				if !strings.HasPrefix(trimmed, "-") {
+					return "", errors.New("service env_file must be a list")
+				}
+				entry := normalizeImportedYAMLScalar(importedYAMLValueWithoutComment(strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))))
+				if entry != "" {
+					if strings.HasPrefix(entry, "*") || strings.HasPrefix(entry, "&") || strings.Contains(entry, "[") || strings.Contains(entry, "{") {
+						return "", errors.New("service env_file uses an unsupported YAML alias or collection")
+					}
+					entries = append(entries, entry)
+				}
+			}
+		}
+	}
+	for _, file := range files {
+		if file == "" {
+			continue
+		}
+		found := false
+		for _, entry := range entries {
+			if entry == file {
+				found = true
+				break
+			}
+		}
+		if !found {
+			entries = append(entries, file)
+		}
+	}
+	if fieldIndex < 0 {
+		block := []string{"    env_file:"}
+		for _, entry := range entries {
+			block = append(block, "      - "+entry)
+		}
+		return strings.Join(insertYAMLBlock(lines, serviceEnd, block), "\n"), nil
+	}
+	replacement := []string{"    env_file:"}
+	for _, entry := range entries {
+		replacement = append(replacement, "      - "+entry)
+	}
+	return strings.Join(replaceYAMLSection(lines, fieldIndex, fieldEnd, replacement), "\n"), nil
+}
+
+func replaceYAMLSection(lines []string, start, end int, replacement []string) []string {
+	result := make([]string, 0, len(lines)-(end-start)+len(replacement))
+	result = append(result, lines[:start]...)
+	result = append(result, replacement...)
+	result = append(result, lines[end:]...)
+	return result
 }
 
 // removeServiceFromCompose removes one service mapping and its unused named

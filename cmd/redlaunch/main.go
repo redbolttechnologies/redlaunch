@@ -97,7 +97,9 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	applications, err := service.NewApplications(database, cfg.ProjectsRoot, compose.CommandRunner{})
+	applications, err := service.NewApplicationsWithOptions(database, cfg.ProjectsRoot, service.ApplicationsOptions{
+		ManagementHTTPAddr: cfg.HTTPAddr,
+	}, compose.CommandRunner{})
 	if err != nil {
 		return fmt.Errorf("create application service: %w", err)
 	}

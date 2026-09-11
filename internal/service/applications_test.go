@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,6 +59,7 @@ type serviceRuntimeRunner struct {
 	runtime        []compose.ServiceRuntime
 	configured     []compose.ConfiguredService
 	configErr      error
+	configCheck    func(string) error
 	configCalls    int
 	projectDir     string
 	action         string
@@ -86,6 +88,11 @@ func (r *serviceRuntimeRunner) Up(context.Context, string) error {
 func (r *serviceRuntimeRunner) ConfigServices(_ context.Context, projectDir string) ([]compose.ConfiguredService, error) {
 	r.projectDir = projectDir
 	r.configCalls++
+	if r.configCheck != nil {
+		if err := r.configCheck(projectDir); err != nil {
+			return nil, err
+		}
+	}
 	return r.configured, r.configErr
 }
 
@@ -423,6 +430,46 @@ func TestApplicationsImportDockerComposeProjectRegistersManagedServices(t *testi
 		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
 			t.Fatalf("%s was not created: %v", name, err)
 		}
+	}
+}
+
+func TestApplicationsImportDockerComposeProjectValidatesManagedFieldsAfterStaging(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{
+		configured: []compose.ConfiguredService{{Name: "web", Image: "nginx:1.27"}},
+		configCheck: func(projectDir string) error {
+			contents, err := os.ReadFile(filepath.Join(projectDir, "compose.yml"))
+			if err != nil {
+				return err
+			}
+			for _, expected := range []string{
+				"container_name: redbolt-1-web",
+				"- vars.env",
+				"- secrets.env",
+				"redlaunch.managed=true",
+			} {
+				if !strings.Contains(string(contents), expected) {
+					return fmt.Errorf("staged Compose file does not contain %q", expected)
+				}
+			}
+			return nil
+		},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdApplication, err := applications.Create(t.Context(), "Status", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, []byte("services:\n  web:\n    image: nginx:1.27\n")); err != nil {
+		t.Fatalf("ImportDockerComposeProject() error = %v", err)
+	}
+	if runner.configCalls != 1 {
+		t.Fatalf("ConfigServices() calls = %d, want one final staged validation", runner.configCalls)
 	}
 }
 
@@ -781,12 +828,13 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 		Subdomain:   "api",
 		Path:        "/register",
 		ServiceName: "identity",
+		ServicePort: 3000,
 		ServicePath: "/",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID != 1 || created.DomainName != "example.com" || created.Subdomain != "api" {
+	if created.ID != 1 || created.DomainName != "example.com" || created.Subdomain != "api" || created.ServicePort != 3000 {
 		t.Fatalf("CreateRouting() = %#v, want persisted routing", created)
 	}
 	if len(runner.reloads) != 1 {
@@ -798,7 +846,7 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 		"api.example.com {",
 		"path /register",
 		"rewrite * /",
-		"reverse_proxy redbolt-7-identity",
+		"reverse_proxy redbolt-7-identity:3000",
 	} {
 		if !strings.Contains(caddy, expected) {
 			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, caddy)
@@ -808,6 +856,7 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 	if err := applications.UpdateRouting(t.Context(), 7, 1, created.ID, application.RoutingInput{
 		Path:        "/",
 		ServiceName: "frontend",
+		ServicePort: 8080,
 		ServicePath: "/app",
 	}); err != nil {
 		t.Fatal(err)
@@ -816,7 +865,7 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 		t.Fatalf("Caddy reloads after update = %d, want 2", len(runner.reloads))
 	}
 	caddy = readServiceFile(t, caddyPath)
-	for _, expected := range []string{"example.com {", "path /", "rewrite * /app", "reverse_proxy redbolt-7-frontend"} {
+	for _, expected := range []string{"example.com {", "path /", "rewrite * /app", "reverse_proxy redbolt-7-frontend:8080"} {
 		if !strings.Contains(caddy, expected) {
 			t.Fatalf("updated Caddyfile does not contain %q:\n%s", expected, caddy)
 		}
@@ -841,7 +890,7 @@ func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
 	repository := &applicationRepositoryStub{}
 	runner := &serviceRuntimeRunner{}
 	prepareRoutingProxy(t, root)
-	applications, err := NewApplications(repository, root, runner)
+	applications, err := NewApplicationsWithOptions(repository, root, ApplicationsOptions{ManagementHTTPAddr: "127.0.0.1:9090"}, runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +909,7 @@ func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
 	}
 	caddyPath := filepath.Join(root, coreDir, proxyDir, "Caddyfile")
 	caddy := readServiceFile(t, caddyPath)
-	for _, expected := range []string{"admin.example.com {", "handle {", "reverse_proxy http://host.docker.internal:8080"} {
+	for _, expected := range []string{"admin.example.com {", "handle {", "reverse_proxy http://host.docker.internal:9090"} {
 		if !strings.Contains(caddy, expected) {
 			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, caddy)
 		}
@@ -1401,7 +1450,7 @@ func TestApplicationsMoveEnvironmentVariablePreservesInterpolationToken(t *testi
 	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
-	if err := os.WriteFile(varsPath, []byte("BASE=https://example.test\nTARGET=${BASE}/api\n"), envFileMode); err != nil {
+	if err := os.WriteFile(varsPath, []byte("BASE=https://example.test\nTARGET=${BASE}/api # preserve this note\n"), envFileMode); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(secretsPath, []byte("# application secrets\n"), envFileMode); err != nil {
@@ -1414,8 +1463,36 @@ func TestApplicationsMoveEnvironmentVariablePreservesInterpolationToken(t *testi
 	if got := readServiceFile(t, varsPath); got != "BASE=https://example.test\n" {
 		t.Fatalf("vars.env after interpolation move = %q", got)
 	}
-	if got := readServiceFile(t, secretsPath); got != "# application secrets\nTARGET=${BASE}/api\n" {
-		t.Fatalf("secrets.env after interpolation move = %q, want raw interpolation token", got)
+	if got := readServiceFile(t, secretsPath); got != "# application secrets\nTARGET=${BASE}/api # preserve this note\n" {
+		t.Fatalf("secrets.env after interpolation move = %q, want raw interpolation token and comment", got)
+	}
+}
+
+func TestApplicationsUpdateEnvironmentVariableRenamePreservesToken(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	original := "BASE=https://example.test\nTARGET=\"${BASE}/api\" # keep token\n"
+	if err := os.WriteFile(varsPath, []byte(original), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateEnvironmentVariable(t.Context(), 7, "TARGET", "PUBLIC_URL", "${BASE}/api"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, varsPath); got != "BASE=https://example.test\nPUBLIC_URL=\"${BASE}/api\" # keep token\n" {
+		t.Fatalf("renamed vars.env = %q, want original token and comment preserved", got)
 	}
 }
 
@@ -2259,6 +2336,41 @@ func TestApplicationsDeletesRegisteredServiceInOrder(t *testing.T) {
 	}
 }
 
+func TestApplicationsDoesNotDeleteServiceWhenStagedComposeValidationFails(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
+	}
+	runner := &serviceRuntimeRunner{configErr: errors.New("invalid staged Compose")}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	composePath := filepath.Join(directory, "compose.yml")
+	originalCompose := "services:\n  db:\n    image: postgres:17\n"
+	if err := os.WriteFile(composePath, []byte(originalCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteService(t.Context(), 7, "db"); err == nil {
+		t.Fatal("DeleteService() error = nil, want staged validation failure")
+	}
+	if got := readServiceFile(t, composePath); got != originalCompose {
+		t.Fatalf("Compose after staged validation failure = %q, want original", got)
+	}
+	if len(runner.actions) != 0 {
+		t.Fatalf("Docker actions after staged validation failure = %v, want none", runner.actions)
+	}
+	if len(repository.services) != 1 {
+		t.Fatalf("services after staged validation failure = %#v, want original service", repository.services)
+	}
+}
+
 func TestApplicationsStopsDeletionWhenAStageFails(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
@@ -2655,7 +2767,7 @@ func TestApplicationsCreatePostgreSQLServicePreservesExistingEnvironmentAndPassw
 	}
 }
 
-func TestApplicationsRejectsSecondPostgreSQLServiceWithoutChangingConfiguration(t *testing.T) {
+func TestApplicationsCreateSecondPostgreSQLServiceKeepsCredentialsScoped(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
 	runner := &recordingRunner{}
@@ -2679,33 +2791,125 @@ func TestApplicationsRejectsSecondPostgreSQLServiceWithoutChangingConfiguration(
 	}
 
 	directory := filepath.Join(root, applicationsDir, "status-page")
-	composeBefore := readServiceFile(t, filepath.Join(directory, "compose.yml"))
-	varsBefore := readServiceFile(t, filepath.Join(directory, varsEnvFile))
-	secretsBefore := readServiceFile(t, filepath.Join(directory, secretsEnvFile))
-	_, err = applications.CreatePostgreSQLService(t.Context(), created.ID, application.PostgreSQLServiceInput{
+	second, err := applications.CreatePostgreSQLService(t.Context(), created.ID, application.PostgreSQLServiceInput{
 		ServiceName:      "db-secondary",
 		PostgresVersion:  "17",
 		DatabaseName:     "secondary",
 		DatabaseUser:     "secondary_user",
 		DatabasePassword: "second-password",
 	})
-	if !errors.Is(err, application.ErrDatabaseServiceTypeAlreadyExists) {
-		t.Fatalf("second CreatePostgreSQLService() error = %v, want %v", err, application.ErrDatabaseServiceTypeAlreadyExists)
+	if err != nil {
+		t.Fatalf("second CreatePostgreSQLService() error = %v", err)
 	}
-	if len(repository.services) != 1 || repository.services[0].Name != firstInput.ServiceName {
-		t.Fatalf("services after rejected PostgreSQL create = %#v, want only first service", repository.services)
+	if second.Name != "db-secondary" || len(repository.services) != 2 {
+		t.Fatalf("services after PostgreSQL create = %#v, want two distinct services", repository.services)
 	}
-	if len(runner.services) != 1 {
-		t.Fatalf("started services after rejected PostgreSQL create = %v, want one", runner.services)
+	if len(runner.services) != 2 {
+		t.Fatalf("started services after PostgreSQL create = %v, want two", runner.services)
 	}
-	if got := readServiceFile(t, filepath.Join(directory, "compose.yml")); got != composeBefore {
-		t.Fatal("Compose configuration changed after rejecting a second PostgreSQL service")
+	for _, name := range []string{"db-primary.vars.env", "db-primary.secrets.env", "db-secondary.vars.env", "db-secondary.secrets.env"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("scoped environment file %s: %v", name, err)
+		}
 	}
-	if got := readServiceFile(t, filepath.Join(directory, varsEnvFile)); got != varsBefore {
-		t.Fatal("variable configuration changed after rejecting a second PostgreSQL service")
+	if got := readServiceFile(t, filepath.Join(directory, "db-primary.secrets.env")); !strings.Contains(got, "POSTGRES_PASSWORD=first-password") {
+		t.Fatalf("primary PostgreSQL password = %q, want first password", got)
 	}
-	if got := readServiceFile(t, filepath.Join(directory, secretsEnvFile)); got != secretsBefore {
-		t.Fatal("secret configuration changed after rejecting a second PostgreSQL service")
+	if got := readServiceFile(t, filepath.Join(directory, "db-secondary.secrets.env")); !strings.Contains(got, "POSTGRES_PASSWORD=second-password") {
+		t.Fatalf("secondary PostgreSQL password = %q, want second password", got)
+	}
+	if got := readServiceFile(t, filepath.Join(directory, varsEnvFile)); !strings.Contains(got, "POSTGRES_DB=primary") {
+		t.Fatalf("shared variables after scoped migration = %q, want legacy value preserved", got)
+	}
+}
+
+func TestApplicationsCreatePostgreSQLServiceMigratesLegacyCredentialsWithoutRewritingTokens(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &recordingRunner{}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	legacyCompose := "services:\n  db-primary:\n    image: postgres:17\n    env_file:\n      - vars.env\n      - secrets.env\n    volumes:\n      - db-primary_data:/var/lib/postgresql/data\n\nvolumes:\n  db-primary_data:\n    name: redbolt-1-db-primary-data\n\nnetworks:\n  default:\n    external: true\n    name: redlaunch-common\n"
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte(legacyCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, varsEnvFile), []byte("POSTGRES_DB=\"${STATUS_DB:-status}\" # keep token\nPOSTGRES_USER=legacy_user\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, secretsEnvFile), []byte("POSTGRES_PASSWORD='legacy password'\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	repository.services = []application.Service{{ID: 11, ApplicationID: created.ID, Name: "db-primary", Type: application.ServiceTypePostgreSQL, DatabaseName: "status", DatabaseUser: "legacy_user"}}
+
+	if _, err := applications.CreatePostgreSQLService(t.Context(), created.ID, application.PostgreSQLServiceInput{
+		ServiceName:      "db-secondary",
+		PostgresVersion:  "17",
+		DatabaseName:     "secondary",
+		DatabaseUser:     "secondary_user",
+		DatabasePassword: "secondary-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, filepath.Join(directory, "db-primary.vars.env")); got != "POSTGRES_DB=\"${STATUS_DB:-status}\"\nPOSTGRES_USER=legacy_user\n" {
+		t.Fatalf("migrated PostgreSQL variables = %q, want raw interpolation and quotes preserved", got)
+	}
+	if got := readServiceFile(t, filepath.Join(directory, "db-primary.secrets.env")); got != "POSTGRES_PASSWORD='legacy password'\n" {
+		t.Fatalf("migrated PostgreSQL secrets = %q, want raw quote preserved", got)
+	}
+	composeContents := readServiceFile(t, filepath.Join(directory, "compose.yml"))
+	if !strings.Contains(composeContents, "      - db-primary.vars.env\n") || !strings.Contains(composeContents, "      - db-primary.secrets.env\n") {
+		t.Fatalf("legacy PostgreSQL service was not scoped in Compose:\n%s", composeContents)
+	}
+}
+
+func TestApplicationsCreatePostgreSQLServiceRejectsAmbiguousLegacyCredentials(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	applications, err := NewApplications(repository, root, &recordingRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	composePath := filepath.Join(directory, "compose.yml")
+	originalCompose := "services:\n  db-primary:\n    image: postgres:17\n  db-analytics:\n    image: postgres:16\n"
+	if err := os.WriteFile(composePath, []byte(originalCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, varsEnvFile), []byte("POSTGRES_DB=status\nPOSTGRES_USER=app\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, secretsEnvFile), []byte("POSTGRES_PASSWORD=shared\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	repository.services = []application.Service{
+		{ID: 11, ApplicationID: created.ID, Name: "db-primary", Type: application.ServiceTypePostgreSQL},
+		{ID: 12, ApplicationID: created.ID, Name: "db-analytics", Type: application.ServiceTypePostgreSQL},
+	}
+
+	if _, err := applications.CreatePostgreSQLService(t.Context(), created.ID, application.PostgreSQLServiceInput{
+		ServiceName:     "db-new",
+		PostgresVersion: "17",
+		DatabaseName:    "new",
+		DatabaseUser:    "new_user",
+	}); !errors.Is(err, application.ErrDatabaseCredentialsAmbiguous) {
+		t.Fatalf("CreatePostgreSQLService() error = %v, want ambiguous legacy credentials", err)
+	}
+	if got := readServiceFile(t, composePath); got != originalCompose {
+		t.Fatalf("Compose after ambiguous legacy rejection = %q, want original", got)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "db-new.vars.env")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new scoped variables file stat error = %v, want no file", err)
 	}
 }
 
@@ -2744,6 +2948,11 @@ func TestApplicationsCreatePostgreSQLServiceLeavesFilesWhenMetadataPersistenceFa
 	}
 	if got := readServiceFile(t, secretsPath); got != originalSecrets {
 		t.Fatalf("secrets file after persistence failure = %q, want original %q", got, originalSecrets)
+	}
+	for _, name := range []string{"db.vars.env", "db.secrets.env"} {
+		if _, err := os.Stat(filepath.Join(root, applicationsDir, "status-page", name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("scoped environment file %s after persistence failure stat error = %v, want no file", name, err)
+		}
 	}
 }
 
@@ -2816,7 +3025,7 @@ func TestApplicationsCreateRedisServiceWritesProductionComposeAndPersistsSetting
 	}
 }
 
-func TestApplicationsRejectsSecondRedisServiceWithoutChangingConfiguration(t *testing.T) {
+func TestApplicationsCreateSecondRedisServiceKeepsCredentialsScoped(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
 	runner := &recordingRunner{}
@@ -2840,32 +3049,29 @@ func TestApplicationsRejectsSecondRedisServiceWithoutChangingConfiguration(t *te
 	}
 
 	directory := filepath.Join(root, applicationsDir, "status-page")
-	composeBefore := readServiceFile(t, filepath.Join(directory, "compose.yml"))
-	varsBefore := readServiceFile(t, filepath.Join(directory, varsEnvFile))
-	secretsBefore := readServiceFile(t, filepath.Join(directory, secretsEnvFile))
-	_, err = applications.CreateRedisService(t.Context(), created.ID, application.RedisServiceInput{
+	second, err := applications.CreateRedisService(t.Context(), created.ID, application.RedisServiceInput{
 		ServiceName:  "cache-secondary",
 		RedisVersion: "7.2-alpine",
 		Port:         "6381",
 		Password:     "second-password",
 	})
-	if !errors.Is(err, application.ErrDatabaseServiceTypeAlreadyExists) {
-		t.Fatalf("second CreateRedisService() error = %v, want %v", err, application.ErrDatabaseServiceTypeAlreadyExists)
+	if err != nil {
+		t.Fatalf("second CreateRedisService() error = %v", err)
 	}
-	if len(repository.services) != 1 || repository.services[0].Name != firstInput.ServiceName {
-		t.Fatalf("services after rejected Redis create = %#v, want only first service", repository.services)
+	if second.Name != "cache-secondary" || len(repository.services) != 2 {
+		t.Fatalf("services after Redis create = %#v, want two distinct services", repository.services)
 	}
-	if len(runner.services) != 1 {
-		t.Fatalf("started services after rejected Redis create = %v, want one", runner.services)
+	if len(runner.services) != 2 {
+		t.Fatalf("started services after Redis create = %v, want two", runner.services)
 	}
-	if got := readServiceFile(t, filepath.Join(directory, "compose.yml")); got != composeBefore {
-		t.Fatal("Compose configuration changed after rejecting a second Redis service")
+	if got := readServiceFile(t, filepath.Join(directory, "cache-primary.secrets.env")); !strings.Contains(got, "REDIS_PASSWORD=first-password") {
+		t.Fatalf("primary Redis password = %q, want first password", got)
 	}
-	if got := readServiceFile(t, filepath.Join(directory, varsEnvFile)); got != varsBefore {
-		t.Fatal("variable configuration changed after rejecting a second Redis service")
+	if got := readServiceFile(t, filepath.Join(directory, "cache-secondary.secrets.env")); !strings.Contains(got, "REDIS_PASSWORD=second-password") {
+		t.Fatalf("secondary Redis password = %q, want second password", got)
 	}
-	if got := readServiceFile(t, filepath.Join(directory, secretsEnvFile)); got != secretsBefore {
-		t.Fatal("secret configuration changed after rejecting a second Redis service")
+	if got := readServiceFile(t, filepath.Join(directory, secretsEnvFile)); !strings.Contains(got, "REDIS_PASSWORD=first-password") {
+		t.Fatalf("shared Redis password after scoped migration = %q, want legacy value preserved", got)
 	}
 }
 

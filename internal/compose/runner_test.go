@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -118,6 +119,55 @@ func TestCommandRunnerConfigServicesUsesMachineReadableComposeConfiguration(t *t
 	want := expectedComposeArguments(projectDir, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerEnsureNetworkCreatesManagedNetwork(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"${0%/*}/args\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).EnsureNetwork(context.Background(), "redlaunch-common"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "network\x00create") || !strings.Contains(joined, "--label\x00redlaunch.managed=true") || !strings.Contains(joined, "--label\x00redlaunch.owner=redlaunch") || !strings.HasSuffix(joined, "redlaunch-common") {
+		t.Fatalf("EnsureNetwork() arguments = %#v, want managed network creation", args)
+	}
+}
+
+func TestCommandRunnerEnsureNetworkAcceptsOnlyOwnedExistingNetwork(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		labels  string
+		wantErr bool
+	}{
+		{name: "owned", labels: `{"redlaunch.managed":"true","redlaunch.owner":"redlaunch"}`},
+		{name: "unowned", labels: `{}`, wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "docker")
+			script := "#!/bin/sh\nif [ \"$1\" = network ] && [ \"$2\" = ls ]; then printf '%s\\n' redlaunch-common; exit 0; fi\nif [ \"$1\" = network ] && [ \"$2\" = inspect ]; then printf '%s\\n' '" + testCase.labels + "'; exit 0; fi\nexit 1\n"
+			if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			err := (CommandRunner{Binary: binary}).EnsureNetwork(context.Background(), "redlaunch-common")
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("EnsureNetwork() error = %v, wantErr %v", err, testCase.wantErr)
+			}
+		})
+	}
+}
+
+func TestCommandRunnerEnsureNetworkRejectsInvalidName(t *testing.T) {
+	if err := (CommandRunner{Binary: filepath.Join(t.TempDir(), "missing")}).EnsureNetwork(context.Background(), "../outside"); err == nil {
+		t.Fatal("EnsureNetwork() error = nil, want invalid network name")
 	}
 }
 
@@ -433,6 +483,41 @@ func TestCommandRunnerEnvironmentReadsResolvedComposeConfig(t *testing.T) {
 	want := expectedComposeArguments(projectDir, "config", "--format", "json", "db")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Environment() arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerEnvironmentUsesComposeResolutionForSyntheticEnvFiles(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker CLI is not installed")
+	}
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    image: alpine:3.22\n    env_file:\n      - vars.env\n      - secrets.env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "vars.env"), []byte("LITERAL_DOLLAR=$$5\nINTERPOLATED=${MISSING_VALUE:-fallback}\nQUOTED=\"quoted value\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "secrets.env"), []byte("SYNTHETIC_SECRET=not-a-real-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := (CommandRunner{}).Environment(context.Background(), projectDir, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]string, len(values))
+	for _, value := range values {
+		got[value.Key] = value.Value
+	}
+	for key, want := range map[string]string{
+		"LITERAL_DOLLAR":   "$$5",
+		"INTERPOLATED":     "fallback",
+		"QUOTED":           "quoted value",
+		"SYNTHETIC_SECRET": "not-a-real-secret",
+	} {
+		if got[key] != want {
+			t.Fatalf("Compose-resolved %s = %q, want %q; all values = %#v", key, got[key], want, got)
+		}
 	}
 }
 

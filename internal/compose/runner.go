@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,6 +113,74 @@ func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName st
 	return r.runComposeUp(ctx, projectDir, serviceName)
 }
 
+// EnsureNetwork creates the shared application network through the Docker
+// adapter and verifies the ownership labels when it already exists. Compose
+// projects consume this network as external infrastructure; optional core
+// components do not implicitly own its lifetime.
+func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) error {
+	networkName = strings.TrimSpace(networkName)
+	if !validDockerNetworkName(networkName) {
+		return errors.New("Docker network name is invalid")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	list := exec.CommandContext(ctx, binary, "network", "ls", "--filter", "name=^"+regexp.QuoteMeta(networkName)+"$", "--format", "{{.Name}}")
+	list.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := list.Output()
+	if err != nil {
+		return composeCommandError("list Docker networks", err, nil)
+	}
+	found := false
+	for _, name := range strings.Fields(string(output)) {
+		if name == networkName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		create := exec.CommandContext(ctx, binary, "network", "create", "--driver", "bridge", "--label", "redlaunch.managed=true", "--label", "redlaunch.owner=redlaunch", networkName)
+		create.Env = composeProcessEnvironment(os.Environ(), nil)
+		if output, err := create.CombinedOutput(); err != nil {
+			return composeCommandError("create application network", err, output)
+		}
+		return nil
+	}
+
+	inspect := exec.CommandContext(ctx, binary, "network", "inspect", "--format", "{{json .Labels}}", networkName)
+	inspect.Env = composeProcessEnvironment(os.Environ(), nil)
+	labelsOutput, err := inspect.Output()
+	if err != nil {
+		return composeCommandError("inspect application network", err, nil)
+	}
+	var labels map[string]string
+	if err := json.Unmarshal(bytes.TrimSpace(labelsOutput), &labels); err != nil {
+		return fmt.Errorf("inspect application network: decode Docker labels: %w", err)
+	}
+	if labels["redlaunch.managed"] != "true" || labels["redlaunch.owner"] != "redlaunch" {
+		return fmt.Errorf("refusing to use Docker network %q: it is not owned by Redlaunch", networkName)
+	}
+	return nil
+}
+
+func validDockerNetworkName(value string) bool {
+	if value == "" || len(value) > 63 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') {
+			continue
+		}
+		if index > 0 && (character == '_' || character == '-' || character == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // ConfigServices validates a Compose project and returns its configured
 // services without starting containers. Environment and filesystem
 // interpolation are disabled because imports contain only the uploaded Compose
@@ -142,7 +211,7 @@ func (r CommandRunner) ConfigServices(ctx context.Context, projectDir string) ([
 		return nil, fmt.Errorf("decode Compose configuration: %w", err)
 	}
 	if len(config.Services) == 0 {
-		return nil, errors.New("Compose file does not define any services")
+		return []ConfiguredService{}, nil
 	}
 
 	names := make([]string, 0, len(config.Services))

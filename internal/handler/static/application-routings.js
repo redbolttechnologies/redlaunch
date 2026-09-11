@@ -10,6 +10,7 @@
   const subdomainInput = dialog.querySelector("#routing-edit-subdomain");
   const pathInput = dialog.querySelector("#routing-edit-path");
   const serviceInput = dialog.querySelector("#routing-edit-service");
+  const servicePortInput = dialog.querySelector("#routing-edit-service-port");
   const servicePathInput = dialog.querySelector("#routing-edit-service-path");
   const submitButton = dialog.querySelector("[data-routing-edit-submit]");
   const closeButtons = dialog.querySelectorAll("[data-routing-edit-close]");
@@ -78,6 +79,9 @@
     if (serviceInput) {
       serviceInput.value = "";
     }
+    if (servicePortInput) {
+      servicePortInput.value = "80";
+    }
     if (servicePathInput) {
       servicePathInput.value = "/";
     }
@@ -99,6 +103,9 @@
     }
     if (serviceInput) {
       serviceInput.value = button.dataset.routingService || "";
+    }
+    if (servicePortInput) {
+      servicePortInput.value = button.dataset.routingServicePort || "80";
     }
     if (servicePathInput) {
       servicePathInput.value = button.dataset.routingServicePath || "";
