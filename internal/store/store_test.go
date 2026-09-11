@@ -2,11 +2,64 @@ package store
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"redlaunch/internal/application"
 )
+
+func TestPhaseZeroMigrationFixtureCoversLegacyMetadata(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	fixture, err := os.ReadFile("testdata/phase0_migration.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(t.Context(), string(fixture)); err != nil {
+		t.Fatalf("load Phase 0 migration fixture: %v", err)
+	}
+
+	item, err := database.Get(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.FolderName != "proxy" {
+		t.Fatalf("fixture application folder = %q, want colliding proxy name", item.FolderName)
+	}
+	services, err := database.ListServices(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 2 || services[0].Type != application.ServiceTypePostgreSQL || services[1].Type != application.ServiceTypePostgreSQL {
+		t.Fatalf("fixture services = %#v, want two PostgreSQL services", services)
+	}
+	domains, err := database.ListDomains(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("fixture domains = %#v, want one", domains)
+	}
+	routings, err := database.ListRoutings(t.Context(), item.ID, domains[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routings) != 1 || routings[0].ServiceName != "db-primary" {
+		t.Fatalf("fixture routings = %#v, want db-primary route", routings)
+	}
+	schedule, err := database.GetBackupSchedule(t.Context(), services[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !schedule.Enabled {
+		t.Fatal("fixture backup timer is disabled, want enabled")
+	}
+}
 
 func TestStoreApplicationRoundTrip(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")

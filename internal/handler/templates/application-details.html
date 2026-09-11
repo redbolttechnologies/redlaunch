@@ -635,7 +635,7 @@
     <header class="application-dialog-header">
       <div>
         <h2 id="secret-edit-dialog-title" data-secret-edit-title>{{with .ApplicationDetailsPage.SecretEdit}}{{if .Add}}Add{{else}}Edit{{end}}{{else}}Edit{{end}} secret</h2>
-        <p id="secret-edit-dialog-description">Set the secret name and value in <code>secrets.env</code>.</p>
+        <p id="secret-edit-dialog-description">Set the secret name and enter a replacement value in <code>secrets.env</code>.</p>
       </div>
       <button class="icon-button" type="button" data-secret-edit-close aria-label="Close edit secret dialog">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -684,7 +684,7 @@
             <span>Generate secret</span>
           </button>
         </div>
-        <span class="field-help">Values are masked by default. Generate secret creates a secure random value.</span>
+        <span class="field-help">Existing values are never loaded into this form. Generate secret creates a secure random replacement.</span>
       </div>
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-secret-edit-close>Cancel</button>
@@ -864,7 +864,7 @@
               <td class="application-environment-actions">
                 <div class="application-environment-action-group">
                   {{if $.MaskValues}}
-                  <button class="application-environment-edit" type="button" data-secret-edit data-secret-key="{{.Key}}" data-secret-value="{{.Value}}" aria-controls="secret-edit-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Edit secret {{.Key}}">
+                  <button class="application-environment-edit" type="button" data-secret-edit data-secret-key="{{.Key}}" aria-controls="secret-edit-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Edit secret {{.Key}}">
                     <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M12 20h9"></path>
                       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path>

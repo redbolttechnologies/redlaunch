@@ -56,6 +56,9 @@ func (s *Applications) CreateRedisServiceWithProgress(ctx context.Context, appli
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.rejectExistingDatabaseServiceType(ctx, applicationID, application.ServiceTypeRedis); err != nil {
+		return application.Service{}, err
+	}
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {

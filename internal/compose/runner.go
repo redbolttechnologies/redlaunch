@@ -4,6 +4,7 @@ package compose
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,24 @@ import (
 )
 
 const maxCommandOutput = 8 * 1024
+
+var managerEnvironmentKeys = map[string]struct{}{
+	"AUTH_COOKIE_SECURE":    {},
+	"AUTH_SESSION_SECRET":   {},
+	"BACKUP_CONTAINER_NAME": {},
+	"BACKUP_DOCKER_BINARY":  {},
+	"BACKUP_ROOT":           {},
+	"DB_PATH":               {},
+	"DOTENV_FILE":           {},
+	"GOOGLE_CLIENT_ID":      {},
+	"GOOGLE_CLIENT_SECRET":  {},
+	"GOOGLE_REDIRECT_URL":   {},
+	"HTTP_ADDR":             {},
+	"PROJECTS_ROOT":         {},
+	"SYSTEMD_BINARY":        {},
+	"SYSTEMD_SCOPE":         {},
+	"SYSTEMD_UNIT_DIR":      {},
+}
 
 // CommandRunner runs Docker Compose through the Docker CLI.
 type CommandRunner struct {
@@ -92,8 +111,7 @@ func (r CommandRunner) ConfigServices(ctx context.Context, projectDir string) ([
 	if err != nil {
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return nil, composeCommandError("validate Compose project", err, output)
@@ -140,15 +158,14 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	args := []string{"compose", "-f", composeFile, "up", "-d"}
+	args := []string{"up", "-d"}
 	args = append(args, options...)
 	operation := "run compose project"
 	if serviceName != "" {
 		args = append(args, serviceName)
 		operation = fmt.Sprintf("run compose service %q", serviceName)
 	}
-	command := exec.CommandContext(ctx, binary, args...)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		details := strings.TrimSpace(string(output))
@@ -176,8 +193,7 @@ func (r CommandRunner) ReloadProxy(ctx context.Context, projectDir string) error
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return composeCommandError("reload Caddy proxy", err, output)
@@ -220,8 +236,7 @@ func (r CommandRunner) Down(ctx context.Context, projectDir string) error {
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "down", "--volumes", "--remove-orphans")
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "down", "--volumes", "--remove-orphans")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return composeCommandError("remove Compose project", err, output)
@@ -243,11 +258,10 @@ func (r CommandRunner) runServiceCommandWithOptions(ctx context.Context, project
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	args := []string{"compose", "-f", composeFile, action}
+	args := []string{action}
 	args = append(args, options...)
 	args = append(args, serviceName)
-	command := exec.CommandContext(ctx, binary, args...)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		details := strings.TrimSpace(string(output))
@@ -275,8 +289,7 @@ func (r CommandRunner) ListServices(ctx context.Context, projectDir string) ([]S
 	if err != nil {
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "ps", "-a", "--format", "json")
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "ps", "-a", "--format", "json")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -333,13 +346,12 @@ func (r CommandRunner) readLogs(ctx context.Context, projectDir, serviceName, ta
 	if err != nil {
 		return "", fmt.Errorf("find Compose file: %w", err)
 	}
-	args := []string{"compose", "-f", composeFile, "logs"}
+	args := []string{"logs"}
 	if tail != "" {
 		args = append(args, "--tail", tail)
 	}
 	args = append(args, "--no-color", "--no-log-prefix", serviceName)
-	command := exec.CommandContext(ctx, binary, args...)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -373,8 +385,7 @@ func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, service
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", serviceName, "sh", "-c", postgresDumpScript)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresDumpScript)
 	command.Stdout = output
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -401,8 +412,7 @@ func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, servic
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "exec", "-T", serviceName, "sh", "-c", postgresRestoreScript)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresRestoreScript)
 	command.Stdin = input
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -448,8 +458,7 @@ func (r CommandRunner) Environment(ctx context.Context, projectDir, serviceName 
 	if err != nil {
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
-	command := exec.CommandContext(ctx, binary, "compose", "-f", composeFile, "config", "--format", "json", serviceName)
-	command.Dir = projectDir
+	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json", serviceName)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -662,4 +671,82 @@ func findComposeFile(projectDir string) (string, error) {
 		return name, nil
 	}
 	return "", errors.New("no compose.yaml or compose.yml file found")
+}
+
+// composeCommand applies the same explicit project identity and process
+// environment policy to every Docker Compose operation. The project-root path
+// scopes otherwise identical application trees installed on the same host,
+// while the resource kind keeps core and application directories distinct.
+func composeCommand(ctx context.Context, binary, projectDir, composeFile string, args ...string) *exec.Cmd {
+	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir), "-f", composeFile}
+	composeArgs = append(composeArgs, args...)
+	command := exec.CommandContext(ctx, binary, composeArgs...)
+	command.Dir = projectDir
+	command.Env = composeProcessEnvironment(os.Environ())
+	return command
+}
+
+func composeProjectName(projectDir string) string {
+	clean := filepath.Clean(projectDir)
+	if absolute, err := filepath.Abs(clean); err == nil {
+		clean = absolute
+	}
+	resourceName := filepath.Base(clean)
+	parent := filepath.Dir(clean)
+	scope := "project"
+	projectRoot := parent
+	switch filepath.Base(parent) {
+	case "applications":
+		scope = "app"
+		projectRoot = filepath.Dir(parent)
+	case "core":
+		scope = "core"
+		projectRoot = filepath.Dir(parent)
+	}
+
+	digest := sha256.Sum256([]byte(projectRoot + "\x00" + scope + "\x00" + resourceName))
+	return "redlaunch-" + scope + "-" + composeProjectSlug(resourceName) + "-" + fmt.Sprintf("%x", digest[:6])
+}
+
+// ProjectName returns the explicit Compose identity used for a managed project.
+// The migration inventory command exposes this without invoking Docker.
+func ProjectName(projectDir string) string {
+	return composeProjectName(projectDir)
+}
+
+func composeProjectSlug(value string) string {
+	var slug strings.Builder
+	lastDash := false
+	for _, character := range strings.ToLower(value) {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			slug.WriteRune(character)
+			lastDash = false
+		} else if slug.Len() > 0 && !lastDash {
+			slug.WriteByte('-')
+			lastDash = true
+		}
+		if slug.Len() >= 24 {
+			break
+		}
+	}
+	result := strings.Trim(slug.String(), "-")
+	if result == "" {
+		return "resource"
+	}
+	return result
+}
+
+func composeProcessEnvironment(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, managerOnly := managerEnvironmentKeys[key]; managerOnly {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }

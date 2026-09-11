@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,6 +37,8 @@ func main() {
 			err = runBackup(ctx, os.Args[2:])
 		case "auth-add-email", "add-authorized-email":
 			err = runAddAuthorizedEmail(ctx, os.Args[2:])
+		case "compose-project-name":
+			err = runComposeProjectName(os.Args[2:], os.Stdout)
 		default:
 			err = run(ctx)
 		}
@@ -46,6 +49,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func runComposeProjectName(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("redlaunch compose-project-name", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	directory := flags.String("directory", "", "managed project directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*directory) == "" {
+		return errors.New("compose project directory is required")
+	}
+	if flags.NArg() != 0 {
+		return errors.New("compose-project-name accepts no positional arguments")
+	}
+	_, err := fmt.Fprintln(output, compose.ProjectName(*directory))
+	return err
 }
 
 func run(ctx context.Context) error {

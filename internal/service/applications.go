@@ -205,7 +205,7 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 		return application.ErrEnvironmentFileNotFound
 	}
 
-	value, err := findEnvironmentVariable(string(sourceSnapshot.contents), name)
+	value, rawValue, err := findEnvironmentVariableToken(string(sourceSnapshot.contents), name)
 	if err != nil {
 		return err
 	}
@@ -216,7 +216,7 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 	if err != nil {
 		return err
 	}
-	updatedDestination, err := appendEnvironmentVariable(string(destinationSnapshot.contents), name, value)
+	updatedDestination, err := appendRawEnvironmentVariable(string(destinationSnapshot.contents), name, rawValue)
 	if err != nil {
 		return err
 	}

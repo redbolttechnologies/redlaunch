@@ -33,7 +33,7 @@ func TestCommandRunnerBackupPostgreSQLUsesContainerEnvironmentAndWritesSQL(t *te
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(args)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "exec", "-T", "db", "sh", "-c", postgresDumpScript}
+	want := expectedComposeArguments(projectDir, "exec", "-T", "db", "sh", "-c", postgresDumpScript)
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("backup arguments = %#v, want %#v", got, want)
 	}
@@ -67,7 +67,7 @@ func TestCommandRunnerRestorePostgreSQLReadsManagedBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(args)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "exec", "-T", "db", "sh", "-c", postgresRestoreScript}
+	want := expectedComposeArguments(projectDir, "exec", "-T", "db", "sh", "-c", postgresRestoreScript)
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("restore arguments = %#v, want %#v", got, want)
 	}

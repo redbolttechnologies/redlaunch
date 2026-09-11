@@ -415,6 +415,117 @@ Redlaunch saves the routing in SQLite, regenerates the managed Caddyfile, and
 reloads Caddy. Add additional routes for other subdomains or paths as needed.
 Longer path matchers take precedence when multiple routes share a host.
 
+## Before a managed-resource migration
+
+Run this inventory and backup procedure before a release that changes Compose
+project identities, container ownership, volume mappings, database service
+configuration, routing metadata, or backup timers. Use a maintenance window.
+The procedure records labels and non-secret metadata; it never prints
+<code>.env</code>, <code>vars.env</code>, or <code>secrets.env</code> contents.
+
+From the Redlaunch installation directory, choose the configured projects root
+(the default is the <code>projects</code> directory), create a private backup
+directory outside that tree, and record the current resource inventory:
+
+~~~sh
+umask 077
+projects_root="$(pwd)/projects"
+backup_dir="$(dirname "$(pwd)")/redlaunch-pre-migration-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 0700 "$backup_dir"
+
+find "$projects_root/applications" "$projects_root/core" \
+  -mindepth 1 -maxdepth 1 -type d -print | sort > "$backup_dir/project-directories.txt"
+docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Label "redlaunch.managed"}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}\t{{.Label "com.docker.compose.project.config_files"}}' \
+  > "$backup_dir/containers.tsv"
+docker volume ls --filter label=com.docker.compose.project \
+  --format '{{.Name}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.volume"}}' \
+  > "$backup_dir/volumes.tsv"
+systemctl list-unit-files 'redlaunch-backup-*.timer' --no-pager \
+  > "$backup_dir/backup-timer-files.txt"
+systemctl list-timers 'redlaunch-backup-*.timer' --all --no-pager \
+  > "$backup_dir/backup-timers.txt"
+~~~
+
+If <code>PROJECTS_ROOT</code> is customized, set <code>projects_root</code> to
+that absolute host path. Review <code>containers.tsv</code> for duplicate Compose
+project labels, especially an application and core component that both use a
+folder such as <code>proxy</code>. Review <code>volumes.tsv</code> before any
+container recreation; a named volume is part of the data identity even when a
+Compose project name changes.
+
+Stop the manager so SQLite is closed, then copy the complete data volume,
+managed project tree, and installation settings without displaying their
+contents:
+
+~~~sh
+docker compose stop app
+docker run --rm \
+  --mount type=volume,src=redlaunch_app-data,dst=/source,readonly \
+  --mount type=bind,src="$backup_dir",dst=/backup \
+  alpine:3.22 tar -C /source -czf /backup/app-data.tar.gz .
+tar -C "$projects_root" -czf "$backup_dir/projects.tar.gz" .
+tar -czf "$backup_dir/installation-settings.tar.gz" .env docker-compose.yml
+chmod 0600 "$backup_dir"/*.tar.gz
+mkdir -m 0700 "$backup_dir/app-data"
+tar -C "$backup_dir/app-data" -xzf "$backup_dir/app-data.tar.gz"
+~~~
+
+The archives contain credentials and must remain readable only by the operator.
+Do not attach them to issues or copy them into the repository. To inventory the
+non-secret SQLite metadata, install the distribution's <code>sqlite3</code>
+command if necessary and run:
+
+~~~sh
+sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
+  'SELECT a.id, a.folder_name, s.id AS service_id, s.name AS service_name, s.service_type FROM applications a LEFT JOIN services s ON s.application_id = a.id ORDER BY a.id, s.id' \
+  > "$backup_dir/application-services.tsv"
+sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
+  'SELECT application_id, domain_id, subdomain, path, service_name, service_path FROM routings ORDER BY application_id, domain_id, id' \
+  > "$backup_dir/routings.tsv"
+sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
+  'SELECT service_id, enabled, schedule_type, hour, minute, weekday, retention_days, backup_location FROM backup_schedules ORDER BY service_id' \
+  > "$backup_dir/backup-schedules.tsv"
+docker compose start app
+~~~
+
+Confirm that the manager is healthy and that the backup contains the expected
+applications, multiple database rows, routes, named volumes, and enabled timer
+rows before proceeding. If any step after <code>docker compose stop app</code>
+fails, keep the private backup directory and restart the manager before
+troubleshooting. Never use an old ambiguous project-wide
+<code>down --volumes</code> as a migration shortcut.
+
+When a reviewed release explicitly instructs you to adopt new Compose project
+identities, use the recorded project label and absolute configuration path to
+stop each old project once, without deleting volumes:
+
+~~~sh
+docker compose --project-name OLD_PROJECT -f ABSOLUTE_CONFIG_FILE down --remove-orphans
+~~~
+
+Do not proceed when <code>volumes.tsv</code> shows a project-scoped volume whose
+new identity has not been mapped by the release's migration instructions. After
+updating and rebuilding Redlaunch, recreate each reviewed project under the
+identity calculated by the same production binary:
+
+~~~sh
+while IFS= read -r project_dir; do
+  if [ -f "$project_dir/compose.yml" ]; then
+    compose_file="$project_dir/compose.yml"
+  elif [ -f "$project_dir/compose.yaml" ]; then
+    compose_file="$project_dir/compose.yaml"
+  else
+    continue
+  fi
+  project_name=$(docker compose exec -T app \
+    redlaunch compose-project-name --directory "$project_dir")
+  docker compose --project-name "$project_name" -f "$compose_file" up -d
+done < "$backup_dir/project-directories.txt"
+~~~
+
+The helper prints only the derived project name. Keep the configured absolute
+projects-root path stable: it is part of the installation-scoped identity.
+
 ## Troubleshooting
 
 - **<code>redirect_uri_mismatch</code>**: register both the configured local

@@ -60,10 +60,16 @@ func parseEnvironmentEntry(line string) (string, string, bool) {
 }
 
 func findEnvironmentVariable(contents, name string) (string, error) {
+	value, _, err := findEnvironmentVariableToken(contents, name)
+	return value, err
+}
+
+func findEnvironmentVariableToken(contents, name string) (string, string, error) {
 	contents = strings.ReplaceAll(contents, "\r\n", "\n")
 	contents = strings.TrimPrefix(contents, "\ufeff")
 
 	var value string
+	var token string
 	found := false
 	for _, line := range strings.Split(contents, "\n") {
 		key, parsedValue, ok := parseEnvironmentEntry(line)
@@ -71,15 +77,20 @@ func findEnvironmentVariable(contents, name string) (string, error) {
 			continue
 		}
 		if found {
-			return "", application.ErrEnvironmentVariableDuplicate
+			return "", "", application.ErrEnvironmentVariableDuplicate
 		}
 		found = true
 		value = parsedValue
+		rawValue := environmentEntryValue(line)
+		if comment := environmentCommentSuffix(rawValue); comment != "" {
+			rawValue = strings.TrimSuffix(rawValue, comment)
+		}
+		token = strings.TrimSpace(rawValue)
 	}
 	if !found {
-		return "", application.ErrEnvironmentVariableNotFound
+		return "", "", application.ErrEnvironmentVariableNotFound
 	}
-	return value, nil
+	return value, token, nil
 }
 
 func validateEnvironmentFileContents(contents []byte) error {
@@ -213,8 +224,9 @@ func updateEnvironmentFile(contents, originalName, name, value string) (string, 
 	}
 	lines := strings.Split(contents, "\n")
 	target := -1
+	currentValue := ""
 	for index, line := range lines {
-		key, _, ok := parseEnvironmentEntry(line)
+		key, parsedValue, ok := parseEnvironmentEntry(line)
 		if !ok {
 			continue
 		}
@@ -226,13 +238,16 @@ func updateEnvironmentFile(contents, originalName, name, value string) (string, 
 				return "", application.ErrEnvironmentVariableDuplicate
 			}
 			target = index
+			currentValue = parsedValue
 		}
 	}
 	if target < 0 {
 		return "", application.ErrEnvironmentVariableNotFound
 	}
 
-	lines[target] = formatEnvironmentEntry(lines[target], name, value)
+	if originalName != name || currentValue != value {
+		lines[target] = formatEnvironmentEntry(lines[target], name, value)
+	}
 	updated := strings.Join(lines, "\n")
 	if trailingNewline {
 		updated += "\n"
@@ -244,6 +259,17 @@ func updateEnvironmentFile(contents, originalName, name, value string) (string, 
 }
 
 func appendEnvironmentVariable(contents, name, value string) (string, error) {
+	return appendEnvironmentEntry(contents, name, formatEnvironmentValue(value))
+}
+
+func appendRawEnvironmentVariable(contents, name, rawValue string) (string, error) {
+	if !validEnvironmentValueSyntax(rawValue) {
+		return "", application.ErrEnvironmentVariableValueInvalid
+	}
+	return appendEnvironmentEntry(contents, name, rawValue)
+}
+
+func appendEnvironmentEntry(contents, name, encodedValue string) (string, error) {
 	lineEnding := "\n"
 	if strings.Contains(contents, "\r\n") {
 		lineEnding = "\r\n"
@@ -261,7 +287,7 @@ func appendEnvironmentVariable(contents, name, value string) (string, error) {
 		}
 	}
 
-	entry := name + "=" + formatEnvironmentValue(value)
+	entry := name + "=" + encodedValue
 	if contents == "" {
 		return bom + entry + lineEnding, nil
 	}

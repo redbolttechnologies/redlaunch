@@ -107,7 +107,9 @@ Redlaunch container does not remove the database.
 
 ## Local development
 
-Local development requires Go 1.25 or newer and a running user systemd manager.
+Local development uses the pinned Go 1.26.8 toolchain and requires a running
+user systemd manager. With Go toolchain auto-downloads enabled, the Make targets
+select that patch release through <code>GOTOOLCHAIN</code>.
 
 ```sh
 cp .env.example .env
@@ -143,6 +145,18 @@ make lint
 make compose-config
 make docker-build
 ```
+
+For a release candidate, run the complete Phase 0 gate:
+
+```sh
+make release-check
+```
+
+It builds and scans the Linux artifact separately from the local host binary,
+validates Compose, builds the production image, and records binary/image
+identity under `bin/`. The vulnerability database and container base images
+require network access; generated release identity files remain excluded from
+Git.
 
 ## Security
 

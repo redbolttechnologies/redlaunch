@@ -59,15 +59,17 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 	if err != nil {
 		return application.Service{}, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.rejectExistingDatabaseServiceType(ctx, applicationID, application.ServiceTypePostgreSQL); err != nil {
+		return application.Service{}, err
+	}
 	if databasePassword == "" {
 		databasePassword, err = generateDatabasePassword()
 		if err != nil {
 			return application.Service{}, fmt.Errorf("generate PostgreSQL password: %w", err)
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
@@ -150,6 +152,19 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		return created, fmt.Errorf("start PostgreSQL service: %w", err)
 	}
 	return created, nil
+}
+
+func (s *Applications) rejectExistingDatabaseServiceType(ctx context.Context, applicationID int64, serviceType string) error {
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("list application services: %w", err)
+	}
+	for _, existing := range services {
+		if existing.Type == serviceType {
+			return application.ErrDatabaseServiceTypeAlreadyExists
+		}
+	}
+	return nil
 }
 
 func reportPostgreSQLProgress(progress func(stage, message string), stage, message string) {

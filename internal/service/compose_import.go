@@ -264,6 +264,9 @@ func addManagedFieldsToImportedCompose(contents string, services []importedCompo
 	for index := len(services) - 1; index >= 0; index-- {
 		service := services[index]
 		block := append([]string(nil), lines[service.start:service.end]...)
+		if err := rejectImportedManagedFieldAliases(block, service.name); err != nil {
+			return "", err
+		}
 		block = normalizeImportedServiceHeader(block)
 		block = ensureImportedContainerName(block, managedContainerNamePrefix+strconv.FormatInt(applicationID, 10)+"-"+service.name)
 		block = ensureImportedEnvFiles(block)
@@ -271,6 +274,20 @@ func addManagedFieldsToImportedCompose(contents string, services []importedCompo
 		lines = replaceImportedYAMLLines(lines, service.start, service.end, block)
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func rejectImportedManagedFieldAliases(lines []string, serviceName string) error {
+	for _, field := range []string{"env_file", "labels"} {
+		_, _, value, ok := importedYAMLField(lines, field)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "*") || strings.HasPrefix(value, "&") {
+			return fmt.Errorf("%w: service %q uses an unsupported YAML alias or anchor for %s", application.ErrComposeFileInvalid, serviceName, field)
+		}
+	}
+	return nil
 }
 
 func normalizeImportedServiceHeader(lines []string) []string {

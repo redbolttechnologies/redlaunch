@@ -102,6 +102,7 @@ var (
 	ErrRoutingAlreadyExists             = errors.New("routing already exists")
 	ErrRoutingNotFound                  = errors.New("routing not found")
 	ErrServiceAlreadyExists             = errors.New("service already exists")
+	ErrDatabaseServiceTypeAlreadyExists = errors.New("application already has a database service of this type")
 	ErrServiceNotFound                  = errors.New("service not found")
 	ErrEnvironmentVariableNameRequired  = errors.New("environment variable name is required")
 	ErrEnvironmentVariableNameInvalid   = errors.New("environment variable name is invalid")

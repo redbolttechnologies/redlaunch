@@ -328,7 +328,7 @@
       nameInput.value = button.dataset.secretKey || "";
     }
     if (valueInput) {
-      valueInput.value = button.dataset.secretValue || "";
+      valueInput.value = "";
     }
     showDialog();
   };

@@ -1,0 +1,27 @@
+name: proxy
+
+services:
+  db-primary:
+    image: postgres:17
+    env_file:
+      - vars.env
+      - secrets.env
+    volumes:
+      - db_primary_data:/var/lib/postgresql/data
+    labels:
+      - "redlaunch.managed=true"
+  db-analytics:
+    image: postgres:16
+    env_file:
+      - vars.env
+      - secrets.env
+    volumes:
+      - db_analytics_data:/var/lib/postgresql/data
+    labels:
+      - "redlaunch.managed=true"
+
+volumes:
+  db_primary_data:
+    name: redbolt-7-db-primary-data
+  db_analytics_data:
+    name: redbolt-7-db-analytics-data

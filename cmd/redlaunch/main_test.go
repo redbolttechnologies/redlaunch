@@ -1,12 +1,29 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"redlaunch/internal/store"
 )
+
+func TestRunComposeProjectNameSeparatesManagedResourceKinds(t *testing.T) {
+	root := t.TempDir()
+	var applicationName bytes.Buffer
+	if err := runComposeProjectName([]string{"--directory", filepath.Join(root, "applications", "proxy")}, &applicationName); err != nil {
+		t.Fatal(err)
+	}
+	var coreName bytes.Buffer
+	if err := runComposeProjectName([]string{"--directory", filepath.Join(root, "core", "proxy")}, &coreName); err != nil {
+		t.Fatal(err)
+	}
+	if applicationName.String() == coreName.String() {
+		t.Fatalf("application and core Compose project names both equal %q", strings.TrimSpace(applicationName.String()))
+	}
+}
 
 func TestRunFailsClosedWithoutGoogleAuthentication(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "")

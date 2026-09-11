@@ -2044,6 +2044,9 @@ func (h *Handler) renderApplicationVariableEditError(w http.ResponseWriter, r *h
 }
 
 func (h *Handler) renderApplicationSecretEditError(w http.ResponseWriter, r *http.Request, id int64, edit *secretEditPageData, status int) {
+	// A submitted secret must not be reflected into the response. The name and
+	// validation state are retained, while the replacement value is re-entered.
+	edit.Value = ""
 	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
 		http.NotFound(w, r)

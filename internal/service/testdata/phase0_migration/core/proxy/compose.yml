@@ -1,0 +1,10 @@
+name: proxy
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    env_file:
+      - vars.env
+      - secrets.env
+    labels:
+      - "redlaunch.managed=true"

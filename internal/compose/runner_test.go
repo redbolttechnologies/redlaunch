@@ -60,7 +60,7 @@ func TestCommandRunnerUpServiceUsesExplicitComposeArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "up", "-d", "db"}
+	want := expectedComposeArguments(projectDir, "up", "-d", "db")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
@@ -85,7 +85,7 @@ func TestCommandRunnerRestartProjectBuildsRecreatesAndWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "up", "-d", "--build", "--force-recreate", "--wait", "--wait-timeout", "30"}
+	want := expectedComposeArguments(projectDir, "up", "-d", "--build", "--force-recreate", "--wait", "--wait-timeout", "30")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
@@ -115,7 +115,7 @@ func TestCommandRunnerConfigServicesUsesMachineReadableComposeConfiguration(t *t
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution"}
+	want := expectedComposeArguments(projectDir, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
@@ -152,7 +152,7 @@ func TestCommandRunnerServiceActionsUseExplicitComposeArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-			want := []string{"compose", "-f", "compose.yml"}
+			want := expectedComposeArguments(projectDir)
 			want = append(want, strings.Split(testCase.command, " ")...)
 			want = append(want, "db")
 			if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
@@ -181,7 +181,7 @@ func TestCommandRunnerDownRemovesProjectContainersAndResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "down", "--volumes", "--remove-orphans"}
+	want := expectedComposeArguments(projectDir, "down", "--volumes", "--remove-orphans")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Down() arguments = %#v, want %#v", got, want)
 	}
@@ -205,7 +205,7 @@ func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}
+	want := expectedComposeArguments(projectDir, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("ReloadProxy() arguments = %#v, want %#v", got, want)
 	}
@@ -298,7 +298,7 @@ func TestCommandRunnerLogsUsesBoundedTailAndNoColor(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "logs", "--tail", "25", "--no-color", "--no-log-prefix", "db"}
+	want := expectedComposeArguments(projectDir, "logs", "--tail", "25", "--no-color", "--no-log-prefix", "db")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Logs() arguments = %#v, want %#v", got, want)
 	}
@@ -327,7 +327,7 @@ func TestCommandRunnerAllLogsDoesNotApplyTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "logs", "--no-color", "--no-log-prefix", "proxy"}
+	want := expectedComposeArguments(projectDir, "logs", "--no-color", "--no-log-prefix", "proxy")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("AllLogs() arguments = %#v, want %#v", got, want)
 	}
@@ -357,9 +357,59 @@ func TestCommandRunnerEnvironmentReadsResolvedComposeConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := []string{"compose", "-f", "compose.yml", "config", "--format", "json", "db"}
+	want := expectedComposeArguments(projectDir, "config", "--format", "json", "db")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Environment() arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestComposeProjectNamesSeparateApplicationAndCoreResources(t *testing.T) {
+	root := t.TempDir()
+	applicationDir := filepath.Join(root, "applications", "proxy")
+	coreDir := filepath.Join(root, "core", "proxy")
+
+	applicationProject := composeProjectName(applicationDir)
+	coreProject := composeProjectName(coreDir)
+	if applicationProject == coreProject {
+		t.Fatalf("application and core Compose project names both equal %q", applicationProject)
+	}
+	if !strings.HasPrefix(applicationProject, "redlaunch-app-proxy-") {
+		t.Fatalf("application Compose project name = %q, want redlaunch app prefix", applicationProject)
+	}
+	if !strings.HasPrefix(coreProject, "redlaunch-core-proxy-") {
+		t.Fatalf("core Compose project name = %q, want redlaunch core prefix", coreProject)
+	}
+}
+
+func TestCommandRunnerExcludesManagerOnlyEnvironment(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUTH_SESSION_SECRET", "manager-only-marker")
+	t.Setenv("APP_INTERPOLATION_VALUE", "application-marker")
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}"
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	environment, err := (CommandRunner{Binary: binary}).Environment(context.Background(), projectDir, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]string, len(environment))
+	for _, variable := range environment {
+		values[variable.Key] = variable.Value
+	}
+	if values["MANAGER_VALUE"] != "unset" {
+		t.Fatal("manager-only authentication environment reached Docker Compose")
+	}
+	if values["APP_VALUE"] != "application-marker" {
+		t.Fatalf("application interpolation environment = %q, want application-marker", values["APP_VALUE"])
 	}
 }
 
@@ -384,4 +434,9 @@ func environmentPairs(values []EnvironmentVariable) []string {
 		pairs = append(pairs, value.Key+"="+value.Value)
 	}
 	return pairs
+}
+
+func expectedComposeArguments(projectDir string, args ...string) []string {
+	expected := []string{"compose", "--project-name", composeProjectName(projectDir), "-f", "compose.yml"}
+	return append(expected, args...)
 }

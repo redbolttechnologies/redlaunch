@@ -426,6 +426,36 @@ func TestApplicationsImportDockerComposeProjectRegistersManagedServices(t *testi
 	}
 }
 
+func TestPhaseZeroMigrationComposeFixturesCoverProjectCollisionAndNamedVolumes(t *testing.T) {
+	applicationCompose, err := os.ReadFile("testdata/phase0_migration/applications/proxy/compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreCompose, err := os.ReadFile("testdata/phase0_migration/core/proxy/compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string][]byte{"application": applicationCompose, "core": coreCompose} {
+		lines := strings.Split(string(contents), "\n")
+		_, projectName, ok := findTopLevelYAMLKey(lines, "name")
+		if !ok || projectName != "proxy" {
+			t.Fatalf("%s fixture project name = %q, want imported proxy", name, projectName)
+		}
+	}
+	services, err := parseImportedComposeServices(string(applicationCompose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 2 {
+		t.Fatalf("application fixture services = %#v, want two databases", services)
+	}
+	for _, volumeName := range []string{"redbolt-7-db-primary-data", "redbolt-7-db-analytics-data"} {
+		if !strings.Contains(string(applicationCompose), "name: "+volumeName) {
+			t.Fatalf("application fixture does not preserve named volume %q", volumeName)
+		}
+	}
+}
+
 func TestApplicationsImportDockerComposeProjectRollsBackOnValidationFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
@@ -454,6 +484,45 @@ func TestApplicationsImportDockerComposeProjectRollsBackOnValidationFailure(t *t
 	for _, name := range []string{varsEnvFile, secretsEnvFile} {
 		if got := readServiceFile(t, filepath.Join(directory, name)); got != "" {
 			t.Fatalf("%s after failed import = %q, want empty original file", name, got)
+		}
+	}
+}
+
+func TestApplicationsImportDockerComposeProjectRejectsMappingAliasWithoutChanges(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{configured: []compose.ConfiguredService{{Name: "web", Image: "nginx:1.27"}}}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdApplication, err := applications.Create(t.Context(), "Status", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status")
+	composePath := filepath.Join(directory, "compose.yml")
+	varsPath := filepath.Join(directory, varsEnvFile)
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	originalCompose := readServiceFile(t, composePath)
+	originalVars := readServiceFile(t, varsPath)
+	originalSecrets := readServiceFile(t, secretsPath)
+
+	contents := []byte("x-labels: &shared-labels\n  example.owner: platform\nname: imported-project\nservices:\n  web:\n    image: nginx:1.27\n    labels: *shared-labels\n")
+	_, err = applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, contents)
+	if !errors.Is(err, application.ErrComposeFileInvalid) {
+		t.Fatalf("ImportDockerComposeProject() error = %v, want %v", err, application.ErrComposeFileInvalid)
+	}
+	if len(repository.services) != 0 {
+		t.Fatalf("persisted services after rejected alias import = %#v, want none", repository.services)
+	}
+	for path, want := range map[string]string{
+		composePath: originalCompose,
+		varsPath:    originalVars,
+		secretsPath: originalSecrets,
+	} {
+		if got := readServiceFile(t, path); got != want {
+			t.Fatalf("%s after rejected alias import = %q, want original %q", filepath.Base(path), got, want)
 		}
 	}
 }
@@ -960,6 +1029,34 @@ func TestApplicationsUpdateEnvironmentVariablePreservesFileStructure(t *testing.
 	}
 }
 
+func TestApplicationsUnchangedDollarValuePreservesRawToken(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	original := "# Compose escapes a literal dollar as two dollars.\nCOST=\"$$5\"\n"
+	if err := os.WriteFile(varsPath, []byte(original), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.UpdateEnvironmentVariable(t.Context(), 7, "COST", "COST", "$$5"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, varsPath); got != original {
+		t.Fatalf("unchanged vars.env = %q, want exact original %q", got, original)
+	}
+}
+
 func TestApplicationsUpdateEnvironmentVariableRejectsUnsafeOrAmbiguousUpdates(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{
@@ -1220,7 +1317,7 @@ func TestApplicationsMoveEnvironmentVariableToSecretsPreservesFiles(t *testing.T
 	if got := readServiceFile(t, varsPath); got != wantVars {
 		t.Fatalf("vars.env after move = %q, want %q", got, wantVars)
 	}
-	wantSecrets := "# application secrets\nAPI_TOKEN=keep-me\nAPP_NAME=\"Status page\"\n"
+	wantSecrets := "# application secrets\nAPI_TOKEN=keep-me\nAPP_NAME=Status page\n"
 	if got := readServiceFile(t, secretsPath); got != wantSecrets {
 		t.Fatalf("secrets.env after move = %q, want %q", got, wantSecrets)
 	}
@@ -1229,6 +1326,40 @@ func TestApplicationsMoveEnvironmentVariableToSecretsPreservesFiles(t *testing.T
 	}
 	if got := serviceFilePermissions(t, secretsPath); got != 0o600 {
 		t.Fatalf("secrets.env permissions after move = %o, want %o", got, 0o600)
+	}
+}
+
+func TestApplicationsMoveEnvironmentVariablePreservesInterpolationToken(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	if err := os.WriteFile(varsPath, []byte("BASE=https://example.test\nTARGET=${BASE}/api\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretsPath, []byte("# application secrets\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.MoveEnvironmentVariableToSecrets(t.Context(), 7, "TARGET"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, varsPath); got != "BASE=https://example.test\n" {
+		t.Fatalf("vars.env after interpolation move = %q", got)
+	}
+	if got := readServiceFile(t, secretsPath); got != "# application secrets\nTARGET=${BASE}/api\n" {
+		t.Fatalf("secrets.env after interpolation move = %q, want raw interpolation token", got)
 	}
 }
 
@@ -1301,7 +1432,7 @@ func TestApplicationsMoveEnvironmentSecretToVariablesPreservesFiles(t *testing.T
 	if got := readServiceFile(t, secretsPath); got != wantSecrets {
 		t.Fatalf("secrets.env after move = %q, want %q", got, wantSecrets)
 	}
-	wantVars := "# application settings\nAPP_NAME=Status page\nAPI_TOKEN=\"Secret value\"\n"
+	wantVars := "# application settings\nAPP_NAME=Status page\nAPI_TOKEN=Secret value\n"
 	if got := readServiceFile(t, varsPath); got != wantVars {
 		t.Fatalf("vars.env after move = %q, want %q", got, wantVars)
 	}
@@ -2409,6 +2540,60 @@ func TestApplicationsCreatePostgreSQLServicePreservesExistingEnvironmentAndPassw
 	}
 }
 
+func TestApplicationsRejectsSecondPostgreSQLServiceWithoutChangingConfiguration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &recordingRunner{}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := application.PostgreSQLServiceInput{
+		ServiceName:      "db-primary",
+		PostgresVersion:  "17",
+		DatabaseName:     "primary",
+		DatabaseUser:     "primary_user",
+		DatabasePassword: "first-password",
+	}
+	if _, err := applications.CreatePostgreSQLService(t.Context(), created.ID, firstInput); err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	composeBefore := readServiceFile(t, filepath.Join(directory, "compose.yml"))
+	varsBefore := readServiceFile(t, filepath.Join(directory, varsEnvFile))
+	secretsBefore := readServiceFile(t, filepath.Join(directory, secretsEnvFile))
+	_, err = applications.CreatePostgreSQLService(t.Context(), created.ID, application.PostgreSQLServiceInput{
+		ServiceName:      "db-secondary",
+		PostgresVersion:  "17",
+		DatabaseName:     "secondary",
+		DatabaseUser:     "secondary_user",
+		DatabasePassword: "second-password",
+	})
+	if !errors.Is(err, application.ErrDatabaseServiceTypeAlreadyExists) {
+		t.Fatalf("second CreatePostgreSQLService() error = %v, want %v", err, application.ErrDatabaseServiceTypeAlreadyExists)
+	}
+	if len(repository.services) != 1 || repository.services[0].Name != firstInput.ServiceName {
+		t.Fatalf("services after rejected PostgreSQL create = %#v, want only first service", repository.services)
+	}
+	if len(runner.services) != 1 {
+		t.Fatalf("started services after rejected PostgreSQL create = %v, want one", runner.services)
+	}
+	if got := readServiceFile(t, filepath.Join(directory, "compose.yml")); got != composeBefore {
+		t.Fatal("Compose configuration changed after rejecting a second PostgreSQL service")
+	}
+	if got := readServiceFile(t, filepath.Join(directory, varsEnvFile)); got != varsBefore {
+		t.Fatal("variable configuration changed after rejecting a second PostgreSQL service")
+	}
+	if got := readServiceFile(t, filepath.Join(directory, secretsEnvFile)); got != secretsBefore {
+		t.Fatal("secret configuration changed after rejecting a second PostgreSQL service")
+	}
+}
+
 func TestApplicationsCreatePostgreSQLServiceLeavesFilesWhenMetadataPersistenceFails(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
@@ -2513,6 +2698,59 @@ func TestApplicationsCreateRedisServiceWritesProductionComposeAndPersistsSetting
 	}
 	if got := serviceFilePermissions(t, filepath.Join(directory, secretsEnvFile)); got != envFileMode {
 		t.Errorf("secrets.env permissions = %o, want %o", got, envFileMode)
+	}
+}
+
+func TestApplicationsRejectsSecondRedisServiceWithoutChangingConfiguration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &recordingRunner{}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := application.RedisServiceInput{
+		ServiceName:   "cache-primary",
+		RedisVersion:  "7.2-alpine",
+		Port:          "6380",
+		Password:      "first-password",
+		PersistToDisk: true,
+	}
+	if _, err := applications.CreateRedisService(t.Context(), created.ID, firstInput); err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	composeBefore := readServiceFile(t, filepath.Join(directory, "compose.yml"))
+	varsBefore := readServiceFile(t, filepath.Join(directory, varsEnvFile))
+	secretsBefore := readServiceFile(t, filepath.Join(directory, secretsEnvFile))
+	_, err = applications.CreateRedisService(t.Context(), created.ID, application.RedisServiceInput{
+		ServiceName:  "cache-secondary",
+		RedisVersion: "7.2-alpine",
+		Port:         "6381",
+		Password:     "second-password",
+	})
+	if !errors.Is(err, application.ErrDatabaseServiceTypeAlreadyExists) {
+		t.Fatalf("second CreateRedisService() error = %v, want %v", err, application.ErrDatabaseServiceTypeAlreadyExists)
+	}
+	if len(repository.services) != 1 || repository.services[0].Name != firstInput.ServiceName {
+		t.Fatalf("services after rejected Redis create = %#v, want only first service", repository.services)
+	}
+	if len(runner.services) != 1 {
+		t.Fatalf("started services after rejected Redis create = %v, want one", runner.services)
+	}
+	if got := readServiceFile(t, filepath.Join(directory, "compose.yml")); got != composeBefore {
+		t.Fatal("Compose configuration changed after rejecting a second Redis service")
+	}
+	if got := readServiceFile(t, filepath.Join(directory, varsEnvFile)); got != varsBefore {
+		t.Fatal("variable configuration changed after rejecting a second Redis service")
+	}
+	if got := readServiceFile(t, filepath.Join(directory, secretsEnvFile)); got != secretsBefore {
+		t.Fatal("secret configuration changed after rejecting a second Redis service")
 	}
 }
 

@@ -2089,7 +2089,6 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 		`data-variable-add`,
 		`>Add variable</span>`,
 		`data-secret-edit`,
-		`data-secret-value="super-secret"`,
 		`aria-label="Edit secret API_TOKEN"`,
 		`data-secret-move`,
 		`aria-label="Move secret API_TOKEN to variables"`,
@@ -2149,6 +2148,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	}
 	if strings.Count(body, `class="service-environment-masked"`) != 1 {
 		t.Fatalf("GET /applications/7 rendered %d masked values, want 1: %s", strings.Count(body, `class="service-environment-masked"`), body)
+	}
+	if strings.Contains(body, "super-secret") || strings.Contains(body, "data-secret-value") {
+		t.Fatal("GET /applications/7 included a secret value in the response")
 	}
 }
 
@@ -2618,7 +2620,7 @@ func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 		`<h2 id="secret-edit-dialog-title" data-secret-edit-title>Add secret</h2>`,
 		`role="alert">Enter a secret name.</div>`,
 		`name="operation" value="add"`,
-		`id="secret-edit-value" name="value" type="password" value="new-secret"`,
+		`id="secret-edit-value" name="value" type="password" value=""`,
 		`data-secret-toggle`,
 		`data-secret-generate`,
 		`Generate secret`,
@@ -2626,6 +2628,9 @@ func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST add secret did not render %q: %s", expected, body)
 		}
+	}
+	if strings.Contains(body, "new-secret") {
+		t.Fatal("POST add secret validation response reflected the submitted secret")
 	}
 }
 
