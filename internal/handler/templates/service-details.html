@@ -115,6 +115,9 @@
   {{template "service-details-logs.html" .}}
   {{end}}
 </section>
+{{if .BackupProgress}}
+{{template "backup-progress.html" .}}
+{{end}}
 {{end}}
 
 {{define "service-details-dashboard.html"}}

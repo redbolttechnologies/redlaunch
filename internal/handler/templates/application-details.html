@@ -498,7 +498,7 @@
     <header class="application-dialog-header">
       <div>
         <h2 id="application-delete-dialog-title">Delete application</h2>
-        <p id="application-delete-dialog-description">This stops and removes all containers and Docker Compose resources for <code>{{.ApplicationDetailsPage.Application.Name}}</code>, deletes its metadata from SQLite, and permanently removes its application folder. This action cannot be undone.</p>
+        <p id="application-delete-dialog-description">This stops and removes all containers and Docker Compose resources for <code>{{.ApplicationDetailsPage.Application.Name}}</code>, deletes its metadata from SQLite, and permanently removes its application folder. Existing database backup files are retained separately under the configured backup root. This action cannot be undone.</p>
       </div>
       <button class="icon-button" type="button" data-application-delete-close aria-label="Close delete application dialog">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">

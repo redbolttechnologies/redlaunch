@@ -106,6 +106,19 @@ project-wide files. This keeps multiple database services from overwriting one
 another's credentials. Legacy projects with ambiguous shared database
 credentials are refused for operator review.
 
+Backup and restore actions run as tracked operations rather than being tied to
+the browser request. One SQLite lease coordinates web, scheduled, and CLI
+operations for each database service; leases expire after a crashed process.
+Completed backup status updates do not overwrite later schedule edits, and
+completed dumps are published with collision-safe filenames. If a process is
+interrupted, a later backup conservatively removes only old Redlaunch temporary
+dump files. Application deletion records a durable tombstone and can resume
+from its last completed stage; the application page shows that retained
+checkpoint after a manager restart. Keep the SQLite database and project
+directory available until the deletion progress reaches completion. Application deletion
+retains backup files under the configured `BACKUP_ROOT` as separate operator
+artifacts; backup history records are removed with the application metadata.
+
 Redlaunch stores its SQLite database in the external Docker volume
 `redlaunch_app-data`. The setup script creates this volume, and it is kept
 outside the Compose project lifecycle so rebuilding or recreating the

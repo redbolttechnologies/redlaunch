@@ -576,6 +576,28 @@ fails, keep the private backup directory and restart the manager before
 troubleshooting. Never use an old ambiguous project-wide
 <code>down --volumes</code> as a migration shortcut.
 
+### Interrupted backups and deletion recovery
+
+Web backup and restore requests return a progress operation while the database
+command continues under the manager's execution deadline. The same service
+lease is used by the scheduled <code>backup-run</code> command, so do not
+manually remove lease rows during a running operation. A crashed process leaves
+an expiring lease; the next operation can reclaim it after the lease window.
+Old temporary dump files are removed conservatively by a later successful
+backup; files without Redlaunch's temporary filename prefix are never touched.
+
+Application deletion writes a tombstone before stopping Docker resources. If a
+stage fails, submit the deletion again with the exact application name after
+fixing the reported issue. The service resumes the recorded stage and keeps
+backup schedules, routing state, deployment-key cleanup, metadata, and the
+application folder coordinated. The application page reads the retained
+tombstone after a manager restart, so the interrupted stage remains
+operator-visible. Do not delete the SQLite database or manually remove the
+application directory while a deletion tombstone is incomplete.
+Backup files under <code>BACKUP_ROOT/&lt;folder&gt;/&lt;service&gt;</code> are retained
+when application metadata is deleted; export or remove those operator-managed
+artifacts separately after confirming the retention policy.
+
 When a reviewed release explicitly instructs you to adopt new Compose project
 identities, use the recorded project label and absolute configuration path to
 stop each old project once, without deleting volumes:

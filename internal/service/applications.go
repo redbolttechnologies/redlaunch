@@ -355,6 +355,25 @@ type applicationDeletionRepository interface {
 	DeleteApplication(context.Context, int64) error
 }
 
+type applicationDeletionIntentRepository interface {
+	BeginApplicationDeletion(context.Context, application.Application, time.Time) (application.ApplicationDeletionIntent, error)
+	GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error)
+	UpdateApplicationDeletion(context.Context, int64, string, string, string, time.Time) error
+}
+
+type applicationBackupLeaseRepository interface {
+	AcquireBackupLease(context.Context, int64, string, string, time.Time, time.Time) error
+	ReleaseBackupLease(context.Context, int64, string) error
+}
+
+type applicationDeletionScheduleDisabler interface {
+	DisableApplicationSchedules(context.Context, int64) error
+}
+
+type applicationDeletionCleanup interface {
+	CleanupApplicationKey(context.Context, int64) error
+}
+
 type composeServiceInspector interface {
 	ListServices(context.Context, string) ([]compose.ServiceRuntime, error)
 }
@@ -404,11 +423,44 @@ type Applications struct {
 	domainRepository   applicationDomainRepository
 	routingRepository  applicationRoutingRepository
 	settingsRepository redlaunchSettingsRepository
+	deletionIntents    applicationDeletionIntentRepository
+	backupLeases       applicationBackupLeaseRepository
+	scheduleDisabler   applicationDeletionScheduleDisabler
+	keyCleanup         applicationDeletionCleanup
 	applicationsDir    string
 	proxyDirectory     string
 	managementPort     int
 	runner             composeRunner
 	mu                 sync.Mutex
+}
+
+// SetApplicationDeletionDependencies supplies the optional infrastructure
+// operations that must agree with a durable application deletion intent.
+// Keeping them as narrow capabilities avoids coupling this service to the
+// backup and GitHub Actions implementations.
+func (s *Applications) SetApplicationDeletionDependencies(scheduleDisabler applicationDeletionScheduleDisabler, keyCleanup applicationDeletionCleanup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scheduleDisabler = scheduleDisabler
+	s.keyCleanup = keyCleanup
+}
+
+// ApplicationDeletionHandlesKeyCleanup reports whether the durable deletion
+// workflow owns deployment-key cleanup. The HTTP compatibility path uses this
+// to avoid running a second cleanup after the workflow has already completed.
+func (s *Applications) ApplicationDeletionHandlesKeyCleanup() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keyCleanup != nil
+}
+
+// GetApplicationDeletion exposes only the non-secret tombstone needed by the
+// HTTP layer to offer a retry after metadata has already been removed.
+func (s *Applications) GetApplicationDeletion(ctx context.Context, applicationID int64) (application.ApplicationDeletionIntent, error) {
+	if s.deletionIntents == nil {
+		return application.ApplicationDeletionIntent{}, application.ErrNotFound
+	}
+	return s.deletionIntents.GetApplicationDeletion(ctx, applicationID)
 }
 
 // NewApplications constructs an application service rooted below the
@@ -444,6 +496,8 @@ func NewApplicationsWithOptions(repository ApplicationRepository, projectsRoot s
 	domainRepository, _ := repository.(applicationDomainRepository)
 	routingRepository, _ := repository.(applicationRoutingRepository)
 	settingsRepository, _ := repository.(redlaunchSettingsRepository)
+	deletionIntents, _ := repository.(applicationDeletionIntentRepository)
+	backupLeases, _ := repository.(applicationBackupLeaseRepository)
 	runner := composeRunner(compose.CommandRunner{})
 	if len(runners) > 0 && runners[0] != nil {
 		runner = runners[0]
@@ -455,6 +509,8 @@ func NewApplicationsWithOptions(repository ApplicationRepository, projectsRoot s
 		domainRepository:   domainRepository,
 		routingRepository:  routingRepository,
 		settingsRepository: settingsRepository,
+		deletionIntents:    deletionIntents,
+		backupLeases:       backupLeases,
 		applicationsDir:    applicationsDirectory,
 		proxyDirectory:     filepath.Join(root, coreDir, proxyDir),
 		managementPort:     managementPortFromHTTPAddr(options.ManagementHTTPAddr),
@@ -1033,8 +1089,29 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	}
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
+	var intent application.ApplicationDeletionIntent
 	if err != nil {
-		return fmt.Errorf("get application for deletion: %w", err)
+		if s.deletionIntents == nil || !errors.Is(err, application.ErrNotFound) {
+			return fmt.Errorf("get application for deletion: %w", err)
+		}
+		intent, err = s.deletionIntents.GetApplicationDeletion(ctx, applicationID)
+		if err != nil {
+			return fmt.Errorf("get application deletion intent: %w", err)
+		}
+		item = application.Application{
+			ID:         intent.ApplicationID,
+			Name:       intent.Name,
+			FolderName: intent.FolderName,
+		}
+	}
+	if s.deletionIntents != nil && intent.ApplicationID == 0 {
+		intent, err = s.deletionIntents.BeginApplicationDeletion(ctx, item, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("record application deletion intent: %w", err)
+		}
+	}
+	if intent.State == "complete" {
+		return nil
 	}
 
 	s.mu.Lock()
@@ -1044,6 +1121,34 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	if err != nil {
 		return fmt.Errorf("resolve application directory for deletion: %w", err)
 	}
+	leases, err := s.acquireApplicationBackupLeases(ctx, applicationID)
+	if err != nil {
+		if s.deletionIntents != nil {
+			stage := intent.Stage
+			if stage == "" {
+				stage = applicationDeletionStageSchedules
+			}
+			return s.failApplicationDeletion(applicationID, stage, err)
+		}
+		return err
+	}
+	var deletionErr error
+	if s.deletionIntents == nil {
+		deletionErr = s.deleteApplicationWithoutIntent(ctx, applicationID, directory, remover, deleter, progress)
+	} else {
+		deletionErr = s.resumeApplicationDeletion(ctx, applicationID, intent, directory, remover, deleter, progress)
+	}
+	if releaseErr := leases.release(); releaseErr != nil {
+		leaseErr := fmt.Errorf("release application deletion leases: %w", releaseErr)
+		if deletionErr != nil {
+			return errors.Join(deletionErr, leaseErr)
+		}
+		return leaseErr
+	}
+	return deletionErr
+}
+
+func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, applicationID int64, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
 
 	reportApplicationDeletionProgress(progress, "resources", "Removing application containers and Docker resources")
 	if err := remover.Down(ctx, directory); err != nil {
@@ -1060,6 +1165,217 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 		return fmt.Errorf("delete application folder: %w", err)
 	}
 	return nil
+}
+
+const (
+	applicationDeletionStageResources = "resources"
+	applicationDeletionStageMetadata  = "metadata"
+	applicationDeletionStageSchedules = "schedules"
+	applicationDeletionStageRouting   = "routing"
+	applicationDeletionStageKeys      = "keys"
+	applicationDeletionStageFolder    = "folder"
+	applicationDeletionStageComplete  = "complete"
+	applicationDeletionStateRunning   = "running"
+	applicationDeletionStateFailed    = "failed"
+)
+
+func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicationID int64, intent application.ApplicationDeletionIntent, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
+	stage := intent.Stage
+	if stage == "" {
+		stage = applicationDeletionStageSchedules
+	}
+	if stage == applicationDeletionStageComplete || intent.State == "complete" {
+		return nil
+	}
+
+	if stage == applicationDeletionStageSchedules {
+		if s.scheduleDisabler != nil {
+			if err := s.scheduleDisabler.DisableApplicationSchedules(ctx, applicationID); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageSchedules, err)
+			}
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageResources, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = applicationDeletionStageResources
+	}
+
+	if stage == applicationDeletionStageResources {
+		reportApplicationDeletionProgress(progress, applicationDeletionStageResources, "Removing application containers and Docker resources")
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageResources, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		if err := remover.Down(ctx, directory); err != nil {
+			return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageMetadata, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = applicationDeletionStageMetadata
+	}
+
+	if stage == applicationDeletionStageMetadata {
+		reportApplicationDeletionProgress(progress, applicationDeletionStageMetadata, "Deleting application metadata")
+		if err := deleter.DeleteApplication(ctx, applicationID); err != nil && !errors.Is(err, application.ErrNotFound) {
+			return s.failApplicationDeletion(applicationID, applicationDeletionStageMetadata, err)
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageRouting, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = applicationDeletionStageRouting
+	}
+
+	if stage == applicationDeletionStageRouting {
+		if err := s.refreshProxyAfterApplicationDeletion(ctx); err != nil {
+			return s.failApplicationDeletion(applicationID, applicationDeletionStageRouting, err)
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageKeys, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = applicationDeletionStageKeys
+	}
+
+	if stage == applicationDeletionStageKeys {
+		if s.keyCleanup != nil {
+			if err := s.keyCleanup.CleanupApplicationKey(ctx, applicationID); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageKeys, err)
+			}
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageFolder, applicationDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = applicationDeletionStageFolder
+	}
+
+	if stage == applicationDeletionStageFolder {
+		reportApplicationDeletionProgress(progress, applicationDeletionStageFolder, "Deleting the application folder")
+		if err := os.RemoveAll(directory); err != nil {
+			return s.failApplicationDeletion(applicationID, applicationDeletionStageFolder, err)
+		}
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageComplete, "complete", ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Applications) refreshProxyAfterApplicationDeletion(ctx context.Context) error {
+	if s.routingRepository == nil {
+		return nil
+	}
+	if _, err := os.Lstat(s.proxyDirectory); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect Caddy proxy for application deletion: %w", err)
+	}
+	if err := s.refreshProxyConfiguration(ctx); err != nil {
+		return fmt.Errorf("reload Caddy after application deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Applications) checkpointApplicationDeletion(ctx context.Context, applicationID int64, stage, state, detail string) error {
+	if s.deletionIntents == nil {
+		return nil
+	}
+	checkpointContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.deletionIntents.UpdateApplicationDeletion(checkpointContext, applicationID, stage, state, detail, time.Now().UTC()); err != nil {
+		return fmt.Errorf("checkpoint application deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Applications) failApplicationDeletion(applicationID int64, stage string, operationErr error) error {
+	checkpointErr := s.checkpointApplicationDeletion(context.Background(), applicationID, stage, applicationDeletionStateFailed, applicationDeletionFailureDetail(stage))
+	if checkpointErr != nil {
+		return errors.Join(operationErr, checkpointErr)
+	}
+	return operationErr
+}
+
+func applicationDeletionFailureDetail(stage string) string {
+	switch stage {
+	case applicationDeletionStageSchedules:
+		return "Disabling scheduled backups failed. Retry the deletion to continue."
+	case applicationDeletionStageResources:
+		return "Removing Docker resources failed. Retry the deletion to continue."
+	case applicationDeletionStageMetadata:
+		return "Removing application metadata failed. Retry the deletion to continue."
+	case applicationDeletionStageRouting:
+		return "Refreshing application routing failed. Retry the deletion to continue."
+	case applicationDeletionStageKeys:
+		return "Removing deployment keys failed. Retry the deletion to continue."
+	case applicationDeletionStageFolder:
+		return "Removing the application folder failed. Retry the deletion to continue."
+	default:
+		return "Application deletion failed. Retry the deletion to continue."
+	}
+}
+
+type applicationBackupLeaseSet struct {
+	repository applicationBackupLeaseRepository
+	leases     []applicationBackupLease
+}
+
+type applicationBackupLease struct {
+	serviceID int64
+	token     string
+}
+
+func (s *Applications) acquireApplicationBackupLeases(ctx context.Context, applicationID int64) (*applicationBackupLeaseSet, error) {
+	set := &applicationBackupLeaseSet{repository: s.backupLeases}
+	if s.backupLeases == nil || s.detailsRepository == nil {
+		return set, nil
+	}
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		if errors.Is(err, application.ErrNotFound) {
+			return set, nil
+		}
+		return nil, fmt.Errorf("list services for application deletion leases: %w", err)
+	}
+	sort.Slice(services, func(left, right int) bool { return services[left].ID < services[right].ID })
+	now := time.Now().UTC()
+	for _, service := range services {
+		if !application.IsDatabaseServiceType(service.Type) || service.ID < 1 {
+			continue
+		}
+		token, err := newBackupLeaseToken()
+		if err != nil {
+			if releaseErr := set.release(); releaseErr != nil {
+				err = errors.Join(err, fmt.Errorf("release application deletion leases: %w", releaseErr))
+			}
+			return nil, fmt.Errorf("create application deletion lease token: %w", err)
+		}
+		if err := s.backupLeases.AcquireBackupLease(ctx, service.ID, "deletion", token, now, now.Add(backupLeaseDuration)); err != nil {
+			acquireErr := err
+			if releaseErr := set.release(); releaseErr != nil {
+				acquireErr = errors.Join(acquireErr, fmt.Errorf("release application deletion leases: %w", releaseErr))
+			}
+			if errors.Is(err, application.ErrBackupOperationInProgress) {
+				return nil, acquireErr
+			}
+			return nil, fmt.Errorf("acquire application deletion lease: %w", acquireErr)
+		}
+		set.leases = append(set.leases, applicationBackupLease{serviceID: service.ID, token: token})
+	}
+	return set, nil
+}
+
+func (s *applicationBackupLeaseSet) release() error {
+	if s == nil || s.repository == nil {
+		return nil
+	}
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var releaseErr error
+	for _, lease := range s.leases {
+		if err := s.repository.ReleaseBackupLease(cleanupContext, lease.serviceID, lease.token); err != nil {
+			releaseErr = errors.Join(releaseErr, err)
+		}
+	}
+	return releaseErr
 }
 
 func reportApplicationDeletionProgress(progress func(stage, message string), stage, message string) {

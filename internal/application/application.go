@@ -131,6 +131,8 @@ var (
 	ErrBackupScheduleDisabled           = errors.New("backup schedule is disabled")
 	ErrBackupServiceNotRunning          = errors.New("database service is not running")
 	ErrBackupUnsupported                = errors.New("scheduled backups are not supported for this service")
+	ErrBackupOperationInProgress        = errors.New("another backup operation is in progress")
+	ErrApplicationDeletionInProgress    = errors.New("application deletion is in progress")
 	ErrEmailRequired                    = errors.New("email address is required")
 	ErrEmailTooLong                     = errors.New("email address is too long")
 	ErrEmailInvalid                     = errors.New("email address is invalid")
@@ -585,6 +587,20 @@ type Backup struct {
 type BackupDetails struct {
 	Schedule BackupSchedule
 	Backups  []Backup
+}
+
+// ApplicationDeletionIntent is the durable checkpoint for an application
+// deletion. Name and FolderName remain available after application metadata is
+// removed so an interrupted cleanup can be resumed safely.
+type ApplicationDeletionIntent struct {
+	ApplicationID int64
+	Name          string
+	FolderName    string
+	Stage         string
+	State         string
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // IsDatabaseServiceType reports whether a service type supports database

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -368,6 +369,173 @@ func (s *Store) SaveBackupSchedule(ctx context.Context, schedule application.Bac
 		return fmt.Errorf("save backup schedule: %w", err)
 	}
 	return nil
+}
+
+// UpdateBackupStatus changes only completion metadata. Keeping schedule
+// fields out of this statement prevents a backup that started with an older
+// schedule snapshot from reverting a concurrent schedule edit.
+func (s *Store) UpdateBackupStatus(ctx context.Context, serviceID int64, at time.Time, status string, sizeBytes int64) error {
+	lastBackupAt := ""
+	if !at.IsZero() {
+		lastBackupAt = at.UTC().Format(time.RFC3339Nano)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE backup_schedules
+		SET last_backup_at = ?, last_backup_status = ?, last_backup_size = ?
+		WHERE service_id = ?`, lastBackupAt, status, sizeBytes, serviceID)
+	if err != nil {
+		return fmt.Errorf("update backup status: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated backup status count: %w", err)
+	}
+	if affected == 0 {
+		return application.ErrBackupScheduleNotFound
+	}
+	return nil
+}
+
+// AcquireBackupLease reserves one service for a backup, restore, retention,
+// or deletion operation. Expired rows are reclaimed inside the same write
+// transaction, so a crashed process cannot hold the service forever.
+func (s *Store) AcquireBackupLease(ctx context.Context, serviceID int64, operation, token string, now, expiresAt time.Time) error {
+	if serviceID < 1 || strings.TrimSpace(operation) == "" || strings.TrimSpace(token) == "" {
+		return errors.New("backup lease arguments are invalid")
+	}
+	nowText := strconv.FormatInt(now.UTC().UnixNano(), 10)
+	expiresText := strconv.FormatInt(expiresAt.UTC().UnixNano(), 10)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin backup lease: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM backup_leases
+		WHERE service_id = ? AND CAST(expires_at AS INTEGER) <= CAST(? AS INTEGER)`, serviceID, nowText); err != nil {
+		return fmt.Errorf("reclaim expired backup lease: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO backup_leases (service_id, operation, token, acquired_at, expires_at)
+		VALUES (?, ?, ?, ?, ?)`, serviceID, operation, token, nowText, expiresText); err != nil {
+		if isUniqueConstraint(err) {
+			return application.ErrBackupOperationInProgress
+		}
+		return fmt.Errorf("acquire backup lease: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit backup lease: %w", err)
+	}
+	return nil
+}
+
+// ReleaseBackupLease releases only the lease identified by the caller's
+// token. Release is idempotent so bounded cleanup can safely call it after a
+// cancellation or an expired lease.
+func (s *Store) ReleaseBackupLease(ctx context.Context, serviceID int64, token string) error {
+	if serviceID < 1 || strings.TrimSpace(token) == "" {
+		return errors.New("backup lease arguments are invalid")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM backup_leases
+		WHERE service_id = ? AND token = ?`, serviceID, token); err != nil {
+		return fmt.Errorf("release backup lease: %w", err)
+	}
+	return nil
+}
+
+// BeginApplicationDeletion records or returns the durable deletion intent for
+// one application. It intentionally has no foreign key so the tombstone
+// survives metadata deletion until filesystem cleanup is complete.
+func (s *Store) BeginApplicationDeletion(ctx context.Context, item application.Application, now time.Time) (application.ApplicationDeletionIntent, error) {
+	if item.ID < 1 {
+		return application.ApplicationDeletionIntent{}, application.ErrNotFound
+	}
+	nowText := now.UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO application_deletion_intents (
+			application_id, application_name, folder_name, stage, state,
+			last_error, created_at, updated_at
+		)
+		VALUES (?, ?, ?, 'schedules', 'running', '', ?, ?)
+		ON CONFLICT(application_id) DO NOTHING`, item.ID, item.Name, item.FolderName, nowText, nowText)
+	if err != nil {
+		return application.ApplicationDeletionIntent{}, fmt.Errorf("begin application deletion: %w", err)
+	}
+	return s.GetApplicationDeletion(ctx, item.ID)
+}
+
+// GetApplicationDeletion returns a deletion intent, including completed
+// tombstones retained for operator-visible recovery history.
+func (s *Store) GetApplicationDeletion(ctx context.Context, applicationID int64) (application.ApplicationDeletionIntent, error) {
+	var intent application.ApplicationDeletionIntent
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT application_id, application_name, folder_name, stage, state,
+			last_error, created_at, updated_at
+		FROM application_deletion_intents
+		WHERE application_id = ?`, applicationID).Scan(
+		&intent.ApplicationID, &intent.Name, &intent.FolderName, &intent.Stage,
+		&intent.State, &intent.LastError, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return application.ApplicationDeletionIntent{}, application.ErrNotFound
+	}
+	if err != nil {
+		return application.ApplicationDeletionIntent{}, fmt.Errorf("get application deletion: %w", err)
+	}
+	intent.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return application.ApplicationDeletionIntent{}, fmt.Errorf("parse application deletion creation time: %w", err)
+	}
+	intent.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return application.ApplicationDeletionIntent{}, fmt.Errorf("parse application deletion update time: %w", err)
+	}
+	return intent, nil
+}
+
+// UpdateApplicationDeletion checkpoints one deletion stage. The error is
+// bounded before storage so diagnostics cannot turn the recovery record into
+// an unbounded log or data store.
+func (s *Store) UpdateApplicationDeletion(ctx context.Context, applicationID int64, stage, state, detail string, at time.Time) error {
+	if applicationID < 1 || strings.TrimSpace(stage) == "" || strings.TrimSpace(state) == "" {
+		return errors.New("application deletion checkpoint is invalid")
+	}
+	detail = strings.TrimSpace(detail)
+	if len(detail) > 2048 {
+		detail = detail[:2048]
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE application_deletion_intents
+		SET stage = ?, state = ?, last_error = ?, updated_at = ?
+		WHERE application_id = ?`, stage, state, detail, at.UTC().Format(time.RFC3339Nano), applicationID)
+	if err != nil {
+		return fmt.Errorf("update application deletion: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated application deletion count: %w", err)
+	}
+	if affected == 0 {
+		return application.ErrNotFound
+	}
+	return nil
+}
+
+// IsApplicationDeletionActive lets backup operations reject new work after a
+// deletion intent has been recorded.
+func (s *Store) IsApplicationDeletionActive(ctx context.Context, applicationID int64) (bool, error) {
+	var state string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT state FROM application_deletion_intents
+		WHERE application_id = ?`, applicationID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check application deletion: %w", err)
+	}
+	return state != "complete", nil
 }
 
 // CreateBackup records one completed backup file.
@@ -1213,6 +1381,45 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (12, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record routing port migration: %w", err)
+		}
+	}
+
+	var operationsMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 13`).Scan(&operationsMigrationApplied); err != nil {
+		return fmt.Errorf("check operations migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS backup_leases (
+			service_id INTEGER PRIMARY KEY,
+			operation TEXT NOT NULL,
+			token TEXT NOT NULL,
+			acquired_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			FOREIGN KEY (service_id) REFERENCES services (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create backup leases table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS application_deletion_intents (
+			application_id INTEGER PRIMARY KEY,
+			application_name TEXT NOT NULL,
+			folder_name TEXT NOT NULL,
+			stage TEXT NOT NULL,
+			state TEXT NOT NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create application deletion intents table: %w", err)
+	}
+	if operationsMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (13, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record operations migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

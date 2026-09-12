@@ -13,6 +13,7 @@ import (
 
 	"redlaunch/internal/application"
 	"redlaunch/internal/compose"
+	"redlaunch/internal/store"
 )
 
 type applicationRepositoryStub struct {
@@ -2520,6 +2521,56 @@ func TestApplicationsStopsApplicationDeletionBeforeMetadataWhenAStageFails(t *te
 				t.Fatalf("application directory stat error = %v, want directory to remain", err)
 			}
 		})
+	}
+}
+
+func TestApplicationsResumesApplicationDeletionFromDurableIntent(t *testing.T) {
+	database, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "redlaunch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	item, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &serviceRuntimeRunner{downErr: errors.New("Docker unavailable")}
+	applications, err := NewApplications(database, filepath.Join(t.TempDir(), "projects"), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(applications.applicationsDir, item.FolderName)
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteApplicationWithProgress(t.Context(), item.ID, nil); err == nil {
+		t.Fatal("first application deletion error = nil, want Docker failure")
+	}
+	intent, err := database.GetApplicationDeletion(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Stage != applicationDeletionStageResources || intent.State != applicationDeletionStateFailed {
+		t.Fatalf("failed deletion intent = %#v, want failed resources stage", intent)
+	}
+
+	runner.downErr = nil
+	if err := applications.DeleteApplicationWithProgress(t.Context(), item.ID, nil); err != nil {
+		t.Fatalf("resumed application deletion: %v", err)
+	}
+	intent, err = database.GetApplicationDeletion(t.Context(), item.ID)
+	if err != nil || intent.State != "complete" || intent.Stage != applicationDeletionStageComplete {
+		t.Fatalf("completed deletion intent = %#v, %v", intent, err)
+	}
+	if _, err := database.Get(t.Context(), item.ID); !errors.Is(err, application.ErrNotFound) {
+		t.Fatalf("application after resumed deletion = %v, want not found", err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("application folder after resumed deletion = %v, want not found", err)
 	}
 }
 

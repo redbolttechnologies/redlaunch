@@ -143,6 +143,19 @@ func newBackupServiceTest(t *testing.T, repository *backupRepositoryFake, runner
 	return backups
 }
 
+func TestNewBackupServiceRejectsBackupRootInsideManagedApplicationDirectory(t *testing.T) {
+	root := t.TempDir()
+	repository := &backupRepositoryFake{item: application.Application{FolderName: "status-page"}}
+	_, err := NewBackupService(repository, BackupConfig{
+		ProjectsRoot: filepath.Join(root, "projects"),
+		BackupRoot:   filepath.Join(root, "projects", applicationsDir, "status-page", "backups"),
+		Runner:       &backupRunnerFake{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside managed application directories") {
+		t.Fatalf("NewBackupService() error = %v, want backup-root boundary error", err)
+	}
+}
+
 func TestBackupServiceEnablesAndDisablesIsolatedWeeklySchedule(t *testing.T) {
 	repository := &backupRepositoryFake{
 		item:     application.Application{ID: 7, Name: "Status page", FolderName: "status-page"},
@@ -235,6 +248,50 @@ func TestBackupServiceRunsRecordsAndRestoresPostgreSQLBackup(t *testing.T) {
 	}
 	if err := backups.RestoreBackup(t.Context(), 7, "db", "../outside.sql"); !errors.Is(err, application.ErrBackupFileNameInvalid) {
 		t.Fatalf("RestoreBackup(traversal) error = %v, want %v", err, application.ErrBackupFileNameInvalid)
+	}
+}
+
+func TestBackupServiceRecoversOnlyAbandonedTemporaryFilesAndNeverOverwrites(t *testing.T) {
+	repository := &backupRepositoryFake{
+		item:     application.Application{ID: 7, Name: "Status page", FolderName: "status-page"},
+		services: []application.Service{{ID: 11, ApplicationID: 7, Name: "db", Type: application.ServiceTypePostgreSQL}},
+	}
+	runner := &backupRunnerFake{}
+	backups := newBackupServiceTest(t, repository, runner, &backupSchedulerFake{})
+	location := filepath.Join(backups.backupRoot, "status-page", "db")
+	if err := os.MkdirAll(location, backupDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	oldTemporary := filepath.Join(location, ".redlaunch-backup-abandoned.sql")
+	if err := os.WriteFile(oldTemporary, []byte("abandoned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldAt := time.Date(2026, time.August, 1, 3, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(oldTemporary, oldAt, oldAt); err != nil {
+		t.Fatal(err)
+	}
+	currentName := "backup-20260901-030000.000000000Z.sql"
+	currentPath := filepath.Join(location, currentName)
+	if err := os.WriteFile(currentPath, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := backups.RunBackupNow(t.Context(), 7, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.FileName != "backup-20260901-030000.000000000Z-1.sql" {
+		t.Fatalf("backup filename = %q, want collision-safe suffix", created.FileName)
+	}
+	if _, err := os.Stat(oldTemporary); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("abandoned temporary file stat = %v, want not found", err)
+	}
+	contents, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "existing" {
+		t.Fatalf("existing backup contents = %q, want unchanged", contents)
 	}
 }
 

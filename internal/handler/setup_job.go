@@ -60,9 +60,14 @@ func newSetupJobStore() *setupJobStore {
 }
 
 func (s *setupJobStore) create(installProxy, installRegistry bool) (*setupJob, error) {
+	job, _, err := s.createUnique(installProxy, installRegistry)
+	return job, err
+}
+
+func (s *setupJobStore) createUnique(installProxy, installRegistry bool) (*setupJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &setupJob{
 		id:    id,
@@ -75,14 +80,18 @@ func (s *setupJobStore) create(installProxy, installRegistry bool) (*setupJob, e
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if state == setupStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > setupJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *setupJobStore) get(id string) *setupJob {
@@ -93,6 +102,19 @@ func (s *setupJobStore) get(id string) *setupJob {
 		return nil
 	}
 	return job
+}
+
+func (s *setupJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > setupJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *setupJob) update(stage, _ string) {
@@ -176,13 +198,13 @@ func (j *setupJob) snapshot() setupProgressData {
 	}
 }
 
-func (h *Handler) runSetupJob(job *setupJob, installProxy, installRegistry bool) {
+func (h *Handler) runSetupJob(ctx context.Context, job *setupJob, installProxy, installRegistry bool) {
 	var err error
 	if manager, ok := h.setupManager.(progressSetupManager); ok {
-		err = manager.SetupWithProgress(context.Background(), installProxy, installRegistry, job.update)
+		err = manager.SetupWithProgress(ctx, installProxy, installRegistry, job.update)
 	} else {
 		job.update("directories", "")
-		err = h.setupManager.Setup(context.Background(), installProxy, installRegistry)
+		err = h.setupManager.Setup(ctx, installProxy, installRegistry)
 	}
 	if err != nil {
 		job.fail(err)

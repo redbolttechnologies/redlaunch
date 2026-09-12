@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"redlaunch/internal/application"
@@ -69,9 +68,6 @@ type Handler struct {
 	applicationContainerManager    applicationContainerService
 	githubActions                  githubActionsService
 	githubActionsJobs              *githubActionsJobStore
-	githubActionsJobContext        context.Context
-	githubActionsJobCancel         context.CancelFunc
-	githubActionsJobWorkers        sync.WaitGroup
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	dashboardMetrics               dashboardMetricsService
@@ -82,6 +78,8 @@ type Handler struct {
 	applicationContainerJobs       *applicationContainerJobStore
 	serviceDeleteJobs              *serviceDeleteJobStore
 	applicationDeleteJobs          *applicationDeleteJobStore
+	backupJobs                     *backupJobStore
+	jobs                           *trackedJobRuntime
 	csrfToken                      string
 	accessMode                     string
 	cookieSecure                   bool
@@ -550,7 +548,23 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	if security.AccessMode != accessModeSSHOnly && security.AccessMode != accessModeManagedHTTPS {
 		return nil, fmt.Errorf("unsupported management access mode %q", security.AccessMode)
 	}
-	githubActionsJobContext, githubActionsJobCancel := context.WithCancel(context.Background())
+	setupJobs := newSetupJobStore()
+	postgresJobs := newPostgresJobStore()
+	redisJobs := newRedisServiceJobStore()
+	applicationContainerJobs := newApplicationContainerJobStore()
+	serviceDeleteJobs := newServiceDeleteJobStore()
+	applicationDeleteJobs := newApplicationDeleteJobStore()
+	backupJobs := newBackupJobStore()
+	githubActionsJobs := newGitHubActionsJobStore()
+	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
+	jobs.registerCleanup(setupJobs.expire)
+	jobs.registerCleanup(postgresJobs.expire)
+	jobs.registerCleanup(redisJobs.expire)
+	jobs.registerCleanup(applicationContainerJobs.expire)
+	jobs.registerCleanup(serviceDeleteJobs.expire)
+	jobs.registerCleanup(applicationDeleteJobs.expire)
+	jobs.registerCleanup(backupJobs.expire)
+	jobs.registerCleanup(githubActionsJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -578,15 +592,15 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		proxyActions:                   proxyActions,
 		dashboardMetrics:               dashboardMetrics,
 		authentication:                 authentication,
-		setupJobs:                      newSetupJobStore(),
-		postgresJobs:                   newPostgresJobStore(),
-		redisJobs:                      newRedisServiceJobStore(),
-		applicationContainerJobs:       newApplicationContainerJobStore(),
-		serviceDeleteJobs:              newServiceDeleteJobStore(),
-		applicationDeleteJobs:          newApplicationDeleteJobStore(),
-		githubActionsJobs:              newGitHubActionsJobStore(),
-		githubActionsJobContext:        githubActionsJobContext,
-		githubActionsJobCancel:         githubActionsJobCancel,
+		setupJobs:                      setupJobs,
+		postgresJobs:                   postgresJobs,
+		redisJobs:                      redisJobs,
+		applicationContainerJobs:       applicationContainerJobs,
+		serviceDeleteJobs:              serviceDeleteJobs,
+		applicationDeleteJobs:          applicationDeleteJobs,
+		backupJobs:                     backupJobs,
+		githubActionsJobs:              githubActionsJobs,
+		jobs:                           jobs,
 		csrfToken:                      csrfToken,
 		accessMode:                     security.AccessMode,
 		cookieSecure:                   security.CookieSecure,
@@ -644,6 +658,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/run", h.runBackupNow)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/restore", h.restoreBackup)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/delete", h.deleteBackup)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/backups/status", h.backupStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/backups/download", h.downloadBackup)
 	mux.HandleFunc("GET /applications/{id}/services/postgresql/new", h.postgreSQLServicePage)
 	mux.HandleFunc("GET /applications/{id}/services/postgresql/status", h.postgreSQLServiceStatus)
@@ -1159,13 +1174,22 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		InstallProxy:    r.Form.Get("proxy") == "on",
 		InstallRegistry: r.Form.Get("registry") == "on",
 	}
-	job, err := h.setupJobs.create(setupData.InstallProxy, setupData.InstallRegistry)
+	job, created, err := h.setupJobs.createUnique(setupData.InstallProxy, setupData.InstallRegistry)
 	if err != nil {
 		h.logger.Error("create setup job", "error", err)
 		http.Error(w, "The setup job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runSetupJob(job, setupData.InstallProxy, setupData.InstallRegistry)
+	if created {
+		if err := h.startTrackedJob("setup", func(ctx context.Context) {
+			h.runSetupJob(ctx, job, setupData.InstallProxy, setupData.InstallRegistry)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit setup job", "error", err)
+			http.Error(w, "The setup system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 
 	location := "/?setup_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
@@ -1244,7 +1268,7 @@ func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 		return
 	}
-	applicationDeleteProgress, ok := h.applicationDeleteProgress(id, r.URL.Query().Get("application_delete_job"))
+	applicationDeleteProgress, ok := h.applicationDeleteProgress(r.Context(), id, r.URL.Query().Get("application_delete_job"))
 	if !ok {
 		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 		return
@@ -2403,6 +2427,11 @@ func (h *Handler) serviceDetailsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The service details could not be read.", http.StatusInternalServerError)
 		return
 	}
+	backupProgress, backupProgressOK := h.backupProgress(id, serviceName, r.URL.Query().Get("backup_job"))
+	if !backupProgressOK {
+		http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+		return
+	}
 	if h.backupManager != nil && application.IsDatabaseServiceType(details.Service.Type) {
 		backupDetails, backupErr := h.backupManager.GetBackupDetails(r.Context(), id, serviceName)
 		if backupErr != nil {
@@ -2413,8 +2442,9 @@ func (h *Handler) serviceDetailsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeServiceDetailsPage(w, r, http.StatusOK, serviceDetailsPageData{
-		Application: item,
-		Details:     details,
+		Application:    item,
+		Details:        details,
+		BackupProgress: backupProgress,
 	})
 }
 
@@ -2518,11 +2548,32 @@ func (h *Handler) runBackupNow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.backupManager.RunBackupNow(r.Context(), id, serviceName); err != nil {
-		h.writeBackupError(w, r, "run backup", err)
+	job, created, err := h.backupJobs.createUnique(id, serviceName, backupJobOperationRun)
+	if err != nil {
+		h.logger.Error("create backup job", "application_id", id, "service", serviceName, "error", err)
+		http.Error(w, "The backup job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+	if created {
+		if err := h.startTrackedJob("backup:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runBackupJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit backup job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+		if finished, operationErr := job.wait(25 * time.Millisecond); finished {
+			if operationErr != nil {
+				h.writeBackupError(w, r, "run backup", operationErr)
+				return
+			}
+			http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+			return
+		}
+	}
+	location := serviceDetailsPath(id, serviceName) + "?tab=backups&backup_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 func (h *Handler) restoreBackup(w http.ResponseWriter, r *http.Request) {
@@ -2534,11 +2585,64 @@ func (h *Handler) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.backupManager.RestoreBackup(r.Context(), id, serviceName, r.Form.Get("backup_file")); err != nil {
+	fileName, err := application.ValidateBackupFileName(r.Form.Get("backup_file"))
+	if err != nil {
 		h.writeBackupError(w, r, "restore backup", err)
 		return
 	}
-	http.Redirect(w, r, serviceDetailsPath(id, serviceName), http.StatusSeeOther)
+	job, created, err := h.backupJobs.createUnique(id, serviceName, backupJobOperationRestore)
+	if err != nil {
+		h.logger.Error("create restore job", "application_id", id, "service", serviceName, "error", err)
+		http.Error(w, "The restore job could not be created.", http.StatusInternalServerError)
+		return
+	}
+	if created {
+		job.setRestoreFile(fileName)
+		if err := h.startTrackedJob("backup:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runBackupJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit restore job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+		if finished, operationErr := job.wait(25 * time.Millisecond); finished {
+			if operationErr != nil {
+				h.writeBackupError(w, r, "restore backup", operationErr)
+				return
+			}
+			http.Redirect(w, r, serviceDetailsPath(id, serviceName), http.StatusSeeOther)
+			return
+		}
+	}
+	location := serviceDetailsPath(id, serviceName) + "?tab=backups&backup_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func (h *Handler) backupStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := r.URL.Query().Get("id")
+	if jobID == "" {
+		http.Error(w, "The backup job ID is required.", http.StatusBadRequest)
+		return
+	}
+	progress, ok := h.backupProgress(id, serviceName, jobID)
+	if !ok {
+		http.Error(w, "The backup job was not found.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeTemplateStatus(w, "backup-progress.html", pageData{BackupProgress: progress}, http.StatusOK)
 }
 
 func (h *Handler) deleteBackup(w http.ResponseWriter, r *http.Request) {
@@ -2577,6 +2681,9 @@ func (h *Handler) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="`+backup.FileName+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(backup.SizeBytes, 10))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(backupDownloadWriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		h.logger.Error("set backup download deadline", "application_id", id, "service", serviceName, "error", err)
+	}
 	if _, err := io.Copy(w, reader); err != nil {
 		h.logger.Error("download backup", "application_id", id, "service", serviceName, "backup_file", backup.FileName, "error", err)
 	}
@@ -2650,6 +2757,8 @@ func (h *Handler) writeBackupError(w http.ResponseWriter, r *http.Request, opera
 		http.NotFound(w, r)
 	case errors.Is(err, application.ErrBackupServiceNotRunning):
 		http.Error(w, "The database service must be running before a manual backup can be created.", http.StatusConflict)
+	case errors.Is(err, application.ErrBackupOperationInProgress), errors.Is(err, application.ErrApplicationDeletionInProgress):
+		http.Error(w, "Another operation is already using this database service. Try again shortly.", http.StatusConflict)
 	case errors.Is(err, application.ErrBackupScheduleTypeInvalid), errors.Is(err, application.ErrBackupHourInvalid), errors.Is(err, application.ErrBackupMinuteInvalid), errors.Is(err, application.ErrBackupWeekdayInvalid), errors.Is(err, application.ErrBackupRetentionInvalid), errors.Is(err, application.ErrBackupFileNameInvalid):
 		http.Error(w, backupValidationMessage(err), http.StatusBadRequest)
 	default:
@@ -2717,8 +2826,20 @@ func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 
 	item, err := h.applicationDetails.Get(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
-		http.NotFound(w, r)
-		return
+		recovery, ok := h.applicationDeletion.(interface {
+			GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error)
+		})
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		intent, intentErr := recovery.GetApplicationDeletion(r.Context(), id)
+		if intentErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		item = application.Application{ID: intent.ApplicationID, Name: intent.Name, FolderName: intent.FolderName}
+		err = nil
 	}
 	if err != nil {
 		h.logger.Error("get application for deletion", "application_id", id, "error", err)
@@ -2730,13 +2851,22 @@ func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.applicationDeleteJobs.create(id, item.Name)
+	job, created, err := h.applicationDeleteJobs.createUnique(id, item.Name)
 	if err != nil {
 		h.logger.Error("create application deletion job", "application_id", id, "error", err)
 		http.Error(w, "The application deletion job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runApplicationDeleteJob(job)
+	if created {
+		if err := h.startTrackedJob("application-delete:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runApplicationDeleteJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit application deletion job", "application_id", id, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?application_delete_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -2779,13 +2909,22 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.serviceDeleteJobs.create(id, serviceName)
+	job, created, err := h.serviceDeleteJobs.createUnique(id, serviceName)
 	if err != nil {
 		h.logger.Error("create service deletion job", "application_id", id, "service", serviceName, "error", err)
 		http.Error(w, "The service deletion job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runServiceDeleteJob(job)
+	if created {
+		if err := h.startTrackedJob("service-delete:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runServiceDeleteJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit service deletion job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?service_delete_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -2960,7 +3099,7 @@ func (h *Handler) applicationDeleteStatus(w http.ResponseWriter, r *http.Request
 		http.Error(w, "The application deletion job ID is required.", http.StatusBadRequest)
 		return
 	}
-	progress, ok := h.applicationDeleteProgress(id, jobID)
+	progress, ok := h.applicationDeleteProgress(r.Context(), id, jobID)
 	if !ok {
 		http.Error(w, "The application deletion job was not found.", http.StatusNotFound)
 		return
@@ -3025,18 +3164,38 @@ func (h *Handler) serviceDeleteProgress(applicationID int64, jobID string) (*ser
 	return &progress, true
 }
 
-func (h *Handler) applicationDeleteProgress(applicationID int64, jobID string) (*applicationDeleteProgressData, bool) {
-	if jobID == "" {
-		return nil, true
+func (h *Handler) applicationDeleteProgress(ctx context.Context, applicationID int64, jobID string) (*applicationDeleteProgressData, bool) {
+	if jobID != "" {
+		if job := h.applicationDeleteJobs.get(applicationID, jobID); job != nil {
+			progress := job.snapshot()
+			progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=" + url.QueryEscape(jobID)
+			progress.CloseURL = "/applications"
+			return &progress, true
+		}
 	}
-	job := h.applicationDeleteJobs.get(applicationID, jobID)
-	if job == nil {
+
+	recovery, ok := h.applicationDeletion.(interface {
+		GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error)
+	})
+	if !ok {
+		return nil, jobID == ""
+	}
+	intent, err := recovery.GetApplicationDeletion(ctx, applicationID)
+	if errors.Is(err, application.ErrNotFound) {
+		return nil, jobID == ""
+	}
+	if err != nil {
+		h.logger.Error("get application deletion recovery state", "application_id", applicationID, "error", err)
 		return nil, false
 	}
-	progress := job.snapshot()
-	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=" + url.QueryEscape(jobID)
+	if jobID == "" && intent.State == "complete" {
+		return nil, true
+	}
+	progress := applicationDeleteProgressFromIntent(intent)
+	progress.JobID = "recovery"
+	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=recovery"
 	progress.CloseURL = "/applications"
-	return &progress, true
+	return progress, true
 }
 
 func (h *Handler) postgreSQLServicePage(w http.ResponseWriter, r *http.Request) {
@@ -3166,13 +3325,23 @@ func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	job, err := h.postgresJobs.create(id)
+	job, created, err := h.postgresJobs.createUnique(id)
 	if err != nil {
 		h.logger.Error("create PostgreSQL service job", "application_id", id, "error", err)
 		h.writePostgreSQLServicePage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runPostgresJob(job, input)
+	if created {
+		if err := h.startTrackedJob("postgres-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runPostgresJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			input.DatabasePassword = ""
+			h.logger.Error("admit PostgreSQL service job", "application_id", id, "error", err)
+			h.writePostgreSQLServicePage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?postgres_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -3239,13 +3408,23 @@ func (h *Handler) createRedisService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	job, err := h.redisJobs.create(id)
+	job, created, err := h.redisJobs.createUnique(id)
 	if err != nil {
 		h.logger.Error("create Redis service job", "application_id", id, "error", err)
 		h.writeRedisServicePage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runRedisJob(job, input)
+	if created {
+		if err := h.startTrackedJob("redis-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runRedisJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			input.Password = ""
+			h.logger.Error("admit Redis service job", "application_id", id, "error", err)
+			h.writeRedisServicePage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?redis_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -3344,13 +3523,22 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	job, err := h.applicationContainerJobs.create(id, input.AutoStart)
+	job, created, err := h.applicationContainerJobs.createUnique(id, input.AutoStart)
 	if err != nil {
 		h.logger.Error("create application container job", "application_id", id, "error", err)
 		h.writeApplicationContainerPage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runApplicationContainerJob(job, input)
+	if created {
+		if err := h.startTrackedJob("application-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runApplicationContainerJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit application container job", "application_id", id, "error", err)
+			h.writeApplicationContainerPage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?application_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -4358,6 +4546,7 @@ type pageData struct {
 	ApplicationContainerProgress *applicationContainerProgressData
 	ServiceDeleteProgress        *serviceDeleteProgressData
 	ApplicationDeleteProgress    *applicationDeleteProgressData
+	BackupProgress               *backupProgressData
 	GitHubActionsProgress        *githubActionsProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
@@ -4442,7 +4631,10 @@ type setupPageData struct {
 	InstallRegistry bool
 }
 
-const maxFormBody = 1 << 20
+const (
+	maxFormBody                = 1 << 20
+	backupDownloadWriteTimeout = 30 * time.Second
+)
 
 type applicationPageData struct {
 	Applications []application.Application
@@ -4580,9 +4772,10 @@ type secretDeletePageData struct {
 }
 
 type serviceDetailsPageData struct {
-	Application application.Application
-	Details     application.ServiceDetails
-	CSRFToken   string
+	Application    application.Application
+	Details        application.ServiceDetails
+	CSRFToken      string
+	BackupProgress *backupProgressData
 }
 
 type proxyPageData struct {
@@ -4879,6 +5072,7 @@ func (h *Handler) writeServiceDetailsPage(w http.ResponseWriter, r *http.Request
 	page := h.shellPageData(r)
 	page.ActivePage = "applications"
 	page.ServiceDetailsPage = &data
+	page.BackupProgress = data.BackupProgress
 	h.writeTemplateStatus(w, "service-details.html", page, status)
 }
 

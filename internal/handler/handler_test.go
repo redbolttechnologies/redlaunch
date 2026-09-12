@@ -329,6 +329,15 @@ type fakeApplicationService struct {
 	applicationDeleteDoneOnce     sync.Once
 }
 
+type fakeApplicationDeletionRecovery struct {
+	*fakeApplicationService
+	intent application.ApplicationDeletionIntent
+}
+
+func (s *fakeApplicationDeletionRecovery) GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error) {
+	return s.intent, nil
+}
+
 func (s *fakeApplicationService) List(context.Context) ([]application.Application, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
@@ -3477,6 +3486,68 @@ func TestDeleteApplicationRequiresCSRFAndExactConfirmation(t *testing.T) {
 	handler.ServeHTTP(deletedPageRecorder, httptest.NewRequest(http.MethodGet, location.String(), nil))
 	if deletedPageRecorder.Code != http.StatusOK || !strings.Contains(deletedPageRecorder.Body.String(), "Application deleted") {
 		t.Fatalf("deleted application progress page = (%d, %s), want completed progress dialog", deletedPageRecorder.Code, deletedPageRecorder.Body.String())
+	}
+}
+
+func TestDeleteApplicationCanRetryFromDurableIntentAfterMetadataRemoval(t *testing.T) {
+	applications := &fakeApplicationDeletionRecovery{
+		fakeApplicationService: &fakeApplicationService{applicationDeleteStarted: make(chan struct{})},
+		intent: application.ApplicationDeletionIntent{
+			ApplicationID: 7,
+			Name:          "Status page",
+			FolderName:    "status-page",
+			Stage:         "resources",
+			State:         "failed",
+		},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}, "confirmation": {"Status page"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST retry application delete status = %d, want %d (%s)", recorder.Code, http.StatusSeeOther, recorder.Body.String())
+	}
+	select {
+	case <-applications.applicationDeleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("retried application deletion did not start")
+	}
+	if applications.applicationDeleteID != 7 {
+		t.Fatalf("retried application deletion target = %d, want 7", applications.applicationDeleteID)
+	}
+}
+
+func TestApplicationDetailsShowsDurableDeletionAfterRestart(t *testing.T) {
+	applications := &fakeApplicationDeletionRecovery{
+		fakeApplicationService: &fakeApplicationService{},
+		intent: application.ApplicationDeletionIntent{
+			ApplicationID: 7,
+			Name:          "Status page",
+			FolderName:    "status-page",
+			Stage:         "routing",
+			State:         "failed",
+		},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("durable deletion page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	for _, expected := range []string{"Application deletion stopped", "Refresh application routing", "The deletion checkpoint was retained"} {
+		if !strings.Contains(recorder.Body.String(), expected) {
+			t.Fatalf("durable deletion page did not render %q: %s", expected, recorder.Body.String())
+		}
 	}
 }
 

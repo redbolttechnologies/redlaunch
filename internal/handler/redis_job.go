@@ -65,9 +65,14 @@ func newRedisServiceJobStore() *redisServiceJobStore {
 }
 
 func (s *redisServiceJobStore) create(applicationID int64) (*redisServiceJob, error) {
+	job, _, err := s.createUnique(applicationID)
+	return job, err
+}
+
+func (s *redisServiceJobStore) createUnique(applicationID int64) (*redisServiceJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &redisServiceJob{
 		id:            id,
@@ -81,14 +86,19 @@ func (s *redisServiceJobStore) create(applicationID int64) (*redisServiceJob, er
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		existingApplicationID := existing.applicationID
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if existingApplicationID == applicationID && state == redisJobStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > redisJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *redisServiceJobStore) get(applicationID int64, id string) *redisServiceJob {
@@ -105,6 +115,19 @@ func (s *redisServiceJobStore) get(applicationID int64, id string) *redisService
 		return nil
 	}
 	return job
+}
+
+func (s *redisServiceJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > redisJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *redisServiceJob) update(stage, _ string) {
@@ -197,17 +220,17 @@ func redisServiceJobSteps() []redisServiceJobStep {
 	}
 }
 
-func (h *Handler) runRedisJob(job *redisServiceJob, input application.RedisServiceInput) {
+func (h *Handler) runRedisJob(ctx context.Context, job *redisServiceJob, input application.RedisServiceInput) {
 	defer func() {
 		input.Password = ""
 	}()
 
 	var err error
 	if manager, ok := h.redisManager.(redisProgressService); ok {
-		_, err = manager.CreateRedisServiceWithProgress(context.Background(), job.applicationID, input, job.update)
+		_, err = manager.CreateRedisServiceWithProgress(ctx, job.applicationID, input, job.update)
 	} else {
 		job.update("configuration", "Preparing Redis configuration")
-		_, err = h.redisManager.CreateRedisService(context.Background(), job.applicationID, input)
+		_, err = h.redisManager.CreateRedisService(ctx, job.applicationID, input)
 	}
 	if err != nil {
 		job.fail(err)

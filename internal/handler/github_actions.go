@@ -127,7 +127,12 @@ func (h *Handler) configureGitHubActions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if created {
-		h.startGitHubActionsConfigureJob(job, input)
+		if err := h.startGitHubActionsConfigureJob(job, input); err != nil {
+			job.fail(err)
+			h.logger.Error("admit GitHub Actions setup job", "application_id", id, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	http.Redirect(w, r, fmt.Sprintf("/applications/%d/deployments/github-actions?github_actions_job=%s", id, url.QueryEscape(job.id)), http.StatusSeeOther)
 }
@@ -165,7 +170,12 @@ func (h *Handler) revokeGitHubActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
-		h.startGitHubActionsRevokeJob(job)
+		if err := h.startGitHubActionsRevokeJob(job); err != nil {
+			job.fail(err)
+			h.logger.Error("admit GitHub Actions revoke job", "application_id", id, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	http.Redirect(w, r, fmt.Sprintf("/applications/%d/deployments/github-actions?github_actions_job=%s", id, url.QueryEscape(job.id)), http.StatusSeeOther)
 }

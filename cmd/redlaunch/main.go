@@ -138,6 +138,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create backup service: %w", err)
 	}
+	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
 
 	googleAuth, err := redlaunchauth.New(redlaunchauth.Config{
 		ClientID:      cfg.GoogleClientID,
