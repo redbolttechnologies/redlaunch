@@ -113,13 +113,20 @@ credentials are refused for operator review.
 Backup and restore actions run as tracked operations rather than being tied to
 the browser request. One SQLite lease coordinates web, scheduled, and CLI
 operations for each database service; leases expire after a crashed process.
+Every lease-holding operation is capped at 25 minutes, below the 30-minute
+lease, and scheduled units stop overruns at the same boundary. Service
+deletion records its own durable tombstone, disables the service timer, holds
+the backup lease, and removes service routing with a Caddy reload; backup
+files are retained as operator-managed artifacts.
 Completed backup status updates do not overwrite later schedule edits, and
 completed dumps are published with collision-safe filenames. If a process is
 interrupted, a later backup conservatively removes only old Redlaunch temporary
 dump files. Application deletion records a durable tombstone and can resume
 from its last completed stage; the application page shows that retained
 checkpoint after a manager restart. Keep the SQLite database and project
-directory available until the deletion progress reaches completion. Application deletion
+directory available until the deletion progress reaches completion. Folder
+names stay reserved until the tombstone completes, and a retry never removes
+a replacement folder. Application deletion
 retains backup files under the configured `BACKUP_ROOT` as separate operator
 artifacts; backup history records are removed with the application metadata.
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -380,5 +381,18 @@ func TestServiceDetailsDoesNotRenderBackupsForCacheServices(t *testing.T) {
 	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/redis", nil))
 	if strings.Contains(recorder.Body.String(), "Scheduled backups") {
 		t.Fatal("cache service details rendered database backup controls")
+	}
+}
+
+func TestBackupRestoreFailureReportsRolledBackState(t *testing.T) {
+	restoreErr := errors.New("restore backup: exit status 3")
+	if got := backupJobOperationUserMessage(backupJobOperationRestore, restoreErr); got != "The restore was rolled back and the database was left unchanged. Review the service state and try again." {
+		t.Fatalf("restore failure message = %q", got)
+	}
+	if got := backupJobUserMessage(restoreErr); got == "The restore was rolled back and the database was left unchanged. Review the service state and try again." {
+		t.Fatalf("generic backup failure message leaks restore wording: %q", got)
+	}
+	if got := backupJobOperationUserMessage(backupJobOperationRestore, application.ErrBackupFormatUnsupported); got != "The selected backup is not a plain SQL dump and cannot be restored." {
+		t.Fatalf("unsupported format message = %q", got)
 	}
 }

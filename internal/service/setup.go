@@ -336,6 +336,14 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 		_ = temporary.Close()
 		return err
 	}
+	// Sync the replacement before renaming so a crash cannot leave a
+	// truncated file at the target path, then sync the parent directory so
+	// the rename itself is durable. In-place bind-mount writes keep their own
+	// sync path in writeManagedFileInPlace.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
@@ -343,6 +351,9 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 		return err
 	}
 	removeTemporary = false
+	if err := syncDirectory(directory); err != nil {
+		return err
+	}
 	return nil
 }
 

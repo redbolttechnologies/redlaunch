@@ -267,39 +267,40 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		logger = slog.Default()
 	}
 	templates, err := template.New("redlaunch").Funcs(template.FuncMap{
-		"serviceTypeClass":      serviceTypeClass,
-		"serviceTypeLabel":      serviceTypeLabel,
-		"serviceStatusClass":    serviceStatusClass,
-		"serviceIsRunning":      serviceIsRunning,
-		"serviceIsStopped":      serviceIsStopped,
-		"serviceCreatedAt":      serviceCreatedAtText,
-		"serviceCreatedAtISO":   serviceCreatedAtISO,
-		"serviceCreatedAtTitle": serviceCreatedAtTitle,
-		"proxyCreatedAt":        proxyCreatedAtText,
-		"proxyCreatedAtISO":     proxyCreatedAtISO,
-		"proxyCreatedAtTitle":   proxyCreatedAtTitle,
-		"serviceDetailsPath":    serviceDetailsPath,
-		"backupDownloadPath":    backupDownloadPath,
-		"backupTime":            backupTimeText,
-		"backupTimeISO":         backupTimeISO,
-		"backupAt":              backupAtText,
-		"backupAtISO":           backupAtISO,
-		"backupSize":            backupSizeText,
-		"backupStatusClass":     backupStatusClass,
-		"backupStatusIcon":      backupStatusIcon,
-		"backupStatusText":      backupStatusText,
-		"backupScheduleType":    backupScheduleTypeText,
-		"backupWeekday":         backupWeekdayText,
-		"serviceLogLines":       serviceLogLines,
-		"proxyLogLines":         proxyLogLines,
-		"routingHost":           routingHost,
-		"environmentSensitive":  environmentSensitive,
-		"dashboardPercent":      dashboardPercent,
-		"dashboardSize":         dashboardSize,
-		"dashboardTime":         dashboardTime,
-		"dashboardTimeISO":      dashboardTimeISO,
-		"dashboardMetricsScope": dashboardMetricsScope,
-		"dashboardMetricAge":    dashboardMetricAge,
+		"serviceTypeClass":            serviceTypeClass,
+		"serviceTypeLabel":            serviceTypeLabel,
+		"serviceStatusClass":          serviceStatusClass,
+		"serviceIsRunning":            serviceIsRunning,
+		"serviceIsStopped":            serviceIsStopped,
+		"serviceCreatedAt":            serviceCreatedAtText,
+		"serviceCreatedAtISO":         serviceCreatedAtISO,
+		"serviceCreatedAtTitle":       serviceCreatedAtTitle,
+		"proxyCreatedAt":              proxyCreatedAtText,
+		"proxyCreatedAtISO":           proxyCreatedAtISO,
+		"proxyCreatedAtTitle":         proxyCreatedAtTitle,
+		"serviceDetailsPath":          serviceDetailsPath,
+		"backupDownloadPath":          backupDownloadPath,
+		"backupTime":                  backupTimeText,
+		"backupTimeISO":               backupTimeISO,
+		"backupAt":                    backupAtText,
+		"backupAtISO":                 backupAtISO,
+		"backupSize":                  backupSizeText,
+		"backupStatusClass":           backupStatusClass,
+		"backupStatusIcon":            backupStatusIcon,
+		"backupStatusText":            backupStatusText,
+		"backupScheduleType":          backupScheduleTypeText,
+		"backupWeekday":               backupWeekdayText,
+		"serviceLogLines":             serviceLogLines,
+		"proxyLogLines":               proxyLogLines,
+		"routingHost":                 routingHost,
+		"environmentSensitive":        environmentSensitive,
+		"dashboardPercent":            dashboardPercent,
+		"dashboardSize":               dashboardSize,
+		"dashboardTime":               dashboardTime,
+		"dashboardTimeISO":            dashboardTimeISO,
+		"dashboardMetricsScope":       dashboardMetricsScope,
+		"dashboardMetricsScopeDetail": dashboardMetricsScopeDetail,
+		"dashboardMetricAge":          dashboardMetricAge,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -3230,6 +3231,8 @@ func userMessage(err error) string {
 		return "Folder names must be a single, valid directory name."
 	case errors.Is(err, application.ErrAlreadyExists):
 		return "An application with that name or folder already exists."
+	case errors.Is(err, application.ErrApplicationDeletionInProgress):
+		return "An application deletion is still in progress for that folder. Retry after deletion finishes."
 	default:
 		return "The application could not be created."
 	}

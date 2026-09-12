@@ -576,6 +576,10 @@ func TestApplicationsImportDockerComposeProjectRejectsUnsafeSourcesBeforeCompose
 		{name: "docker socket bind", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./docker.sock:/var/run/docker.sock\n"},
 		{name: "compose include", contents: "include: https://example.com/compose.yml\nservices:\n  web:\n    image: nginx:1.27\n"},
 		{name: "external volume", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - data:/data\nvolumes:\n  data:\n    external: true\n"},
+		{name: "label file", contents: "services:\n  web:\n    image: nginx:1.27\n    label_file: /absolute/path/to/labels.txt\n"},
+		{name: "flow mapping bind", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes: [{type: bind, source: /tmp/review-synthetic, target: /data}]\n"},
+		{name: "explicit volume name", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes: [reviewdata:/data]\nvolumes:\n  reviewdata: {name: redlaunch-review-foreign}\n"},
+		{name: "manager-owned bind", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ./vars.env:/data\n"},
 		{name: "volume driver options", contents: "services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - data:/data\nvolumes:\n  data:\n    driver_opts:\n      device: /var/lib/data\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1182,7 +1186,9 @@ func TestApplicationsUnchangedDollarValuePreservesRawToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := applications.UpdateEnvironmentVariable(t.Context(), 7, "COST", "COST", "$$5"); err != nil {
+	// The editor displays the decoded literal "$5"; submitting it back is a
+	// no-op that must preserve the raw token byte for byte.
+	if err := applications.UpdateEnvironmentVariable(t.Context(), 7, "COST", "COST", "$5"); err != nil {
 		t.Fatal(err)
 	}
 	if got := readServiceFile(t, varsPath); got != original {

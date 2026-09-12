@@ -10,9 +10,13 @@
       </div>
     </div>
 
-    <div class="setup-progress-error" role="status" aria-live="polite">
-      {{if eq .BackupProgress.State "running"}}<p>Database consistency is managed independently of this browser window.</p>{{else if eq .BackupProgress.State "failed"}}<p>{{.BackupProgress.ErrorDetail}}</p>{{else}}<p>The database operation completed successfully.</p>{{end}}
+    {{if eq .BackupProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p>{{.BackupProgress.ErrorDetail}}</p>
     </div>
+    {{else}}
+    <p class="setup-progress-description" role="status">{{if eq .BackupProgress.State "running"}}Database consistency is managed independently of this browser window.{{else}}The database operation completed successfully.{{end}}</p>
+    {{end}}
 
     <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
       <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the backup progress.</p>

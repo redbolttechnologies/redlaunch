@@ -142,7 +142,7 @@ func (j *backupJob) fail(err error) {
 	if j.state == backupJobStateRunning {
 		j.state = backupJobStateFailed
 		j.operationErr = err
-		j.errorDetail = backupJobUserMessage(err)
+		j.errorDetail = backupJobOperationUserMessage(j.operation, err)
 		j.finishedAt = time.Now()
 	}
 	j.mu.Unlock()
@@ -186,6 +186,10 @@ func (j *backupJob) setRestoreFile(fileName string) {
 }
 
 func backupJobUserMessage(err error) string {
+	return backupJobOperationUserMessage("", err)
+}
+
+func backupJobOperationUserMessage(operation string, err error) string {
 	switch {
 	case errors.Is(err, application.ErrBackupServiceNotRunning):
 		return "The database service must be running before a backup can be created."
@@ -195,7 +199,12 @@ func backupJobUserMessage(err error) string {
 		return "Another operation is already using this database service. Try again shortly."
 	case errors.Is(err, application.ErrApplicationDeletionInProgress):
 		return "The application is being deleted. Try again after deletion finishes."
+	case errors.Is(err, application.ErrBackupFormatUnsupported):
+		return "The selected backup is not a plain SQL dump and cannot be restored."
 	default:
+		if operation == backupJobOperationRestore {
+			return "The restore was rolled back and the database was left unchanged. Review the service state and try again."
+		}
 		return "The backup operation could not be completed. Review the service state and try again."
 	}
 }
@@ -225,7 +234,7 @@ func (h *Handler) runBackupJob(ctx context.Context, job *backupJob) {
 	}
 	if err != nil {
 		job.fail(err)
-		h.logger.Error("run backup operation", "application_id", job.applicationID, "service", job.serviceName, "operation", job.operation, "error", backupJobUserMessage(err))
+		h.logger.Error("run backup operation", "application_id", job.applicationID, "service", job.serviceName, "operation", job.operation, "error", backupJobOperationUserMessage(job.operation, err))
 		return
 	}
 	job.complete()

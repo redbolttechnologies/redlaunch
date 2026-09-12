@@ -75,6 +75,9 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if cfg.MetricsScope == config.MetricsScopeVPS && cfg.MetricsProcRoot == "" && cfg.MetricsFilesystemRoot == "" {
+		logger.Warn("METRICS_SCOPE=vps uses the default /proc and / paths without explicit host mounts; dashboard values describe this process's view unless METRICS_PROC_ROOT and METRICS_FILESYSTEM_ROOT point at host mounts (Docker) or the binary runs directly on the VPS")
+	}
 	if !cfg.GoogleAuthEnabled() {
 		return errors.New("Google authentication must be configured before starting Redlaunch")
 	}

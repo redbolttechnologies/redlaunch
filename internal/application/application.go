@@ -131,6 +131,7 @@ var (
 	ErrBackupScheduleDisabled           = errors.New("backup schedule is disabled")
 	ErrBackupServiceNotRunning          = errors.New("database service is not running")
 	ErrBackupUnsupported                = errors.New("scheduled backups are not supported for this service")
+	ErrBackupFormatUnsupported          = errors.New("backup file format is not supported")
 	ErrBackupOperationInProgress        = errors.New("another backup operation is in progress")
 	ErrApplicationDeletionInProgress    = errors.New("application deletion is in progress")
 	ErrEmailRequired                    = errors.New("email address is required")
@@ -596,6 +597,21 @@ type ApplicationDeletionIntent struct {
 	ApplicationID int64
 	Name          string
 	FolderName    string
+	Stage         string
+	State         string
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ServiceDeletionIntent is the durable checkpoint for a service deletion. The
+// service name remains available after service metadata is removed so an
+// interrupted cleanup can be resumed safely. Backup files are retained as
+// operator-managed artifacts; only the schedule, timer, routing, container,
+// Compose, and metadata state are coordinated here.
+type ServiceDeletionIntent struct {
+	ApplicationID int64
+	ServiceName   string
 	Stage         string
 	State         string
 	LastError     string

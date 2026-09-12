@@ -225,6 +225,10 @@ func TestStoreApplicationDeletionIntentSurvivesMetadataRemoval(t *testing.T) {
 	if err != nil || !active {
 		t.Fatalf("active deletion after metadata removal = (%t, %v), want true", active, err)
 	}
+	reserved, err := database.IsApplicationFolderDeletionActive(t.Context(), item.FolderName)
+	if err != nil || !reserved {
+		t.Fatalf("reserved folder after metadata removal = (%t, %v), want true", reserved, err)
+	}
 	if err := database.UpdateApplicationDeletion(t.Context(), item.ID, "complete", "complete", "", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +236,50 @@ func TestStoreApplicationDeletionIntentSurvivesMetadataRemoval(t *testing.T) {
 	if err != nil || active {
 		t.Fatalf("active deletion after completion = (%t, %v), want false", active, err)
 	}
+	reserved, err = database.IsApplicationFolderDeletionActive(t.Context(), item.FolderName)
+	if err != nil || reserved {
+		t.Fatalf("reserved folder after completion = (%t, %v), want false", reserved, err)
+	}
 	got, err := database.GetApplicationDeletion(t.Context(), item.ID)
 	if err != nil || got.FolderName != item.FolderName || got.State != "complete" {
 		t.Fatalf("deletion tombstone = %#v, %v, want completed tombstone", got, err)
+	}
+}
+
+func TestStoreServiceDeletionIntentLifecycle(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	item, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 12, 10, 0, 0, 0, time.UTC)
+	intent, err := database.BeginServiceDeletion(t.Context(), item.ID, "db", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Stage != "schedules" || intent.State != "running" {
+		t.Fatalf("initial service deletion intent = %#v, want running schedules stage", intent)
+	}
+	second, err := database.BeginServiceDeletion(t.Context(), item.ID, "db", now.Add(time.Minute))
+	if err != nil || second.CreatedAt.After(now.Add(time.Minute)) || !second.CreatedAt.Equal(now) {
+		t.Fatalf("second begin = %#v, %v; want the still-running intent returned", second, err)
+	}
+	if err := database.UpdateServiceDeletion(t.Context(), item.ID, "db", "complete", "complete", "", now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := database.BeginServiceDeletion(t.Context(), item.ID, "db", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.State != "running" || restarted.Stage != "schedules" || !restarted.CreatedAt.Equal(now.Add(3*time.Minute)) {
+		t.Fatalf("begin after completion = %#v, want a fresh running intent for the reused name", restarted)
+	}
+	if _, err := database.GetServiceDeletion(t.Context(), item.ID, "missing"); !errors.Is(err, application.ErrServiceNotFound) {
+		t.Fatalf("GetServiceDeletion(missing) = %v, want %v", err, application.ErrServiceNotFound)
 	}
 }

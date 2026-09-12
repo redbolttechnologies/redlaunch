@@ -538,6 +538,113 @@ func (s *Store) IsApplicationDeletionActive(ctx context.Context, applicationID i
 	return state != "complete", nil
 }
 
+// IsApplicationFolderDeletionActive reports whether an incomplete deletion
+// tombstone still reserves a folder name. Folder names must not be reused
+// until the previous deletion is durably complete; otherwise a retried
+// deletion could remove a replacement application's folder.
+func (s *Store) IsApplicationFolderDeletionActive(ctx context.Context, folderName string) (bool, error) {
+	if strings.TrimSpace(folderName) == "" {
+		return false, errors.New("application folder name is required")
+	}
+	var state string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT state FROM application_deletion_intents
+		WHERE folder_name = ? AND state != 'complete'
+		ORDER BY updated_at DESC, application_id DESC
+		LIMIT 1`, folderName).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check application folder deletion: %w", err)
+	}
+	return true, nil
+}
+
+// BeginServiceDeletion records or returns the durable deletion intent for one
+// service. It has no foreign key so the tombstone survives service metadata
+// deletion until cleanup is complete. A completed tombstone for a currently
+// registered service starts over: the name was reused after a finished
+// deletion.
+func (s *Store) BeginServiceDeletion(ctx context.Context, applicationID int64, serviceName string, now time.Time) (application.ServiceDeletionIntent, error) {
+	if applicationID < 1 || strings.TrimSpace(serviceName) == "" {
+		return application.ServiceDeletionIntent{}, application.ErrServiceNotFound
+	}
+	nowText := now.UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.ExecContext(ctx, `
+		DELETE FROM service_deletion_intents
+		WHERE application_id = ? AND service_name = ? AND state = 'complete'`, applicationID, serviceName); err != nil {
+		return application.ServiceDeletionIntent{}, fmt.Errorf("clear completed service deletion: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO service_deletion_intents (
+			application_id, service_name, stage, state,
+			last_error, created_at, updated_at
+		)
+		VALUES (?, ?, 'schedules', 'running', '', ?, ?)
+		ON CONFLICT(application_id, service_name) DO NOTHING`, applicationID, serviceName, nowText, nowText); err != nil {
+		return application.ServiceDeletionIntent{}, fmt.Errorf("begin service deletion: %w", err)
+	}
+	return s.GetServiceDeletion(ctx, applicationID, serviceName)
+}
+
+// GetServiceDeletion returns a service deletion intent, including completed
+// tombstones retained for operator-visible recovery history.
+func (s *Store) GetServiceDeletion(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDeletionIntent, error) {
+	var intent application.ServiceDeletionIntent
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT application_id, service_name, stage, state,
+			last_error, created_at, updated_at
+		FROM service_deletion_intents
+		WHERE application_id = ? AND service_name = ?`, applicationID, serviceName).Scan(
+		&intent.ApplicationID, &intent.ServiceName, &intent.Stage,
+		&intent.State, &intent.LastError, &createdAt, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return application.ServiceDeletionIntent{}, application.ErrServiceNotFound
+	}
+	if err != nil {
+		return application.ServiceDeletionIntent{}, fmt.Errorf("get service deletion: %w", err)
+	}
+	intent.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return application.ServiceDeletionIntent{}, fmt.Errorf("parse service deletion creation time: %w", err)
+	}
+	intent.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return application.ServiceDeletionIntent{}, fmt.Errorf("parse service deletion update time: %w", err)
+	}
+	return intent, nil
+}
+
+// UpdateServiceDeletion checkpoints one service deletion stage. The error is
+// bounded before storage so diagnostics cannot turn the recovery record into
+// an unbounded log.
+func (s *Store) UpdateServiceDeletion(ctx context.Context, applicationID int64, serviceName, stage, state, detail string, at time.Time) error {
+	if applicationID < 1 || strings.TrimSpace(serviceName) == "" || strings.TrimSpace(stage) == "" || strings.TrimSpace(state) == "" {
+		return errors.New("service deletion checkpoint is invalid")
+	}
+	detail = strings.TrimSpace(detail)
+	if len(detail) > 2048 {
+		detail = detail[:2048]
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE service_deletion_intents
+		SET stage = ?, state = ?, last_error = ?, updated_at = ?
+		WHERE application_id = ? AND service_name = ?`, stage, state, detail, at.UTC().Format(time.RFC3339Nano), applicationID, serviceName)
+	if err != nil {
+		return fmt.Errorf("update service deletion: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated service deletion count: %w", err)
+	}
+	if affected == 0 {
+		return application.ErrServiceNotFound
+	}
+	return nil
+}
+
 // CreateBackup records one completed backup file.
 func (s *Store) CreateBackup(ctx context.Context, backup application.Backup) (application.Backup, error) {
 	if backup.CreatedAt.IsZero() {
@@ -1420,6 +1527,34 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (13, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record operations migration: %w", err)
+		}
+	}
+
+	var serviceDeletionMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 14`).Scan(&serviceDeletionMigrationApplied); err != nil {
+		return fmt.Errorf("check service deletion migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS service_deletion_intents (
+			application_id INTEGER NOT NULL,
+			service_name TEXT NOT NULL,
+			stage TEXT NOT NULL,
+			state TEXT NOT NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (application_id, service_name)
+		)`); err != nil {
+		return fmt.Errorf("create service deletion intents table: %w", err)
+	}
+	if serviceDeletionMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (14, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record service deletion migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

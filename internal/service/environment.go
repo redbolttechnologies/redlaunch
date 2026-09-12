@@ -204,10 +204,12 @@ func parseEnvironmentValue(raw string) string {
 			if trailing == "" || strings.HasPrefix(trailing, "#") {
 				quoted := value[:closing+1]
 				if quote == '\'' {
+					// Single-quoted values are literal: no interpolation
+					// applies, so an escape sequence stays as written.
 					return quoted[1 : len(quoted)-1]
 				}
 				if unquoted, err := strconv.Unquote(quoted); err == nil {
-					return unquoted
+					return decodeEnvironmentEscapes(unquoted)
 				}
 			}
 		}
@@ -220,7 +222,15 @@ func parseEnvironmentValue(raw string) string {
 		value = value[:index]
 		break
 	}
-	return strings.TrimSpace(value)
+	return decodeEnvironmentEscapes(strings.TrimSpace(value))
+}
+
+// decodeEnvironmentEscapes maps the Compose escape "$$" to the literal value
+// it represents. It is the inverse of formatEnvironmentValue: displayed
+// values are literals, and the writer re-encodes them on replacement. Single
+// quotes bypass this because their contents never interpolate.
+func decodeEnvironmentEscapes(value string) string {
+	return strings.ReplaceAll(value, "$$", "$")
 }
 
 func environmentQuoteEnd(value string, quote byte) int {

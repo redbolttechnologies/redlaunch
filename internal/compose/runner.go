@@ -383,6 +383,16 @@ func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName st
 // adapter and verifies the ownership labels when it already exists. Compose
 // projects consume this network as external infrastructure; optional core
 // components do not implicitly own its lifetime.
+//
+// Upgrade adoption: releases before managed-network ownership created
+// redlaunch-common through the proxy Compose project (compose labels, no
+// Redlaunch labels) or plain docker network create (no labels at all).
+// Deleting such an in-use network blindly would drop attached containers, so
+// an existing bridge network with no foreign owner is adopted in place when
+// it matches the legacy shape instead of being refused. Docker labels are
+// immutable, so adoption is stateless and re-validated on every call;
+// anything that does not match (non-bridge driver, internal network, or a
+// foreign redlaunch.owner label) is still refused.
 func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) error {
 	ctx = normalizeContext(ctx)
 	networkName = strings.TrimSpace(networkName)
@@ -416,18 +426,71 @@ func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) er
 		return nil
 	}
 
-	inspect := exec.CommandContext(ctx, binary, "network", "inspect", "--format", "{{json .Labels}}", networkName)
+	inspect := exec.CommandContext(ctx, binary, "network", "inspect", "--format", "{{json .}}", networkName)
 	inspect.Env = composeProcessEnvironment(os.Environ(), nil)
-	labelsOutput, err := runStructuredCommand(inspect, "inspect application network", "")
+	inspectOutput, err := runStructuredCommand(inspect, "inspect application network", "")
 	if err != nil {
 		return err
 	}
-	var labels map[string]string
-	if err := json.Unmarshal(bytes.TrimSpace(labelsOutput), &labels); err != nil {
-		return fmt.Errorf("inspect application network: decode Docker labels: %w", err)
+	network, err := decodeDockerNetwork(inspectOutput)
+	if err != nil {
+		return err
 	}
-	if labels["redlaunch.managed"] != "true" || labels["redlaunch.owner"] != "redlaunch" {
-		return fmt.Errorf("refusing to use Docker network %q: it is not owned by Redlaunch", networkName)
+	if network.Labels["redlaunch.managed"] == "true" && network.Labels["redlaunch.owner"] == "redlaunch" {
+		return nil
+	}
+	if err := checkAdoptableLegacyNetwork(networkName, network); err != nil {
+		return err
+	}
+	return nil
+}
+
+// dockerNetwork is the subset of docker network inspect output that decides
+// shared-network ownership and legacy adoption.
+type dockerNetwork struct {
+	Driver   string            `json:"Driver"`
+	Scope    string            `json:"Scope"`
+	Internal bool              `json:"Internal"`
+	Labels   map[string]string `json:"Labels"`
+}
+
+func decodeDockerNetwork(output []byte) (dockerNetwork, error) {
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) == 0 {
+		return dockerNetwork{}, errors.New("inspect application network: Docker returned no network details")
+	}
+	// docker network inspect prints a JSON array with one element.
+	if trimmed[0] == '[' {
+		var networks []dockerNetwork
+		if err := json.Unmarshal(trimmed, &networks); err != nil {
+			return dockerNetwork{}, fmt.Errorf("inspect application network: decode Docker network: %w", err)
+		}
+		if len(networks) != 1 {
+			return dockerNetwork{}, fmt.Errorf("inspect application network: Docker returned %d networks", len(networks))
+		}
+		return networks[0], nil
+	}
+	var network dockerNetwork
+	if err := json.Unmarshal(trimmed, &network); err != nil {
+		return dockerNetwork{}, fmt.Errorf("inspect application network: decode Docker network: %w", err)
+	}
+	return network, nil
+}
+
+// checkAdoptableLegacyNetwork accepts a pre-ownership redlaunch-common
+// without deleting or relabeling it. Docker network labels are immutable, so
+// there is no in-place labeling step: acceptance is the adoption, and it is
+// re-validated on every call. Anything outside the legacy shape stays
+// refused.
+func checkAdoptableLegacyNetwork(networkName string, network dockerNetwork) error {
+	if owner, ok := network.Labels["redlaunch.owner"]; ok && owner != "" && owner != "redlaunch" {
+		return fmt.Errorf("refusing to use Docker network %q: it is owned by %q", networkName, owner)
+	}
+	if network.Driver != "" && network.Driver != "bridge" {
+		return fmt.Errorf("refusing to use Docker network %q: driver %q is not the expected bridge network", networkName, network.Driver)
+	}
+	if network.Internal {
+		return fmt.Errorf("refusing to use Docker network %q: it is not the expected shared bridge network", networkName)
 	}
 	return nil
 }
@@ -754,8 +817,13 @@ func (r CommandRunner) OpenLogs(ctx context.Context, projectDir, serviceName str
 }
 
 const (
-	postgresDumpScript    = `PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump --clean --if-exists --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
-	postgresRestoreScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec psql --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
+	postgresDumpScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump --clean --if-exists --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
+	// Restores run inside a single database transaction so a failure or an
+	// interrupted connection rolls the dump back instead of leaving a
+	// partially applied database. Dumps are plain SQL (see the supported
+	// format check in the backup service); retrying a rolled-back restore is
+	// safe.
+	postgresRestoreScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec psql --single-transaction --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
 )
 
 // BackupPostgreSQL writes a plain SQL dump produced inside the PostgreSQL
@@ -977,22 +1045,27 @@ func redactDiagnostic(output, projectDir string) string {
 func diagnosticSecretValues(projectDir string) []string {
 	values := make([]string, 0)
 	if projectDir != "" {
-		if contents, err := os.ReadFile(filepath.Join(projectDir, "secrets.env")); err == nil {
-			for _, line := range strings.Split(string(contents), "\n") {
-				trimmed := strings.TrimSpace(line)
-				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-					continue
-				}
-				_, value, ok := strings.Cut(trimmed, "=")
-				if !ok {
-					continue
-				}
-				value = strings.TrimSpace(value)
-				if len(value) >= 3 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
-					value = value[1 : len(value)-1]
-				}
-				if value != "" {
-					values = append(values, value)
+		// Redact the project secrets file and every service-scoped secrets
+		// file (<service>.secrets.env) so per-service credentials added after
+		// the shared file get the same protection.
+		for _, name := range diagnosticSecretFileNames(projectDir) {
+			if contents, err := os.ReadFile(filepath.Join(projectDir, name)); err == nil {
+				for _, line := range strings.Split(string(contents), "\n") {
+					trimmed := strings.TrimSpace(line)
+					if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+						continue
+					}
+					_, value, ok := strings.Cut(trimmed, "=")
+					if !ok {
+						continue
+					}
+					value = strings.TrimSpace(value)
+					if len(value) >= 3 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+						value = value[1 : len(value)-1]
+					}
+					if value != "" {
+						values = append(values, value)
+					}
 				}
 			}
 		}
@@ -1004,6 +1077,29 @@ func diagnosticSecretValues(projectDir string) []string {
 		}
 	}
 	return values
+}
+
+// diagnosticSecretFileNames lists the project secrets file and any
+// service-scoped secrets files without following symlinks or leaving the
+// project directory. Unreadable directories yield just the shared file.
+func diagnosticSecretFileNames(projectDir string) []string {
+	names := []string{"secrets.env"}
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return names
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "secrets.env" || entry.IsDir() || !strings.HasSuffix(name, ".secrets.env") {
+			continue
+		}
+		if strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func sensitiveDiagnosticKey(key string) bool {
@@ -1315,35 +1411,155 @@ func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir st
 		return err
 	}
 	volumes := strings.Fields(string(volumeOutput))
-	if len(volumes) == 0 {
-		return nil
+	if len(volumes) > 0 {
+		volumeInspectArgs := []string{"volume", "inspect", "--format", "{{json .Labels}}"}
+		volumeInspectArgs = append(volumeInspectArgs, volumes...)
+		volumeInspect := exec.CommandContext(ctx, binary, volumeInspectArgs...)
+		volumeInspect.Dir = projectDir
+		volumeInspect.Env = composeProcessEnvironment(os.Environ(), nil)
+		volumeInspectOutput, err := runStructuredCommand(volumeInspect, "inspect Compose volume ownership", projectDir)
+		if err != nil {
+			return err
+		}
+		inspected := 0
+		for _, line := range strings.Split(strings.TrimSpace(string(volumeInspectOutput)), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			inspected++
+			var labels map[string]string
+			if err := json.Unmarshal([]byte(line), &labels); err != nil {
+				return fmt.Errorf("verify Compose volume ownership: decode Docker labels: %w", err)
+			}
+			if labels["com.docker.compose.project"] != projectName {
+				return fmt.Errorf("refusing to modify Compose project %q: existing volume does not belong to the expected project", projectName)
+			}
+		}
+		if inspected != len(volumes) {
+			return fmt.Errorf("verify Compose volume ownership: Docker returned labels for %d of %d volumes", inspected, len(volumes))
+		}
 	}
 
-	volumeInspectArgs := []string{"volume", "inspect", "--format", "{{json .Labels}}"}
-	volumeInspectArgs = append(volumeInspectArgs, volumes...)
-	volumeInspect := exec.CommandContext(ctx, binary, volumeInspectArgs...)
-	volumeInspect.Dir = projectDir
-	volumeInspect.Env = composeProcessEnvironment(os.Environ(), nil)
-	volumeInspectOutput, err := runStructuredCommand(volumeInspect, "inspect Compose volume ownership", projectDir)
+	// The label-filtered check above only sees volumes already carrying this
+	// project's identity. A configured explicitly named volume owned by
+	// another project carries no such label yet down --volumes would still
+	// target it. Resolve the configured volume names independently and refuse
+	// when any of them already exists under foreign ownership.
+	return r.verifyConfiguredVolumeOwnership(ctx, projectDir, projectName)
+}
+
+// verifyConfiguredVolumeOwnership resolves the Compose project's configured
+// volumes and refuses when any configured non-external volume name already
+// exists without this project's ownership label. Missing volumes are left
+// alone: they will be created with the project's identity.
+func (r CommandRunner) verifyConfiguredVolumeOwnership(ctx context.Context, projectDir, projectName string) error {
+	ctx = normalizeContext(ctx)
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json")
+	output, err := runStructuredCommand(command, "resolve Compose volume ownership", projectDir)
 	if err != nil {
 		return err
 	}
-	inspected := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(volumeInspectOutput)), "\n") {
-		if strings.TrimSpace(line) == "" {
+	names, err := configuredNonExternalVolumeNames(output, projectName)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		exists, err := dockerVolumeExists(ctx, binary, projectDir, name)
+		if err != nil {
+			return err
+		}
+		if !exists {
 			continue
 		}
-		inspected++
-		var labels map[string]string
-		if err := json.Unmarshal([]byte(line), &labels); err != nil {
-			return fmt.Errorf("verify Compose volume ownership: decode Docker labels: %w", err)
+		labels, err := dockerVolumeLabels(ctx, binary, projectDir, name)
+		if err != nil {
+			return err
 		}
 		if labels["com.docker.compose.project"] != projectName {
-			return fmt.Errorf("refusing to modify Compose project %q: existing volume does not belong to the expected project", projectName)
+			return fmt.Errorf("refusing to modify Compose project %q: configured volume %q is owned by another project", projectName, name)
 		}
 	}
-	if inspected != len(volumes) {
-		return fmt.Errorf("verify Compose volume ownership: Docker returned labels for %d of %d volumes", inspected, len(volumes))
-	}
 	return nil
+}
+
+// configuredNonExternalVolumeNames returns the resolved names of configured
+// non-external top-level volumes. Volumes without an explicit name resolve to
+// the Compose default "<project>_<key>".
+func configuredNonExternalVolumeNames(configOutput []byte, projectName string) ([]string, error) {
+	var config struct {
+		Volumes map[string]struct {
+			Name     string          `json:"name"`
+			External json.RawMessage `json:"external"`
+		} `json:"volumes"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(configOutput), &config); err != nil {
+		return nil, fmt.Errorf("decode Compose volume configuration: %w", err)
+	}
+	names := make([]string, 0, len(config.Volumes))
+	for key, volume := range config.Volumes {
+		if isExternalVolume(volume.External) {
+			continue
+		}
+		name := strings.TrimSpace(volume.Name)
+		if name == "" {
+			name = projectName + "_" + key
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func isExternalVolume(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	var flag bool
+	if err := json.Unmarshal(trimmed, &flag); err == nil {
+		return flag
+	}
+	// Any non-boolean external value (for example {"name": "..."}) marks the
+	// volume as external infrastructure that down --volumes will not remove.
+	return true
+}
+
+func dockerVolumeExists(ctx context.Context, binary, projectDir, name string) (bool, error) {
+	list := exec.CommandContext(ctx, binary, "volume", "ls", "--filter", "name=^"+name+"$", "--format", "{{.Name}}")
+	list.Dir = projectDir
+	list.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := runStructuredCommand(list, "inspect Compose volume ownership", projectDir)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range strings.Fields(string(output)) {
+		if candidate == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func dockerVolumeLabels(ctx context.Context, binary, projectDir, name string) (map[string]string, error) {
+	inspect := exec.CommandContext(ctx, binary, "volume", "inspect", "--format", "{{json .Labels}}", name)
+	inspect.Dir = projectDir
+	inspect.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := runStructuredCommand(inspect, "inspect Compose volume ownership", projectDir)
+	if err != nil {
+		return nil, err
+	}
+	var labels map[string]string
+	if err := json.Unmarshal(bytes.TrimSpace(output), &labels); err != nil {
+		return nil, fmt.Errorf("inspect Compose volume ownership: decode Docker labels: %w", err)
+	}
+	return labels, nil
 }

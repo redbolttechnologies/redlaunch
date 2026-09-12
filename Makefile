@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt fmt-check secret-scan run setup update linux-build vulncheck-linux compose-config docker-build image-identity release-check clean add-authorized-email auth-add-email
+.PHONY: build test integration lint fmt fmt-check secret-scan run setup update linux-build vulncheck-linux compose-config docker-build image-identity release-check clean add-authorized-email auth-add-email
 
 BINARY := bin/redlaunch
 GO_VERSION := 1.26.8
@@ -17,6 +17,9 @@ build: ## Build the server binary
 test: ## Run tests with the race detector
 	$(GO) test -race -count=1 $(GO_PACKAGES)
 
+integration: ## Run opt-in Docker/systemd/recovery checks on disposable fixtures (skips without docker)
+	REDLAUNCH_DOCKER_CONFIG_TEST=1 $(GO) test -race -count=1 $(GO_PACKAGES)
+
 lint: ## Run the standard Go static checks
 	$(GO) vet $(GO_PACKAGES)
 
@@ -28,7 +31,7 @@ fmt-check: ## Fail when Go source files need formatting
 
 secret-scan: ## Fail when real environment files, keys, or private-key material are tracked by git
 	git ls-files | grep -E '(^|/)\.env$$|(^|/)vars\.env$$|(^|/)secrets\.env$$|\.pem$$|\.key$$|(^|/)credentials[^/]*\.json$$' | grep -v '\.example' > /dev/null && { echo "tracked secret files found (see .gitignore)" >&2; exit 1; } || true
-	! git grep -l --cached 'BEGIN .*PRIVATE KEY' -- . ':!*.example*' > /dev/null || { echo "tracked private-key material found" >&2; exit 1; }
+	! git grep -l --cached 'BEGIN .*PRIVATE 'KEY -- . ':!*.example*' > /dev/null || { echo "tracked private-key material found" >&2; exit 1; }
 
 linux-build: ## Build the production Linux binary and record module/toolchain identity
 	mkdir -p bin
@@ -61,7 +64,7 @@ image-identity: docker-build ## Record the local release image ID, digests, and 
 	mkdir -p bin
 	docker image inspect --format 'image_id={{.Id}} repo_digests={{json .RepoDigests}} go_version={{index .Config.Labels "io.redlaunch.build.go-version"}}' $(IMAGE) > $(IMAGE_IDENTITY)
 
-release-check: test lint fmt-check secret-scan vulncheck-linux compose-config image-identity ## Run the release gate
+release-check: test integration lint fmt-check secret-scan vulncheck-linux compose-config image-identity ## Run the release gate
 
 clean: ## Remove local build output
 	rm -rf bin

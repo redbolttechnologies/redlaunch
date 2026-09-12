@@ -330,3 +330,32 @@ func writeProcSample(t *testing.T, procRoot, cpu string, processes map[int]strin
 		}
 	}
 }
+
+func TestCollectorScopeLabelsBothDeploymentModes(t *testing.T) {
+	for _, scope := range []string{ScopeManager, ScopeVPS} {
+		procRoot := t.TempDir()
+		writeProcSample(t, procRoot, "cpu 100 0 0 100 0\ncpu0 100 0 0 100 0\n", map[int]string{
+			101: string(processStat(101, "worker", 10, 0, 10)),
+		})
+		collector := NewWithConfig(Config{
+			ProcRoot:       procRoot,
+			FilesystemRoot: "/fixture-" + scope,
+			Scope:          scope,
+		})
+		collector.statfs = func(string) (filesystemStats, error) {
+			return filesystemStats{blocks: 100, freeBlocks: 40, availableBlocks: 35, blockSize: 4096}, nil
+		}
+		collector.wait = func(context.Context, time.Duration) error { return nil }
+
+		snapshot, err := collector.Collect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Scope != scope {
+			t.Fatalf("scope %q snapshot.Scope = %q", scope, snapshot.Scope)
+		}
+		if len(snapshot.TopCPU) != 1 || snapshot.TopCPU[0].PID != 101 {
+			t.Fatalf("scope %q top processes = %#v, want only the fixture PID", scope, snapshot.TopCPU)
+		}
+	}
+}

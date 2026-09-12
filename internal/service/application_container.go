@@ -58,6 +58,9 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 	if err != nil {
 		return application.Service{}, err
 	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return application.Service{}, err
+	}
 	if err := s.validateApplicationServiceDependencies(ctx, item.ID, serviceName, normalizedInput.DependsOn); err != nil {
 		return application.Service{}, err
 	}
@@ -72,6 +75,18 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 	}
 	if composePath == "" {
 		return application.Service{}, errors.New("application Compose file does not exist")
+	}
+	// Enforce the shared project-aware mount policy against the live
+	// filesystem before mutating anything: lexical validation alone cannot see
+	// a subdirectory symlink pointing outside the project or at a
+	// manager-owned file.
+	for _, mapping := range normalizedInput.VolumeMappings {
+		if _, named := composeNamedVolume(mapping.Source); named {
+			continue
+		}
+		if err := validateResolvedBindSource(directory, mapping.Source); err != nil {
+			return application.Service{}, err
+		}
 	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
@@ -420,6 +435,12 @@ func validateApplicationVolumeSource(value string) error {
 		return nil
 	}
 	if value != "." && !strings.HasPrefix(value, "./") {
+		return application.ErrApplicationVolumeSourceInvalid
+	}
+	// The project directory itself must never be exposed to a workload: a
+	// writable root mount lets the container replace sibling managed files
+	// such as compose.yml and secrets.env.
+	if path.Clean(value) == "." {
 		return application.ErrApplicationVolumeSourceInvalid
 	}
 	clean := path.Clean(value)

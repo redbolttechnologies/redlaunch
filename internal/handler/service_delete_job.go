@@ -222,9 +222,11 @@ func (j *serviceDeleteJob) snapshot() serviceDeleteProgressData {
 
 func serviceDeleteJobSteps() []serviceDeleteJobStep {
 	return []serviceDeleteJobStep{
+		{Stage: "schedules", Label: "Disable scheduled backups", State: serviceDeleteJobStepRemaining},
 		{Stage: "stop", Label: "Stop service container", State: serviceDeleteJobStepRemaining},
 		{Stage: "remove", Label: "Remove service container", State: serviceDeleteJobStepRemaining},
 		{Stage: "compose", Label: "Remove service from Compose file", State: serviceDeleteJobStepRemaining},
+		{Stage: "routing", Label: "Remove service routing", State: serviceDeleteJobStepRemaining},
 		{Stage: "metadata", Label: "Delete service metadata", State: serviceDeleteJobStepRemaining},
 	}
 }
@@ -249,6 +251,9 @@ func (h *Handler) runServiceDeleteJob(ctx context.Context, job *serviceDeleteJob
 func serviceDeletionUserMessage(err error) string {
 	if errors.Is(err, application.ErrServiceNameRequired) || errors.Is(err, application.ErrServiceNameTooLong) || errors.Is(err, application.ErrServiceNameInvalid) {
 		return "The service name is invalid."
+	}
+	if errors.Is(err, application.ErrApplicationDeletionInProgress) {
+		return "The application is being deleted. Try again after deletion finishes."
 	}
 
 	detail := ""

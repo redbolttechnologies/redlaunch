@@ -523,6 +523,10 @@ docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Label "redlaunch.managed"}}\t{{.L
 docker volume ls --filter label=com.docker.compose.project \
   --format '{{.Name}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.volume"}}' \
   > "$backup_dir/volumes.tsv"
+docker network ls --filter name=redlaunch-common --no-trunc \
+  > "$backup_dir/networks.txt"
+docker network inspect redlaunch-common --format '{{json .}}' \
+  > "$backup_dir/network-redlaunch-common.json"
 systemctl list-unit-files 'redlaunch-backup-*.timer' --no-pager \
   > "$backup_dir/backup-timer-files.txt"
 systemctl list-timers 'redlaunch-backup-*.timer' --all --no-pager \
@@ -542,6 +546,25 @@ folder. Destructive service and project operations also require both the
 derived Compose project label and <code>redlaunch.managed=true</code>. A legacy
 container without that label is refused rather than guessed at; inventory it,
 map its volumes, and perform a reviewed adoption before removing anything.
+
+The shared <code>redlaunch-common</code> network is adopted, never deleted
+blindly. Installations predating managed-network ownership created it through
+the proxy Compose project (Compose labels, no Redlaunch labels) or plain
+<code>docker network create</code> (no labels). Setup accepts such a network
+in place when <code>network-redlaunch-common.json</code> shows a local bridge
+driver, no <code>Internal</code> flag, and no foreign
+<code>redlaunch.owner</code> label; any other shape stays refused. Because
+Docker network labels are immutable, adoption is re-validated on every call
+rather than recorded. Do not remove an in-use shared network to "fix"
+ownership: attached containers would lose connectivity.
+
+Map legacy project-scoped volumes before recreating anything.
+<code>volumes.tsv</code> pairs each volume name with its owning Compose project
+and volume key: an old <code>OLD_PROJECT_KEY</code> volume holding mounted
+data must be mapped to the new <code>NEW_PROJECT_KEY</code> identity from the
+release instructions (same key, new project prefix) and confirmed present
+before the old project is stopped. Do not proceed when a project-scoped volume
+in the inventory has no mapped new identity.
 
 Stop the manager so SQLite is closed, then copy the complete data volume,
 managed project tree, and installation settings without displaying their
@@ -588,12 +611,25 @@ troubleshooting. Never use an old ambiguous project-wide
 ### Interrupted backups and deletion recovery
 
 Web backup and restore requests return a progress operation while the database
-command continues under the manager's execution deadline. The same service
-lease is used by the scheduled <code>backup-run</code> command, so do not
-manually remove lease rows during a running operation. A crashed process leaves
-an expiring lease; the next operation can reclaim it after the lease window.
-Old temporary dump files are removed conservatively by a later successful
-backup; files without Redlaunch's temporary filename prefix are never touched.
+command continues under the manager's execution deadline. Web operations are
+further bounded by the 15-minute tracked-job timeout; every lease-holding
+backup, restore, retention, and deletion operation is additionally capped at
+25 minutes, below the 30-minute service lease, and the generated systemd unit
+stops overruns at the same boundary with <code>TimeoutStartSec=1500</code>.
+The same service lease is used by the scheduled <code>backup-run</code>
+command, so do not manually remove lease rows during a running operation. A
+crashed process leaves an expiring lease; the next operation can reclaim it
+after the lease window. Old temporary dump files are removed conservatively
+by a later successful backup; files without Redlaunch's temporary filename
+prefix are never touched.
+
+Restores accept only plain SQL dumps and apply them inside a single database
+transaction: a failure or an interrupted connection rolls the dump back and
+leaves the database unchanged, so retrying the same backup file is safe.
+Custom, tar, or directory archives are rejected before any database work.
+A failed restore reports that the database was left unchanged; check that the
+database service is running and submit the restore again. Restore operations
+share the 25-minute execution bound above.
 
 Application deletion writes a tombstone before stopping Docker resources. If a
 stage fails, submit the deletion again with the exact application name after
@@ -602,7 +638,22 @@ backup schedules, routing state, deployment-key cleanup, metadata, and the
 application folder coordinated. The application page reads the retained
 tombstone after a manager restart, so the interrupted stage remains
 operator-visible. Do not delete the SQLite database or manually remove the
-application directory while a deletion tombstone is incomplete.
+application directory while a deletion tombstone is incomplete. Folder names
+stay reserved until the tombstone reaches completion: creating a replacement
+application with the same folder is rejected while the previous deletion is
+incomplete, and retrying the old deletion never removes a replacement folder.
+A retry after the folder is already gone completes the tombstone instead of
+reporting "application not found".
+
+Service deletion follows the same coordinated guarantees: it records its own
+durable tombstone, disables the service's backup timer first, holds the
+service backup lease across the remaining stages so a running backup is never
+interrupted, removes the service's routing rows with a Caddy reload, then
+removes the container, Compose entry, and metadata. If a stage fails, submit
+the deletion again; the recorded stage resumes. Service backup files are
+retained as operator-managed artifacts while schedule and history records
+cascade with the service metadata; export or remove those files separately
+after confirming the retention policy.
 Backup files under <code>BACKUP_ROOT/&lt;folder&gt;/&lt;service&gt;</code> are retained
 when application metadata is deleted; export or remove those operator-managed
 artifacts separately after confirming the retention policy.
@@ -614,6 +665,13 @@ stop each old project once, without deleting volumes:
 ~~~sh
   docker compose --project-name OLD_PROJECT --env-file /dev/null -f ABSOLUTE_CONFIG_FILE down --remove-orphans
 ~~~
+
+Never add <code>--volumes</code> here: stopping must not delete data volumes.
+When <code>containers.tsv</code> shows two resources sharing one Compose
+project label (for example an application folder and a core component that
+both resolve to <code>proxy</code>), stop each resource with its own absolute
+configuration file from the inventory instead of addressing the shared label
+once; a single project-wide command would touch both resources' containers.
 
 Do not proceed when <code>volumes.tsv</code> shows a project-scoped volume whose
 new identity has not been mapped by the release's migration instructions. After

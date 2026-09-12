@@ -29,7 +29,7 @@
 </div>
 {{else}}
 <div class="dashboard-metrics-meta">
-  <span>Scope: {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} · Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time> ({{dashboardMetricAge .DashboardPage.Metrics.CollectedAt}})</span>
+  <span>Scope: {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} ({{dashboardMetricsScopeDetail .DashboardPage.Metrics.Scope}}) · Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time> ({{dashboardMetricAge .DashboardPage.Metrics.CollectedAt}})</span>
   {{if .DashboardPage.Metrics.Stale}}<span class="dashboard-metrics-stale" role="status">Refresh unavailable; showing the last valid sample.</span>{{end}}
 </div>
 
@@ -45,7 +45,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>CPU usage</h2>
-          <p>Current {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} utilization</p>
+          <p>Aggregate procfs CPU in the configured view</p>
         </div>
       </div>
     </header>
@@ -66,7 +66,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>Memory usage</h2>
-          <p>Current {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} memory</p>
+          <p>Procfs memory in the configured view</p>
         </div>
       </div>
     </header>
@@ -99,7 +99,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>Disk usage</h2>
-          <p>Configured filesystem</p>
+          <p>Filesystem of the configured root</p>
         </div>
       </div>
     </header>
@@ -122,8 +122,8 @@
   <section class="service-widget dashboard-process-widget" aria-labelledby="top-cpu-processes-title">
     <header class="service-widget-header">
       <div class="service-widget-heading">
-        <h2 id="top-cpu-processes-title">Top 10 most CPU-intensive processes</h2>
-        <p>Processes using the most CPU during the latest sample.</p>
+          <h2 id="top-cpu-processes-title">Top 10 most CPU-intensive processes</h2>
+          <p>Processes visible in this PID namespace during the latest sample.</p>
       </div>
     </header>
     <div class="dashboard-process-table-wrap">
@@ -157,8 +157,8 @@
   <section class="service-widget dashboard-process-widget" aria-labelledby="top-memory-processes-title">
     <header class="service-widget-header">
       <div class="service-widget-heading">
-        <h2 id="top-memory-processes-title">Top 10 most memory-consuming processes</h2>
-        <p>Processes using the most resident memory.</p>
+          <h2 id="top-memory-processes-title">Top 10 most memory-consuming processes</h2>
+          <p>Resident memory of processes visible in this PID namespace.</p>
       </div>
     </header>
     <div class="dashboard-process-table-wrap">

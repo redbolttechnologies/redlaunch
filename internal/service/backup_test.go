@@ -435,3 +435,114 @@ func TestBackupServiceScheduledRunRefusesDisabledScheduleAndRecordsFailure(t *te
 		t.Fatalf("failed backup schedule = %#v, want failed status", repository.schedule)
 	}
 }
+
+func TestBackupOperationDeadlineBoundsUnboundedCallers(t *testing.T) {
+	ctx, cancel := withBackupOperationDeadline(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("withBackupOperationDeadline(background) has no deadline, want 25-minute cap")
+	}
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > backupOperationTimeout {
+		t.Fatalf("unbounded operation deadline in %v, want (0, %v]", remaining, backupOperationTimeout)
+	}
+	if backupOperationTimeout >= backupLeaseDuration {
+		t.Fatalf("operation timeout %v must stay below lease duration %v", backupOperationTimeout, backupLeaseDuration)
+	}
+
+	short, shortCancel := context.WithTimeout(context.Background(), time.Minute)
+	defer shortCancel()
+	capped, cancelCapped := withBackupOperationDeadline(short)
+	defer cancelCapped()
+	if deadline, ok := capped.Deadline(); !ok || time.Until(deadline) > time.Minute {
+		t.Fatalf("short caller deadline = %v, want the caller's own 1-minute bound preserved", deadline)
+	}
+}
+
+func TestBackupUnitsBoundExecutionBelowLeaseExpiry(t *testing.T) {
+	backups := newBackupServiceTest(t, &backupRepositoryFake{}, &backupRunnerFake{}, &backupSchedulerFake{})
+	serviceContents, _ := backups.renderUnits(7, 11, application.BackupSchedule{})
+	if !strings.Contains(serviceContents, "TimeoutStartSec="+backupSystemdTimeout) {
+		t.Fatalf("backup service unit does not bound execution:\n%s", serviceContents)
+	}
+}
+
+func TestDisableServiceBackupScheduleIsIdempotent(t *testing.T) {
+	repository := &backupRepositoryFake{
+		schedule:    application.BackupSchedule{ServiceID: 11, Enabled: true},
+		hasSchedule: true,
+	}
+	scheduler := &backupSchedulerFake{}
+	backups := newBackupServiceTest(t, repository, &backupRunnerFake{}, scheduler)
+	if err := backups.DisableServiceBackupSchedule(context.Background(), 7, 11); err != nil {
+		t.Fatal(err)
+	}
+	if scheduler.disabledService == "" || scheduler.disabledTimer == "" {
+		t.Fatalf("disabled units = %q/%q, want service and timer names", scheduler.disabledService, scheduler.disabledTimer)
+	}
+	if repository.schedule.Enabled {
+		t.Fatal("schedule still enabled after service-targeted disable")
+	}
+	if err := backups.DisableServiceBackupSchedule(context.Background(), 7, 11); err != nil {
+		t.Fatalf("second DisableServiceBackupSchedule() = %v, want nil", err)
+	}
+	if err := backups.DisableServiceBackupSchedule(context.Background(), 7, 999); err != nil {
+		t.Fatalf("DisableServiceBackupSchedule(missing schedule) = %v, want nil", err)
+	}
+}
+
+func TestRestoreBackupRejectsNonPlainSQLDumps(t *testing.T) {
+	repository := &backupRepositoryFake{
+		item:     application.Application{ID: 7, Name: "Status page", FolderName: "status-page"},
+		services: []application.Service{{ID: 11, ApplicationID: 7, Name: "db", Type: application.ServiceTypePostgreSQL}},
+		backups: []application.Backup{
+			{ID: 1, ServiceID: 11, FileName: "backup-custom.sql", CreatedAt: time.Now().UTC(), SizeBytes: 5},
+			{ID: 2, ServiceID: 11, FileName: "backup-binary.sql", CreatedAt: time.Now().UTC(), SizeBytes: 7},
+		},
+	}
+	runner := &backupRunnerFake{}
+	backups := newBackupServiceTest(t, repository, runner, &backupSchedulerFake{})
+	location := filepath.Join(backups.backupRoot, "status-page", "db")
+	if err := os.MkdirAll(location, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(location, "backup-custom.sql"), []byte("PGDMP-custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(location, "backup-binary.sql"), []byte{'S', 'E', 'T', 0, 'x'}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, fileName := range []string{"backup-custom.sql", "backup-binary.sql"} {
+		if err := backups.RestoreBackup(t.Context(), 7, "db", fileName); !errors.Is(err, application.ErrBackupFormatUnsupported) {
+			t.Fatalf("RestoreBackup(%s) = %v, want %v", fileName, err, application.ErrBackupFormatUnsupported)
+		}
+	}
+	if runner.restoreSource != "" {
+		t.Fatalf("restore reached the database runner with source %q, want no database work for rejected formats", runner.restoreSource)
+	}
+}
+
+func TestRestoreBackupAcceptsPlainSQLDumps(t *testing.T) {
+	repository := &backupRepositoryFake{
+		item:     application.Application{ID: 7, Name: "Status page", FolderName: "status-page"},
+		services: []application.Service{{ID: 11, ApplicationID: 7, Name: "db", Type: application.ServiceTypePostgreSQL}},
+		backups: []application.Backup{
+			{ID: 1, ServiceID: 11, FileName: "backup-plain.sql", CreatedAt: time.Now().UTC(), SizeBytes: 8},
+		},
+	}
+	runner := &backupRunnerFake{}
+	backups := newBackupServiceTest(t, repository, runner, &backupSchedulerFake{})
+	location := filepath.Join(backups.backupRoot, "status-page", "db")
+	if err := os.MkdirAll(location, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(location, "backup-plain.sql"), []byte("-- plain SQL dump\nSELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backups.RestoreBackup(t.Context(), 7, "db", "backup-plain.sql"); err != nil {
+		t.Fatalf("RestoreBackup(plain SQL) = %v, want nil", err)
+	}
+	if runner.restoreSource == "" {
+		t.Fatal("plain SQL restore did not reach the database runner")
+	}
+}

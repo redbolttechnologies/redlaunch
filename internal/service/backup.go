@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -46,6 +47,19 @@ type backupDeletionStateRepository interface {
 
 const backupLeaseDuration = 30 * time.Minute
 const backupTemporaryRetention = 24 * time.Hour
+
+// backupOperationTimeout bounds every lease-holding backup operation below the
+// lease window so a live owner can never still be running when its lease
+// expires. Web jobs carry a shorter 15-minute tracked-job deadline; this cap
+// exists for direct service callers and the backup-run CLI, which otherwise
+// pass an unbounded signal context. The generated systemd unit kills overruns
+// at the same boundary. Lease expiry then only handles true process death,
+// never a still-running owner.
+const backupOperationTimeout = 25 * time.Minute
+
+// backup systemd execution timeout, kept equal to the operation cap so the
+// manager and systemd agree on the overrun boundary.
+const backupSystemdTimeout = "1500"
 
 // PostgreSQLBackupRunner performs a database dump or restore without exposing
 // credentials to the host command line and can inspect the service runtime
@@ -283,9 +297,40 @@ func (s *BackupService) DisableApplicationSchedules(ctx context.Context, applica
 	return nil
 }
 
+// DisableServiceBackupSchedule stops one database service's timer and persists
+// the disabled state. Service deletion uses this before removing metadata so
+// the external systemd timer cannot outlive its schedule row.
+func (s *BackupService) DisableServiceBackupSchedule(ctx context.Context, applicationID, serviceID int64) error {
+	if applicationID < 1 || serviceID < 1 {
+		return application.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	schedule, err := s.repository.GetBackupSchedule(ctx, serviceID)
+	if errors.Is(err, application.ErrBackupScheduleNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read backup schedule for cleanup: %w", err)
+	}
+	if !schedule.Enabled {
+		return nil
+	}
+	if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, serviceID), backupTimerUnitName(applicationID, serviceID)); err != nil {
+		return fmt.Errorf("disable scheduled backups: %w", err)
+	}
+	schedule.Enabled = false
+	if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
+		return fmt.Errorf("save disabled backup schedule: %w", err)
+	}
+	return nil
+}
+
 // RunBackupNow creates a backup immediately when the database service is
 // running, whether or not a schedule is enabled.
 func (s *BackupService) RunBackupNow(ctx context.Context, applicationID int64, serviceName string) (application.Backup, error) {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
 		return application.Backup{}, err
@@ -308,6 +353,8 @@ func (s *BackupService) RunBackupNow(ctx context.Context, applicationID int64, s
 // is checked again so a queued one-shot invocation cannot run after a user has
 // disabled the timer.
 func (s *BackupService) RunScheduledBackup(ctx context.Context, applicationID, serviceID int64) (application.Backup, error) {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseServiceByID(ctx, applicationID, serviceID)
 	if err != nil {
 		return application.Backup{}, err
@@ -325,6 +372,8 @@ func (s *BackupService) RunScheduledBackup(ctx context.Context, applicationID, s
 
 // RestoreBackup restores a recorded backup file into its own database service.
 func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
 		return err
@@ -372,6 +421,9 @@ func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, 
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("backup file must be a regular file")
 	}
+	if err := validatePlainSQLDump(path); err != nil {
+		return err
+	}
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return fmt.Errorf("resolve application directory for restore: %w", err)
@@ -386,6 +438,8 @@ func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, 
 // file is removed first so a failed filesystem operation never loses the
 // record of a backup that still exists.
 func (s *BackupService) DeleteBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
 		return err
@@ -860,6 +914,10 @@ func (s *BackupService) renderUnits(applicationID, serviceID int64, schedule app
 		"After=docker.service\n\n" +
 		"[Service]\n" +
 		"Type=oneshot\n" +
+		// Bound the dump below the 30-minute backup lease so a live owner can
+		// never still be running when its lease expires. Lease expiry then
+		// only handles true process death.
+		"TimeoutStartSec=" + backupSystemdTimeout + "\n" +
 		"ExecStart=" + strings.Join(execStart, " ") + "\n" +
 		"PrivateTmp=true\n" +
 		"NoNewPrivileges=true\n"
@@ -1022,6 +1080,31 @@ func safeBackupPath(directory, fileName string) (string, error) {
 		return "", errors.New("backup file is outside the backup directory")
 	}
 	return path, nil
+}
+
+// validatePlainSQLDump establishes the supported restore format contract:
+// only plain-text SQL dumps produced by pg_dump may be restored through the
+// single-transaction psql path. Custom/tar/directory archives start with the
+// PGDMP magic or binary framing and are rejected before any database work.
+func validatePlainSQLDump(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	defer file.Close()
+	header := make([]byte, 512)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	header = header[:n]
+	if bytes.HasPrefix(header, []byte("PGDMP")) {
+		return application.ErrBackupFormatUnsupported
+	}
+	if bytes.IndexByte(header, 0) >= 0 {
+		return application.ErrBackupFormatUnsupported
+	}
+	return nil
 }
 
 func nextBackupFileName(directory string, at time.Time) (string, error) {
@@ -1218,6 +1301,21 @@ func (s *BackupService) ensureApplicationNotDeleting(ctx context.Context, applic
 		return application.ErrApplicationDeletionInProgress
 	}
 	return nil
+}
+
+// withBackupOperationDeadline caps a lease-holding operation below the lease
+// window. Callers with an earlier deadline (such as the 15-minute web tracked
+// jobs) keep their own shorter bound; unbounded callers such as backup-run
+// and direct service uses gain the 25-minute cap. The returned cancel must be
+// deferred by the caller.
+func withBackupOperationDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= backupOperationTimeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, backupOperationTimeout)
 }
 
 func (noBackupScheduler) Install(context.Context, string, string, string, string) error {

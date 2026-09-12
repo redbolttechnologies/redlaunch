@@ -51,7 +51,7 @@ func TestCommandRunnerUpServiceUsesExplicitComposeArguments(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,7 +76,7 @@ func TestCommandRunnerRestartProjectBuildsRecreatesAndWaits(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,15 +147,19 @@ func TestCommandRunnerEnsureNetworkCreatesManagedNetwork(t *testing.T) {
 func TestCommandRunnerEnsureNetworkAcceptsOnlyOwnedExistingNetwork(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
-		labels  string
+		network string
 		wantErr bool
 	}{
-		{name: "owned", labels: `{"redlaunch.managed":"true","redlaunch.owner":"redlaunch"}`},
-		{name: "unowned", labels: `{}`, wantErr: true},
+		{name: "owned", network: `{"Driver":"bridge","Scope":"local","Internal":false,"Labels":{"redlaunch.managed":"true","redlaunch.owner":"redlaunch"}}`},
+		{name: "legacy compose-created", network: `{"Driver":"bridge","Scope":"local","Internal":false,"Labels":{"com.docker.compose.network":"redlaunch-common","com.docker.compose.project":"proxy"}}`},
+		{name: "legacy manual", network: `{"Driver":"bridge","Scope":"local","Internal":false,"Labels":null}`},
+		{name: "foreign owner", network: `{"Driver":"bridge","Scope":"local","Internal":false,"Labels":{"redlaunch.owner":"someone-else"}}`, wantErr: true},
+		{name: "wrong driver", network: `{"Driver":"overlay","Scope":"swarm","Internal":false,"Labels":null}`, wantErr: true},
+		{name: "internal", network: `{"Driver":"bridge","Scope":"local","Internal":true,"Labels":null}`, wantErr: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			binary := filepath.Join(t.TempDir(), "docker")
-			script := "#!/bin/sh\nif [ \"$1\" = network ] && [ \"$2\" = ls ]; then printf '%s\\n' redlaunch-common; exit 0; fi\nif [ \"$1\" = network ] && [ \"$2\" = inspect ]; then printf '%s\\n' '" + testCase.labels + "'; exit 0; fi\nexit 1\n"
+			script := "#!/bin/sh\nif [ \"$1\" = network ] && [ \"$2\" = ls ]; then printf '%s\\n' redlaunch-common; exit 0; fi\nif [ \"$1\" = network ] && [ \"$2\" = inspect ]; then printf '%s\\n' '" + testCase.network + "'; exit 0; fi\nexit 1\n"
 			if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -180,7 +184,7 @@ func TestCommandRunnerServiceActionsUseExplicitComposeArguments(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,7 +225,7 @@ func TestCommandRunnerDownRemovesProjectContainersAndResources(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,6 +254,7 @@ func TestCommandRunnerRefusesDestructiveActionForUnmanagedContainer(t *testing.T
 case "$1" in
   ps) printf 'container-id\n' ;;
   inspect) printf '{"com.docker.compose.project":"wrong-project"}\n' ;;
+  compose) printf '{}\n' ;;
   *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
 esac
 `
@@ -277,6 +282,7 @@ case "$1:$2" in
   ps:*) ;;
   volume:ls) printf 'volume-name\n' ;;
   volume:inspect) printf '{"com.docker.compose.project":"wrong-project"}\n' ;;
+  compose:*) printf '{}\n' ;;
   *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
 esac
 `
@@ -299,7 +305,7 @@ func TestCommandRunnerAllowsDestructiveActionForManagedProject(t *testing.T) {
 	}
 	projectName := composeProjectName(projectDir)
 	binary := filepath.Join(t.TempDir(), "docker")
-	script := "#!/bin/sh\ncase \"$1\" in\n  ps) printf 'container-id\\n' ;;\n  inspect) printf '{\"redlaunch.managed\":\"true\",\"com.docker.compose.project\":\"" + projectName + "\"}\\n' ;;\n  *) printf '%s\\n' \"$@\" > \"${0%/*}/compose-args\" ;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n  ps) printf 'container-id\\n' ;;\n  inspect) printf '{\"redlaunch.managed\":\"true\",\"com.docker.compose.project\":\"" + projectName + "\"}\\n' ;;\n  compose) printf '{}\\n' ;;\n  *) printf '%s\\n' \"$@\" > \"${0%/*}/compose-args\" ;;\nesac\n"
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +318,117 @@ func TestCommandRunnerAllowsDestructiveActionForManagedProject(t *testing.T) {
 	}
 }
 
+func TestConfiguredNonExternalVolumeNamesResolvesDefaults(t *testing.T) {
+	output := []byte(`{"volumes":{"reviewdata":{"name":"foreign-vol"},"scoped":{},"ext":{"external":true,"name":"keep-me"},"extobj":{"external":{"name":"keep-too"}}}}`)
+	got, err := configuredNonExternalVolumeNames(output, "myproject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"foreign-vol", "myproject_scoped"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("configuredNonExternalVolumeNames() = %v, want %v", got, want)
+	}
+	for _, raw := range []string{`true`, `{"name":"x"}`} {
+		if !isExternalVolume([]byte(raw)) {
+			t.Fatalf("isExternalVolume(%s) = false, want true", raw)
+		}
+	}
+	for _, raw := range []string{``, `null`, `false`} {
+		if isExternalVolume([]byte(raw)) {
+			t.Fatalf("isExternalVolume(%q) = true, want false", raw)
+		}
+	}
+}
+
+func TestCommandRunnerRefusesDestructiveActionForForeignConfiguredVolume(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+case "$1:$2" in
+  ps:*) ;;
+  volume:ls)
+    case "$4" in
+      *label=com.docker.compose.project=*) ;;
+      *foreign-vol*) printf 'foreign-vol\n' ;;
+    esac ;;
+  volume:inspect) printf '{"com.docker.compose.project":"other-project"}\n' ;;
+  compose:*) case " $* " in *" config "*) printf '{"volumes":{"reviewdata":{"name":"foreign-vol"}}}\n' ;; *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;; esac ;;
+  *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).Down(context.Background(), projectDir); err == nil {
+		t.Fatal("Down() returned nil error for a foreign configured volume")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "compose-args")); !os.IsNotExist(err) {
+		t.Fatalf("Compose command marker stat error = %v, want no destructive Compose command", err)
+	}
+}
+
+func TestCommandRunnerAllowsDestructiveActionWhenForeignVolumeNameIsAbsent(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+case "$1:$2" in
+  ps:*) ;;
+  volume:ls) ;;
+  compose:*) case " $* " in *" config "*) printf '{"volumes":{"reviewdata":{"name":"not-yet-created"}}}\n' ;; *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;; esac ;;
+  *) printf '%s\n' "$@" > "${0%/*}/compose-args" ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).Down(context.Background(), projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(binary), "compose-args")); err != nil {
+		t.Fatalf("Compose command marker stat error = %v, want destructive Compose command", err)
+	}
+}
+
+// TestConfiguredVolumeNamesMatchRealComposeResolution resolves the R01
+// synthetic foreign-volume input with the real Compose binary (no containers,
+// volumes, or networks are created) and verifies the ownership parser sees
+// the foreign name. It skips when docker is unavailable.
+func TestConfiguredVolumeNamesMatchRealComposeResolution(t *testing.T) {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("docker is not installed: %v", err)
+	}
+	projectDir := t.TempDir()
+	contents := "services:\n  web:\n    image: busybox:1.36\n    volumes: [reviewdata:/data]\nvolumes:\n  reviewdata: {name: redlaunch-review-foreign}\n"
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(docker, "compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", "compose.yml", "config", "--format", "json")
+	command.Dir = projectDir
+	command.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("resolve synthetic Compose configuration: %v", err)
+	}
+	names, err := configuredNonExternalVolumeNames(output, composeProjectName(projectDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "redlaunch-review-foreign" {
+		t.Fatalf("configured volume names = %v, want [redlaunch-review-foreign]", names)
+	}
+}
+
 func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
@@ -319,7 +436,7 @@ func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := (CommandRunner{Binary: binary}).ReloadProxy(context.Background(), projectDir); err != nil {
@@ -530,8 +647,11 @@ func TestCommandDiagnosticsKeepOnlyRedactedTail(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "secrets.env"), []byte("DATABASE_PASSWORD=super-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(projectDir, "db.secrets.env"), []byte("SCOPED_TOKEN=scoped-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(t.TempDir(), "diagnostic")
-	script := "#!/bin/sh\nhead -c 100000 /dev/zero >&2\nprintf ' DATABASE_PASSWORD=super-secret\\n' >&2\nexit 1\n"
+	script := "#!/bin/sh\nhead -c 100000 /dev/zero >&2\nprintf ' DATABASE_PASSWORD=super-secret SCOPED_TOKEN=scoped-secret\\n' >&2\nexit 1\n"
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +660,7 @@ func TestCommandDiagnosticsKeepOnlyRedactedTail(t *testing.T) {
 	if err == nil {
 		t.Fatal("runDiagnosticCommand() error = nil, want command failure")
 	}
-	if strings.Contains(err.Error(), "super-secret") {
+	if strings.Contains(err.Error(), "super-secret") || strings.Contains(err.Error(), "scoped-secret") {
 		t.Fatalf("diagnostic error leaked secret: %v", err)
 	}
 	if len(err.Error()) > maxCommandOutput+128 {
@@ -728,4 +848,16 @@ func environmentPairs(values []EnvironmentVariable) []string {
 func expectedComposeArguments(projectDir string, args ...string) []string {
 	expected := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", "compose.yml"}
 	return append(expected, args...)
+}
+
+func TestPostgresRestoreRunsInsideASingleTransaction(t *testing.T) {
+	if !strings.Contains(postgresRestoreScript, "--single-transaction") {
+		t.Fatalf("postgres restore script = %q, want --single-transaction for atomic restores", postgresRestoreScript)
+	}
+	if !strings.Contains(postgresRestoreScript, "ON_ERROR_STOP=1") {
+		t.Fatalf("postgres restore script = %q, want ON_ERROR_STOP=1 preserved", postgresRestoreScript)
+	}
+	if !strings.Contains(postgresDumpScript, "--clean") || !strings.Contains(postgresDumpScript, "--if-exists") {
+		t.Fatalf("postgres dump script = %q, want --clean --if-exists preserved", postgresDumpScript)
+	}
 }

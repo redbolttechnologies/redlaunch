@@ -26,6 +26,8 @@ var unsupportedImportedComposeKeys = map[string]struct{}{
 	"additional_contexts": {},
 	"isolation":           {},
 	"ipc":                 {},
+	"label_file":          {},
+	"labels_file":         {},
 	"network_mode":        {},
 	"pid":                 {},
 	"privileged":          {},
@@ -74,6 +76,15 @@ func validateImportedComposePolicy(contents string, applicationRoot string) erro
 		if key == "external" && strings.EqualFold(value, "true") && topLevelSection == "volumes" {
 			return importedComposePolicyError(index, "external volumes are not supported")
 		}
+		// Explicit resource names defeat project ownership: a foreign named
+		// volume or network is outside the ownership check even though
+		// down --volumes can target configured non-external volumes. The
+		// block-mapping form is rejected through the name key above; fail
+		// closed on flow mappings here because the line parser cannot
+		// attribute their inner keys structurally.
+		if (topLevelSection == "volumes" || topLevelSection == "networks") && isNonEmptyFlowMapping(value) {
+			return importedComposePolicyError(index, "explicit resource names are not supported; Redlaunch assigns the resource identity")
+		}
 
 		switch key {
 		case "build":
@@ -94,6 +105,9 @@ func validateImportedComposePolicy(contents string, applicationRoot string) erro
 				return importedComposePolicyError(index, "%v", err)
 			}
 		case "source":
+			if isFlowMapping(value) {
+				return importedComposePolicyError(index, "flow mappings are not supported by the managed Compose editor")
+			}
 			if err := validateImportedVolumeSource(root, value); err != nil {
 				return importedComposePolicyError(index, "%v", err)
 			}
@@ -103,11 +117,19 @@ func validateImportedComposePolicy(contents string, applicationRoot string) erro
 			}
 		case "volumes":
 			if indent > 0 {
+				if isFlowMapping(value) {
+					return importedComposePolicyError(index, "flow mappings are not supported by the managed Compose editor")
+				}
 				for _, entry := range importedPolicyFieldEntries(lines, index, indent, value) {
+					if isFlowMapping(entry) {
+						return importedComposePolicyError(index, "flow mappings are not supported by the managed Compose editor")
+					}
 					if err := validateImportedVolumeSource(root, entry); err != nil {
 						return importedComposePolicyError(index, "%v", err)
 					}
 				}
+			} else if isFlowMapping(value) {
+				return importedComposePolicyError(index, "flow mappings are not supported by the managed Compose editor")
 			}
 		}
 	}
@@ -223,11 +245,17 @@ func validateImportedVolumeSource(root, raw string) error {
 	if value == "" || strings.HasPrefix(value, "type:") || strings.HasPrefix(value, "source:") {
 		return nil
 	}
+	if isFlowMapping(value) {
+		return fmt.Errorf("flow mappings are not supported by the managed Compose editor")
+	}
 	if strings.Contains(value, "://") || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~") || strings.Contains(value, "\\") || strings.Contains(value, "$") {
 		return fmt.Errorf("volume source must be a named volume or a local path within the application directory")
 	}
 	if isDockerSocketPath(value) || filepath.Base(strings.TrimSuffix(value, "/")) == "docker.sock" {
 		return fmt.Errorf("container Docker socket mounts are not supported")
+	}
+	if isManagerOwnedBindSource(root, raw) {
+		return fmt.Errorf("volume source must not mount a manager-owned configuration file")
 	}
 	if strings.HasPrefix(value, ".") {
 		separator := strings.IndexByte(value, ':')
@@ -257,4 +285,25 @@ func importedPolicyPathEntry(value string) string {
 		return mappedValue
 	}
 	return value
+}
+
+// isFlowMapping reports whether a policy value uses YAML flow syntax. The
+// line-based policy cannot attribute flow-mapping keys structurally, so every
+// flow form fails closed. Interpolation expressions (${VAR}) never reach this
+// check with a dollar sign intact: path and volume validation already rejects
+// values containing "$".
+func isFlowMapping(raw string) bool {
+	value := strings.TrimSpace(strings.Trim(raw, "\"'"))
+	return strings.Contains(value, "{") || strings.Contains(value, "}")
+}
+
+// isNonEmptyFlowMapping reports flow mappings other than explicitly empty
+// values such as "{}". Empty mappings carry no resource identity and remain
+// allowed.
+func isNonEmptyFlowMapping(raw string) bool {
+	value := strings.TrimSpace(strings.Trim(raw, "\"'"))
+	if value == "" || value == "{}" || value == "{ }" {
+		return false
+	}
+	return strings.Contains(value, "{") || strings.Contains(value, "}")
 }

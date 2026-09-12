@@ -368,6 +368,14 @@ type applicationDeletionIntentRepository interface {
 	UpdateApplicationDeletion(context.Context, int64, string, string, string, time.Time) error
 }
 
+type applicationFolderDeletionReservation interface {
+	IsApplicationFolderDeletionActive(context.Context, string) (bool, error)
+}
+
+type applicationDeletionStateChecker interface {
+	IsApplicationDeletionActive(context.Context, int64) (bool, error)
+}
+
 type applicationBackupLeaseRepository interface {
 	AcquireBackupLease(context.Context, int64, string, string, time.Time, time.Time) error
 	ReleaseBackupLease(context.Context, int64, string) error
@@ -375,6 +383,19 @@ type applicationBackupLeaseRepository interface {
 
 type applicationDeletionScheduleDisabler interface {
 	DisableApplicationSchedules(context.Context, int64) error
+}
+
+// applicationServiceScheduleDisabler disables a single service's backup timer.
+// BackupService implements it; the narrow application-level capability above
+// stays for application deletion.
+type applicationServiceScheduleDisabler interface {
+	DisableServiceBackupSchedule(context.Context, int64, int64) error
+}
+
+type serviceDeletionIntentRepository interface {
+	BeginServiceDeletion(context.Context, int64, string, time.Time) (application.ServiceDeletionIntent, error)
+	GetServiceDeletion(context.Context, int64, string) (application.ServiceDeletionIntent, error)
+	UpdateServiceDeletion(context.Context, int64, string, string, string, string, time.Time) error
 }
 
 type applicationDeletionCleanup interface {
@@ -424,22 +445,23 @@ type ApplicationsOptions struct {
 
 // Applications coordinates application metadata and its managed files.
 type Applications struct {
-	repository         ApplicationRepository
-	detailsRepository  applicationDetailsRepository
-	serviceRepository  applicationServiceRepository
-	domainRepository   applicationDomainRepository
-	routingRepository  applicationRoutingRepository
-	settingsRepository redlaunchSettingsRepository
-	deletionIntents    applicationDeletionIntentRepository
-	backupLeases       applicationBackupLeaseRepository
-	scheduleDisabler   applicationDeletionScheduleDisabler
-	keyCleanup         applicationDeletionCleanup
-	applicationsDir    string
-	proxyDirectory     string
-	managementPort     int
-	runner             composeRunner
-	projectLocks       *projectLockManager
-	mu                 sync.RWMutex
+	repository             ApplicationRepository
+	detailsRepository      applicationDetailsRepository
+	serviceRepository      applicationServiceRepository
+	domainRepository       applicationDomainRepository
+	routingRepository      applicationRoutingRepository
+	settingsRepository     redlaunchSettingsRepository
+	deletionIntents        applicationDeletionIntentRepository
+	serviceDeletionIntents serviceDeletionIntentRepository
+	backupLeases           applicationBackupLeaseRepository
+	scheduleDisabler       applicationDeletionScheduleDisabler
+	keyCleanup             applicationDeletionCleanup
+	applicationsDir        string
+	proxyDirectory         string
+	managementPort         int
+	runner                 composeRunner
+	projectLocks           *projectLockManager
+	mu                     sync.RWMutex
 }
 
 func (s *Applications) acquireApplicationProject(ctx context.Context, applicationID int64) (*projectLockLease, error) {
@@ -538,25 +560,27 @@ func NewApplicationsWithOptions(repository ApplicationRepository, projectsRoot s
 	routingRepository, _ := repository.(applicationRoutingRepository)
 	settingsRepository, _ := repository.(redlaunchSettingsRepository)
 	deletionIntents, _ := repository.(applicationDeletionIntentRepository)
+	serviceDeletionIntents, _ := repository.(serviceDeletionIntentRepository)
 	backupLeases, _ := repository.(applicationBackupLeaseRepository)
 	runner := composeRunner(compose.CommandRunner{})
 	if len(runners) > 0 && runners[0] != nil {
 		runner = runners[0]
 	}
 	return &Applications{
-		repository:         repository,
-		detailsRepository:  detailsRepository,
-		serviceRepository:  serviceRepository,
-		domainRepository:   domainRepository,
-		routingRepository:  routingRepository,
-		settingsRepository: settingsRepository,
-		deletionIntents:    deletionIntents,
-		backupLeases:       backupLeases,
-		applicationsDir:    applicationsDirectory,
-		proxyDirectory:     filepath.Join(root, coreDir, proxyDir),
-		managementPort:     managementPortFromHTTPAddr(options.ManagementHTTPAddr),
-		runner:             runner,
-		projectLocks:       newProjectLockManager(),
+		repository:             repository,
+		detailsRepository:      detailsRepository,
+		serviceRepository:      serviceRepository,
+		domainRepository:       domainRepository,
+		routingRepository:      routingRepository,
+		settingsRepository:     settingsRepository,
+		deletionIntents:        deletionIntents,
+		serviceDeletionIntents: serviceDeletionIntents,
+		backupLeases:           backupLeases,
+		applicationsDir:        applicationsDirectory,
+		proxyDirectory:         filepath.Join(root, coreDir, proxyDir),
+		managementPort:         managementPortFromHTTPAddr(options.ManagementHTTPAddr),
+		runner:                 runner,
+		projectLocks:           newProjectLockManager(),
 	}, nil
 }
 
@@ -1038,9 +1062,16 @@ func (s *Applications) DeleteService(ctx context.Context, applicationID int64, s
 	return s.DeleteServiceWithProgress(ctx, applicationID, serviceName, nil)
 }
 
-// DeleteServiceWithProgress performs service deletion and reports the active
-// workflow stage before each destructive operation. The callback is
+// DeleteServiceWithProgress performs coordinated service deletion and reports
+// the active workflow stage before each destructive operation. The callback is
 // synchronous and may be nil.
+//
+// Deletion is durable when the repository records service deletion intents:
+// the timer is disabled first so no new backup can start, the backup lease is
+// held across the remaining stages so a running backup cannot be interrupted,
+// and routing rows are removed with a Caddy reload. Backup files are retained
+// as operator-managed artifacts while schedule and history records cascade
+// with the service metadata.
 func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicationID int64, serviceName string, progress func(stage, message string)) error {
 	if s.detailsRepository == nil {
 		return errors.New("application details repository is not configured")
@@ -1074,47 +1105,99 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 	if err != nil {
 		return fmt.Errorf("get application for service deletion: %w", err)
 	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return err
+	}
 	services, err := s.detailsRepository.ListServices(ctx, applicationID)
 	if err != nil {
 		return fmt.Errorf("list services for service deletion: %w", err)
 	}
+	var target application.Service
 	registered := false
 	for _, service := range services {
 		if service.Name == serviceName {
+			target = service
 			registered = true
 			break
 		}
 	}
+	if s.serviceDeletionIntents == nil {
+		if !registered {
+			return application.ErrServiceNotFound
+		}
+		return s.deleteServiceWithoutIntent(ctx, item, serviceName, deleter, controller, remover, progress)
+	}
+
+	var intent application.ServiceDeletionIntent
 	if !registered {
-		return application.ErrServiceNotFound
+		intent, err = s.serviceDeletionIntents.GetServiceDeletion(ctx, applicationID, serviceName)
+		if err != nil {
+			return application.ErrServiceNotFound
+		}
+	} else {
+		intent, err = s.serviceDeletionIntents.BeginServiceDeletion(ctx, applicationID, serviceName, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("record service deletion intent: %w", err)
+		}
+	}
+	if intent.State == "complete" {
+		return nil
 	}
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return fmt.Errorf("resolve application directory for service deletion: %w", err)
 	}
-	composePath, err := findApplicationComposeFile(directory)
-	if err != nil {
-		return fmt.Errorf("find application Compose file: %w", err)
+
+	leases := &applicationBackupLeaseSet{repository: s.backupLeases}
+	if registered && application.IsDatabaseServiceType(target.Type) && s.backupLeases != nil && target.ID >= 1 {
+		token, err := newBackupLeaseToken()
+		if err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageSchedules, fmt.Errorf("create service deletion lease token: %w", err))
+		}
+		now := time.Now().UTC()
+		if err := s.backupLeases.AcquireBackupLease(ctx, target.ID, "service-deletion", token, now, now.Add(backupLeaseDuration)); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageSchedules, err)
+		}
+		leases.leases = append(leases.leases, applicationBackupLease{serviceID: target.ID, token: token})
 	}
-	var composeSnapshot managedFileSnapshot
-	composeContents := ""
-	composeChanged := false
-	if composePath != "" {
-		composeSnapshot, err = snapshotManagedFile(composePath)
-		if err != nil {
-			return fmt.Errorf("read application Compose file: %w", err)
+	deletionErr := s.resumeServiceDeletion(ctx, item, target, registered, intent, directory, deleter, controller, remover, progress)
+	if releaseErr := leases.release(); releaseErr != nil {
+		leaseErr := fmt.Errorf("release service deletion leases: %w", releaseErr)
+		if deletionErr != nil {
+			return errors.Join(deletionErr, leaseErr)
 		}
-		composeContents, err = removeServiceFromCompose(string(composeSnapshot.contents), serviceName)
-		if err != nil {
-			return fmt.Errorf("remove service from Compose file: %w", err)
-		}
-		composeChanged = composeContents != string(composeSnapshot.contents)
+		return leaseErr
+	}
+	return deletionErr
+}
+
+const (
+	serviceDeletionStageSchedules = "schedules"
+	serviceDeletionStageStop      = "stop"
+	serviceDeletionStageRemove    = "remove"
+	serviceDeletionStageCompose   = "compose"
+	serviceDeletionStageRouting   = "routing"
+	serviceDeletionStageMetadata  = "metadata"
+	serviceDeletionStageComplete  = "complete"
+	serviceDeletionStateRunning   = "running"
+	serviceDeletionStateFailed    = "failed"
+)
+
+// deleteServiceWithoutIntent performs service deletion without a durable
+// checkpoint. It still disables nothing silently: callers without backup
+// infrastructure skip timer/lease coordination, while routing rows are always
+// removed with a Caddy reload and backup files are retained.
+func (s *Applications) deleteServiceWithoutIntent(ctx context.Context, item application.Application, serviceName string, deleter applicationServiceDeletionRepository, controller composeServiceController, remover composeServiceRemover, progress func(stage, message string)) error {
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return fmt.Errorf("resolve application directory for service deletion: %w", err)
+	}
+	composePath, composeSnapshot, composeContents, composeChanged, err := s.stageServiceRemoval(directory, serviceName)
+	if err != nil {
+		return err
 	}
 	if composeChanged {
-		if err := writeManagedFile(composePath, composeContents, composeSnapshot.mode); err != nil {
-			return fmt.Errorf("stage service removal in Compose file: %w", err)
-		}
 		if err := s.validateStagedCompose(ctx, directory); err != nil {
 			return errors.Join(err, restoreManagedFile(composeSnapshot))
 		}
@@ -1143,8 +1226,12 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 		}
 	}
 
+	if err := s.removeServiceRoutings(ctx, item.ID, serviceName, progress); err != nil {
+		return err
+	}
+
 	reportServiceDeletionProgress(progress, "metadata", "Deleting service metadata")
-	if err := deleter.DeleteService(ctx, applicationID, serviceName); err != nil {
+	if err := deleter.DeleteService(ctx, item.ID, serviceName); err != nil {
 		if composeChanged {
 			if restoreErr := restoreManagedFile(composeSnapshot); restoreErr != nil {
 				return fmt.Errorf("delete service metadata: %w (restore Compose file: %v)", err, restoreErr)
@@ -1153,6 +1240,243 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 		return fmt.Errorf("delete service metadata: %w", err)
 	}
 	return nil
+}
+
+// stageServiceRemoval reads the Compose file and returns the staged removal
+// contents without mutating anything.
+func (s *Applications) stageServiceRemoval(directory, serviceName string) (string, managedFileSnapshot, string, bool, error) {
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return "", managedFileSnapshot{}, "", false, fmt.Errorf("find application Compose file: %w", err)
+	}
+	var composeSnapshot managedFileSnapshot
+	composeContents := ""
+	composeChanged := false
+	if composePath != "" {
+		composeSnapshot, err = snapshotManagedFile(composePath)
+		if err != nil {
+			return "", managedFileSnapshot{}, "", false, fmt.Errorf("read application Compose file: %w", err)
+		}
+		composeContents, err = removeServiceFromCompose(string(composeSnapshot.contents), serviceName)
+		if err != nil {
+			return "", managedFileSnapshot{}, "", false, fmt.Errorf("remove service from Compose file: %w", err)
+		}
+		composeChanged = composeContents != string(composeSnapshot.contents)
+	}
+	return composePath, composeSnapshot, composeContents, composeChanged, nil
+}
+
+// resumeServiceDeletion runs the durable staged cleanup. Stages completed
+// before a crash are skipped; the current stage may safely run again.
+func (s *Applications) resumeServiceDeletion(ctx context.Context, item application.Application, target application.Service, registered bool, intent application.ServiceDeletionIntent, directory string, deleter applicationServiceDeletionRepository, controller composeServiceController, remover composeServiceRemover, progress func(stage, message string)) error {
+	applicationID := item.ID
+	serviceName := intent.ServiceName
+	if serviceName == "" {
+		serviceName = target.Name
+	}
+	stage := intent.Stage
+	if stage == "" {
+		stage = serviceDeletionStageSchedules
+	}
+	if stage == serviceDeletionStageComplete || intent.State == "complete" {
+		return nil
+	}
+
+	if stage == serviceDeletionStageSchedules {
+		reportServiceDeletionProgress(progress, serviceDeletionStageSchedules, "Disabling scheduled backups for the service")
+		if registered && application.IsDatabaseServiceType(target.Type) {
+			if err := s.disableServiceBackupTimer(ctx, applicationID, target); err != nil {
+				return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageSchedules, err)
+			}
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageStop, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = serviceDeletionStageStop
+	}
+
+	composePath, composeSnapshot, composeContents, composeChanged, err := s.stageServiceRemoval(directory, serviceName)
+	if err != nil {
+		// A missing Compose definition after metadata removal still lets the
+		// remaining stages (routing, metadata) finish; container operations
+		// below fail closed and checkpoint their stage for retry.
+		if stage == serviceDeletionStageRouting || stage == serviceDeletionStageMetadata {
+			composeChanged = false
+		} else {
+			return s.failServiceDeletion(applicationID, serviceName, stage, err)
+		}
+	}
+	if composeChanged && (stage == serviceDeletionStageStop || stage == serviceDeletionStageRemove || stage == serviceDeletionStageCompose) {
+		if err := writeManagedFile(composePath, composeContents, composeSnapshot.mode); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, stage, fmt.Errorf("stage service removal in Compose file: %w", err))
+		}
+		if err := s.validateStagedCompose(ctx, directory); err != nil {
+			restoreErr := restoreManagedFile(composeSnapshot)
+			return s.failServiceDeletion(applicationID, serviceName, stage, errors.Join(err, restoreErr))
+		}
+		// Docker must still see the service definition while it stops and
+		// removes the container. The validated edit is committed after those
+		// service-scoped operations complete.
+		if err := restoreManagedFile(composeSnapshot); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, stage, fmt.Errorf("restore Compose file before service removal: %w", err))
+		}
+	}
+
+	if stage == serviceDeletionStageStop {
+		reportServiceDeletionProgress(progress, serviceDeletionStageStop, "Stopping the service container with Docker Compose")
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageStop, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		if err := controller.Stop(ctx, directory, serviceName); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageStop, fmt.Errorf("stop service: %w", err))
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageRemove, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = serviceDeletionStageRemove
+	}
+
+	if stage == serviceDeletionStageRemove {
+		reportServiceDeletionProgress(progress, serviceDeletionStageRemove, "Removing the service container with Docker Compose")
+		if err := remover.Remove(ctx, directory, serviceName); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageRemove, fmt.Errorf("remove service container: %w", err))
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageCompose, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = serviceDeletionStageCompose
+	}
+
+	if stage == serviceDeletionStageCompose {
+		reportServiceDeletionProgress(progress, serviceDeletionStageCompose, "Removing the service from the Docker Compose file")
+		if composeChanged {
+			if err := writeManagedFile(composePath, composeContents, composeSnapshot.mode); err != nil {
+				return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageCompose, fmt.Errorf("remove service from Compose file: %w", err))
+			}
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageRouting, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = serviceDeletionStageRouting
+	}
+
+	if stage == serviceDeletionStageRouting {
+		if err := s.removeServiceRoutings(ctx, applicationID, serviceName, progress); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageRouting, err)
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageMetadata, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = serviceDeletionStageMetadata
+	}
+
+	if stage == serviceDeletionStageMetadata {
+		reportServiceDeletionProgress(progress, serviceDeletionStageMetadata, "Deleting service metadata")
+		if err := deleter.DeleteService(ctx, applicationID, serviceName); err != nil && !errors.Is(err, application.ErrServiceNotFound) && !errors.Is(err, application.ErrNotFound) {
+			if composeChanged {
+				restoreErr := restoreManagedFile(composeSnapshot)
+				if restoreErr != nil {
+					return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageMetadata, fmt.Errorf("delete service metadata: %w (restore Compose file: %v)", err, restoreErr))
+				}
+			}
+			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageMetadata, fmt.Errorf("delete service metadata: %w", err))
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageComplete, "complete", ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// disableServiceBackupTimer stops one database service's timer through the
+// narrow service-scoped capability. Non-database services have no timer.
+// Callers without backup infrastructure (nil disabler and leases) skip this
+// step; production wiring always provides BackupService, which implements the
+// service-scoped method.
+func (s *Applications) disableServiceBackupTimer(ctx context.Context, applicationID int64, target application.Service) error {
+	if !application.IsDatabaseServiceType(target.Type) || target.ID < 1 {
+		return nil
+	}
+	s.mu.RLock()
+	disabler := s.scheduleDisabler
+	s.mu.RUnlock()
+	if scoped, ok := disabler.(applicationServiceScheduleDisabler); ok && scoped != nil {
+		return scoped.DisableServiceBackupSchedule(ctx, applicationID, target.ID)
+	}
+	if disabler == nil && s.backupLeases == nil {
+		return nil
+	}
+	return errors.New("service backup scheduler is not configured")
+}
+
+// removeServiceRoutings deletes every routing row pointing at the service and
+// reloads Caddy when anything was removed. Backup files are intentionally
+// retained: only routing metadata is coordinated here.
+func (s *Applications) removeServiceRoutings(ctx context.Context, applicationID int64, serviceName string, progress func(stage, message string)) error {
+	if s.routingRepository == nil {
+		return nil
+	}
+	routings, err := s.routingRepository.ListAllRoutings(ctx)
+	if err != nil {
+		return fmt.Errorf("list routings for service deletion: %w", err)
+	}
+	removed := false
+	for _, routing := range routings {
+		if routing.ApplicationID != applicationID || routing.ServiceName != serviceName {
+			continue
+		}
+		if err := s.routingRepository.DeleteRouting(ctx, routing.ApplicationID, routing.DomainID, routing.ID); err != nil && !errors.Is(err, application.ErrRoutingNotFound) {
+			return fmt.Errorf("delete service routing: %w", err)
+		}
+		removed = true
+	}
+	if !removed {
+		return nil
+	}
+	reportServiceDeletionProgress(progress, serviceDeletionStageRouting, "Removing service routing and reloading the proxy")
+	if err := s.refreshProxyAfterApplicationDeletion(ctx); err != nil {
+		return fmt.Errorf("reload proxy after service deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Applications) checkpointServiceDeletion(ctx context.Context, applicationID int64, serviceName, stage, state, detail string) error {
+	if s.serviceDeletionIntents == nil {
+		return nil
+	}
+	checkpointContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.serviceDeletionIntents.UpdateServiceDeletion(checkpointContext, applicationID, serviceName, stage, state, detail, time.Now().UTC()); err != nil {
+		return fmt.Errorf("checkpoint service deletion: %w", err)
+	}
+	return nil
+}
+
+func (s *Applications) failServiceDeletion(applicationID int64, serviceName, stage string, operationErr error) error {
+	checkpointErr := s.checkpointServiceDeletion(context.Background(), applicationID, serviceName, stage, serviceDeletionStateFailed, serviceDeletionFailureDetail(stage))
+	if checkpointErr != nil {
+		return errors.Join(operationErr, checkpointErr)
+	}
+	return operationErr
+}
+
+func serviceDeletionFailureDetail(stage string) string {
+	switch stage {
+	case serviceDeletionStageSchedules:
+		return "Disabling scheduled backups failed or another backup operation is using this service. Retry the deletion to continue."
+	case serviceDeletionStageStop:
+		return "Stopping the service container failed. Retry the deletion to continue."
+	case serviceDeletionStageRemove:
+		return "Removing the service container failed. Retry the deletion to continue."
+	case serviceDeletionStageCompose:
+		return "Removing the service from the Compose file failed. Retry the deletion to continue."
+	case serviceDeletionStageRouting:
+		return "Removing service routing failed. Retry the deletion to continue."
+	case serviceDeletionStageMetadata:
+		return "Removing service metadata failed. Retry the deletion to continue."
+	default:
+		return "Service deletion failed. Retry the deletion to continue."
+	}
 }
 
 // DeleteApplication removes all containers and Compose-managed resources for
@@ -1220,8 +1544,20 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	defer folderLease.release()
 
 	directory, err := s.managedApplicationDirectory(item)
+	directoryMissing := false
 	if err != nil {
-		return fmt.Errorf("resolve application directory for deletion: %w", err)
+		if s.deletionIntents == nil || !errors.Is(err, application.ErrNotFound) {
+			return fmt.Errorf("resolve application directory for deletion: %w", err)
+		}
+		// A crash after folder removal and before the final checkpoint leaves
+		// an intent without a directory. Resume with the expected path and let
+		// the staged cleanup treat the absent folder as already complete
+		// instead of returning ErrNotFound.
+		directory = filepath.Join(s.applicationsDir, folderName)
+		if relative, relErr := filepath.Rel(s.applicationsDir, directory); relErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("resolve application directory for deletion: %w", err)
+		}
+		directoryMissing = true
 	}
 	leases, err := s.acquireApplicationBackupLeases(ctx, applicationID)
 	if err != nil {
@@ -1236,9 +1572,9 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	}
 	var deletionErr error
 	if s.deletionIntents == nil {
-		deletionErr = s.deleteApplicationWithoutIntent(ctx, applicationID, directory, remover, deleter, progress)
+		deletionErr = s.deleteApplicationWithoutIntent(ctx, applicationID, folderName, directory, remover, deleter, progress)
 	} else {
-		deletionErr = s.resumeApplicationDeletion(ctx, applicationID, intent, directory, remover, deleter, progress)
+		deletionErr = s.resumeApplicationDeletion(ctx, applicationID, intent, directory, directoryMissing, remover, deleter, progress)
 	}
 	if releaseErr := leases.release(); releaseErr != nil {
 		leaseErr := fmt.Errorf("release application deletion leases: %w", releaseErr)
@@ -1250,7 +1586,7 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	return deletionErr
 }
 
-func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, applicationID int64, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
+func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, applicationID int64, folderName, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
 
 	reportApplicationDeletionProgress(progress, "resources", "Removing application containers and Docker resources")
 	if err := remover.Down(ctx, directory); err != nil {
@@ -1263,8 +1599,14 @@ func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, appli
 	}
 
 	reportApplicationDeletionProgress(progress, "folder", "Deleting the application folder")
-	if err := os.RemoveAll(directory); err != nil {
-		return fmt.Errorf("delete application folder: %w", err)
+	owned, err := s.verifyApplicationFolderOwnership(ctx, applicationID, folderName, directory)
+	if err != nil {
+		return fmt.Errorf("verify application folder ownership: %w", err)
+	}
+	if owned {
+		if err := os.RemoveAll(directory); err != nil {
+			return fmt.Errorf("delete application folder: %w", err)
+		}
 	}
 	return nil
 }
@@ -1281,8 +1623,15 @@ const (
 	applicationDeletionStateFailed    = "failed"
 )
 
-func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicationID int64, intent application.ApplicationDeletionIntent, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
+func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicationID int64, intent application.ApplicationDeletionIntent, directory string, directoryMissing bool, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
 	scheduleDisabler, keyCleanup := s.applicationDeletionDependencies()
+	folderName := intent.FolderName
+	if folderName == "" {
+		folderName = filepath.Base(directory)
+	}
+	if _, err := application.ValidateFolderName(folderName); err != nil {
+		return fmt.Errorf("validate stored application folder for deletion: %w", err)
+	}
 	stage := intent.Stage
 	if stage == "" {
 		stage = applicationDeletionStageSchedules
@@ -1308,8 +1657,17 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageResources, applicationDeletionStateRunning, ""); err != nil {
 			return err
 		}
-		if err := remover.Down(ctx, directory); err != nil {
-			return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
+		if !directoryMissing {
+			if _, err := os.Lstat(directory); errors.Is(err, os.ErrNotExist) {
+				directoryMissing = true
+			} else if err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
+			}
+		}
+		if !directoryMissing {
+			if err := remover.Down(ctx, directory); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
+			}
 		}
 		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageMetadata, applicationDeletionStateRunning, ""); err != nil {
 			return err
@@ -1352,8 +1710,17 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 
 	if stage == applicationDeletionStageFolder {
 		reportApplicationDeletionProgress(progress, applicationDeletionStageFolder, "Deleting the application folder")
-		if err := os.RemoveAll(directory); err != nil {
+		owned, err := s.verifyApplicationFolderOwnership(ctx, applicationID, folderName, directory)
+		if err != nil {
 			return s.failApplicationDeletion(applicationID, applicationDeletionStageFolder, err)
+		}
+		if owned {
+			if err := os.RemoveAll(directory); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageFolder, err)
+			}
+			if err := syncDirectory(s.applicationsDir); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageFolder, err)
+			}
 		}
 		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageComplete, "complete", ""); err != nil {
 			return err
@@ -1414,6 +1781,90 @@ func applicationDeletionFailureDetail(stage string) string {
 	default:
 		return "Application deletion failed. Retry the deletion to continue."
 	}
+}
+
+// ensureFolderNotReserved rejects folder reuse while an incomplete deletion
+// tombstone still owns the name. The folder lock serializes concurrent
+// creators, but only this durable check survives a crash between folder
+// removal and the final deletion checkpoint.
+func (s *Applications) ensureFolderNotReserved(ctx context.Context, folderName string) error {
+	if s.deletionIntents == nil {
+		return nil
+	}
+	checker, ok := s.deletionIntents.(applicationFolderDeletionReservation)
+	if !ok {
+		return nil
+	}
+	reserved, err := checker.IsApplicationFolderDeletionActive(ctx, folderName)
+	if err != nil {
+		return fmt.Errorf("check application folder reservation: %w", err)
+	}
+	if reserved {
+		return application.ErrApplicationDeletionInProgress
+	}
+	return nil
+}
+
+// ensureApplicationNotDeleting rejects mutations on an application with an
+// incomplete deletion intent, including retries after metadata removal.
+func (s *Applications) ensureApplicationNotDeleting(ctx context.Context, applicationID int64) error {
+	if s.deletionIntents == nil {
+		return nil
+	}
+	checker, ok := s.deletionIntents.(applicationDeletionStateChecker)
+	if !ok {
+		return nil
+	}
+	active, err := checker.IsApplicationDeletionActive(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("check application deletion state: %w", err)
+	}
+	if active {
+		return application.ErrApplicationDeletionInProgress
+	}
+	return nil
+}
+
+// verifyApplicationFolderOwnership ensures a deletion removes only the folder
+// it owns. It rejects symlinks, escapes from the managed applications
+// directory, and folders currently claimed by another application record.
+// A missing directory is idempotent success and returns false.
+func (s *Applications) verifyApplicationFolderOwnership(ctx context.Context, applicationID int64, folderName, directory string) (bool, error) {
+	if _, err := application.ValidateFolderName(folderName); err != nil {
+		return false, fmt.Errorf("validate stored application folder for deletion: %w", err)
+	}
+	expected := filepath.Join(s.applicationsDir, folderName)
+	if filepath.Clean(directory) != filepath.Clean(expected) {
+		return false, errors.New("application folder is outside the managed applications directory")
+	}
+	if err := checkManagedAncestors(s.applicationsDir, directory); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, errors.New("application path is not a directory")
+	}
+	if err := checkResolvedDirectoryContainment(s.applicationsDir, directory); err != nil {
+		return false, err
+	}
+	if s.repository != nil {
+		remaining, err := s.repository.List(ctx)
+		if err != nil {
+			return false, fmt.Errorf("list applications for folder ownership: %w", err)
+		}
+		for _, item := range remaining {
+			if item.FolderName == folderName && item.ID != applicationID {
+				return false, application.ErrApplicationDeletionInProgress
+			}
+		}
+	}
+	return true, nil
 }
 
 type applicationBackupLeaseSet struct {
@@ -1573,6 +2024,10 @@ func (s *Applications) Create(ctx context.Context, name, folderName string) (app
 		return application.Application{}, err
 	}
 	defer lease.release()
+
+	if err := s.ensureFolderNotReserved(ctx, folderName); err != nil {
+		return application.Application{}, err
+	}
 
 	if err := ensureDirectory(s.applicationsDir); err != nil {
 		return application.Application{}, fmt.Errorf("ensure applications directory: %w", err)
