@@ -894,6 +894,15 @@ h1 {
   width: min(100%, 72rem);
 }
 
+.settings-page {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.settings-page > .page-heading {
+  margin-bottom: var(--space-1);
+}
+
 .dashboard-refresh-note {
   margin: 0;
   color: hsl(var(--muted-foreground));
