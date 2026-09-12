@@ -96,8 +96,7 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The routing save request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -195,8 +194,7 @@ func (h *Handler) deleteApplicationRouting(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The routing delete request was invalid.", http.StatusBadRequest)
 		return
 	}

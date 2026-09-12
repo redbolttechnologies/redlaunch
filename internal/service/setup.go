@@ -175,7 +175,7 @@ func (s *SetupService) EnsureRegistry(ctx context.Context) error {
 		}
 	}
 	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
-	for _, name := range []string{"compose.yml", "compose.yaml"} {
+	for _, name := range supportedComposeFileNames() {
 		composePath := filepath.Join(directory, name)
 		if info, err := os.Lstat(composePath); err == nil {
 			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {

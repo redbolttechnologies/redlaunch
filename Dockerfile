@@ -5,7 +5,16 @@ ARG GO_VERSION
 
 WORKDIR /src
 
-COPY . .
+# Download module dependencies first so source edits do not invalidate the
+# cached dependency layer. Only the module manifests and Go sources enter the
+# build context (see .dockerignore); repository history, local environment
+# files, and host credential variants are never sent to the builder.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
 RUN test "$(go env GOVERSION)" = "go${GO_VERSION}" \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/redlaunch ./cmd/redlaunch \
     && go version -m /out/redlaunch > /out/redlaunch.buildinfo

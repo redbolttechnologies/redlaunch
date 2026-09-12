@@ -151,23 +151,23 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create Google authentication service: %w", err)
 	}
 
-	dependencies := []any{
-		setupService,
-		applications,
-		backupManager,
-		githubActions,
-		metrics.NewWithConfig(metrics.Config{
+	dependencies := handler.Dependencies{
+		Setup:         setupService,
+		Applications:  applications,
+		Backups:       backupManager,
+		GitHubActions: githubActions,
+		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,
 			ProcRoot:       cfg.MetricsProcRoot,
 			FilesystemRoot: cfg.MetricsFilesystemRoot,
 		}),
-		handler.SecurityConfig{
+		Authentication: googleAuth,
+		Security: handler.SecurityConfig{
 			AccessMode:   cfg.ManagementAccessMode,
 			CookieSecure: cfg.AuthCookieSecure,
 		},
 	}
-	dependencies = append(dependencies, googleAuth)
-	web, err := handler.New(logger, dependencies...)
+	web, err := handler.NewWithDependencies(logger, dependencies)
 	if err != nil {
 		return fmt.Errorf("create web handler: %w", err)
 	}

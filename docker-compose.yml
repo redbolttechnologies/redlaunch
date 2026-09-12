@@ -4,6 +4,9 @@ services:
       context: .
     image: redlaunch:local
     container_name: redbolt-redlaunch
+    # The manager follows the same managed-container rule as every other
+    # managed project: it carries the redlaunch.managed label and loads both
+    # the non-secret vars.env and the secret secrets.env files.
     labels:
       redlaunch.managed: "true"
     env_file:

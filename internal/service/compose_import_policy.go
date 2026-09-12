@@ -234,6 +234,9 @@ func validateImportedVolumeSource(root, raw string) error {
 		if separator >= 0 {
 			value = value[:separator]
 		}
+		if isProjectRootBind(root, value) {
+			return fmt.Errorf("volume source must not mount the application directory itself")
+		}
 		return validateImportedLocalPath(root, value, "volume source")
 	}
 	return nil

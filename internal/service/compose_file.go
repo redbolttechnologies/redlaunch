@@ -27,10 +27,12 @@ func (s *Applications) validateStagedCompose(ctx context.Context, directory stri
 }
 
 // findApplicationComposeFile returns the existing Compose file for an
-// application. Older managed projects may use either supported Compose file
-// name; a missing file is left to the caller to handle.
+// application. New projects always write compose.yml (see managedfs.go); both
+// supported names are accepted here so older installations keep working, with
+// compose.yml winning when both exist. A missing file is left to the caller
+// to handle.
 func findApplicationComposeFile(directory string) (string, error) {
-	for _, name := range []string{"compose.yml", "compose.yaml"} {
+	for _, name := range supportedComposeFileNames() {
 		path := filepath.Join(directory, name)
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {

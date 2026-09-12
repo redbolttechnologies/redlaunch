@@ -809,9 +809,19 @@ func (s *BackupService) managedApplicationDirectory(item application.Application
 		return "", fmt.Errorf("validate stored application folder: %w", err)
 	}
 	directory := filepath.Join(s.projectsRoot, applicationsDir, folderName)
-	relative, err := filepath.Rel(filepath.Join(s.projectsRoot, applicationsDir), directory)
+	applicationsRoot := filepath.Join(s.projectsRoot, applicationsDir)
+	relative, err := filepath.Rel(applicationsRoot, directory)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("application directory is outside the managed applications directory")
+	}
+	if err := checkManagedAncestors(applicationsRoot, directory); err != nil {
+		return "", err
+	}
+	// The applications root itself must remain a real directory: replacing it
+	// with a symlink after setup would redirect every managed path outside
+	// the projects tree while each individual Lstat still looks normal.
+	if parentInfo, err := os.Lstat(applicationsRoot); err == nil && parentInfo.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("managed applications directory must not be a symlink")
 	}
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
@@ -822,6 +832,9 @@ func (s *BackupService) managedApplicationDirectory(item application.Application
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", errors.New("application path is not a directory")
+	}
+	if err := checkResolvedDirectoryContainment(applicationsRoot, directory); err != nil {
+		return "", err
 	}
 	return directory, nil
 }

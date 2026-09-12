@@ -450,7 +450,7 @@ func restoreCaddyfile(snapshot managedFileSnapshot) error {
 }
 
 func findProxyComposePath(directory string) (string, error) {
-	for _, name := range []string{"compose.yml", "compose.yaml"} {
+	for _, name := range supportedComposeFileNames() {
 		path := filepath.Join(directory, name)
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {

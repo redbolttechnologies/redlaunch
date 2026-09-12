@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 	"redlaunch/internal/application"
 )
 
@@ -1429,5 +1429,17 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 func isUniqueConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		// Prefer the typed result code over message text. 19 is
+		// SQLITE_CONSTRAINT and 2067 is SQLITE_CONSTRAINT_UNIQUE; mask the
+		// primary code so other extended constraint codes also match.
+		if code := sqliteErr.Code(); code == 19 || code == 2067 || code&0xFF == 19 {
+			return true
+		}
+	}
 	return strings.Contains(strings.ToLower(err.Error()), "unique constraint")
 }

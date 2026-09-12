@@ -192,17 +192,18 @@ make compose-config
 make docker-build
 ```
 
-For a release candidate, run the complete Phase 0 gate:
+For a release candidate, run the complete release gate:
 
 ```sh
 make release-check
 ```
 
-It builds and scans the Linux artifact separately from the local host binary,
-validates Compose, builds the production image, and records binary/image
-identity under `bin/`. The vulnerability database and container base images
-require network access; generated release identity files remain excluded from
-Git.
+It runs the race-enabled test suite (including migration coverage), vet, a
+gofmt check, a tracked-secret scan, then builds and scans the Linux artifact
+separately from the local host binary, validates Compose, builds the
+production image, and records binary/image identity under `bin/`. The
+vulnerability database and container base images require network access;
+generated release identity files remain excluded from Git.
 
 ## Security
 
@@ -212,6 +213,17 @@ effectively host-level access. Run Redlaunch only on a trusted management host,
 restrict access to its web interface, and authorize only trusted accounts.
 
 Never commit `.env`, `vars.env`, `secrets.env`, databases, or backup files.
+
+Managed projects live under `projects/applications/<name>/` and
+`projects/core/<component>/`, each with its own `compose.yml`, `vars.env`,
+and `secrets.env`. New projects always write `compose.yml`; `compose.yaml`
+is only accepted when reading older installations. A managed bind mount must
+name a file or subdirectory below its project directory: mounting the project
+directory itself is rejected because it would expose sibling managed files
+such as `secrets.env` to the workload. Symlinked ancestors or files inside
+the managed trees are rejected for the same reason. The bundled manager
+service follows the same rule: it carries the `redlaunch.managed=true` label
+and loads both `vars.env` and `secrets.env`.
 
 ## License
 

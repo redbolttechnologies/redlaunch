@@ -55,8 +55,7 @@ func (h *Handler) proxyAction(w http.ResponseWriter, r *http.Request, action str
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The proxy action request was invalid.", http.StatusBadRequest)
 		return
 	}

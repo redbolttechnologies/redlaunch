@@ -4,11 +4,7 @@ package handler
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
 	"embed"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -32,18 +28,6 @@ import (
 //go:embed templates/*.html static/*
 var embeddedFiles embed.FS
 
-const csrfCookieName = "redlaunch_csrf"
-
-const (
-	oauthStateCookieName    = "redlaunch_oauth_state"
-	oauthRedirectCookieName = "redlaunch_oauth_redirect"
-	sessionCookieName       = "redlaunch_session"
-	oauthCallbackPath       = "/auth/google/callback"
-)
-
-type authenticatedUserContextKey struct{}
-
-// Handler serves the application pages.
 type Handler struct {
 	templates                      *template.Template
 	logger                         *slog.Logger
@@ -273,8 +257,11 @@ type ServerInfo struct {
 	IPAddress string
 }
 
-// New constructs the HTTP handler. Additional dependencies may provide the
+// New constructs the HTTP handler for tests. Additional dependencies may provide the
 // setup manager and application service used by the corresponding pages.
+//
+// Production code must use NewWithDependencies with an explicit Dependencies
+// struct so required services (including authentication) fail fast.
 func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -692,137 +679,6 @@ func (h *Handler) Routes() http.Handler {
 	return h.withSecurityHeaders(h.withOriginCheck(h.withCSRFProtection(h.withAuthentication(mux))))
 }
 
-func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
-			next.ServeHTTP(w, r)
-			return
-		}
-		cookie, err := r.Cookie(csrfCookieName)
-		if err != nil || !validCSRFTokenFormat(cookie.Value) {
-			w.Header().Set("Cache-Control", "no-store")
-			http.Error(w, "This request requires a fresh page token.", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (h *Handler) withOriginCheck(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
-			next.ServeHTTP(w, r)
-			return
-		}
-		origin := strings.TrimSpace(r.Header.Get("Origin"))
-		if origin == "" {
-			referer := strings.TrimSpace(r.Header.Get("Referer"))
-			if referer != "" {
-				origin = refererOrigin(referer)
-				if origin == "" {
-					w.Header().Set("Cache-Control", "no-store")
-					http.Error(w, "The request origin is not allowed.", http.StatusForbidden)
-					return
-				}
-			}
-		}
-		if origin != "" && !h.sameRequestOrigin(r, origin) {
-			w.Header().Set("Cache-Control", "no-store")
-			http.Error(w, "The request origin is not allowed.", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (h *Handler) sameRequestOrigin(r *http.Request, candidate string) bool {
-	parsed, err := url.Parse(candidate)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	if parsed.Scheme != h.requestScheme(r) {
-		return false
-	}
-	requestHost := strings.TrimSpace(r.Host)
-	if requestHost == "" && r.URL != nil {
-		requestHost = strings.TrimSpace(r.URL.Host)
-	}
-	requestScheme := h.requestScheme(r)
-	return canonicalRequestHost(requestHost, requestScheme) != "" && canonicalRequestHost(requestHost, requestScheme) == canonicalRequestHost(parsed.Host, parsed.Scheme)
-}
-
-func (h *Handler) requestScheme(r *http.Request) string {
-	if r.TLS != nil || h.cookieSecure || h.accessMode == accessModeManagedHTTPS {
-		return "https"
-	}
-	return "http"
-}
-
-func canonicalRequestHost(value, scheme string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return ""
-	}
-	if host, port, err := net.SplitHostPort(value); err == nil {
-		if (scheme == "http" && port == "80" || scheme == "https" && port == "443") && host != "" {
-			return strings.TrimSuffix(host, ".")
-		}
-		return strings.TrimSuffix(host, ".") + ":" + port
-	}
-	return strings.TrimSuffix(value, ".")
-}
-
-func refererOrigin(value string) string {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
-		return ""
-	}
-	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String()
-}
-
-func (h *Handler) withAuthentication(next http.Handler) http.Handler {
-	if !h.authenticationEnabled() {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPublicAuthenticationPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		cookie, err := r.Cookie(sessionCookieName)
-		if err != nil {
-			h.redirectToLogin(w, r, r.URL.RequestURI())
-			return
-		}
-		user, valid, err := h.authentication.ValidateSession(r.Context(), cookie.Value)
-		if err != nil {
-			h.logger.Error("validate authentication session", "error", err)
-			http.Error(w, "The authentication state could not be checked.", http.StatusInternalServerError)
-			return
-		}
-		if !valid {
-			h.expireSessionCookie(w, r)
-			h.redirectToLogin(w, r, r.URL.RequestURI())
-			return
-		}
-		requestContext := context.WithValue(r.Context(), authenticatedUserContextKey{}, user)
-		next.ServeHTTP(w, r.WithContext(requestContext))
-	})
-}
-
-func isPublicAuthenticationPath(path string) bool {
-	return path == "/login" ||
-		path == "/auth/google" ||
-		path == "/auth/google/callback" ||
-		path == "/healthz" ||
-		strings.HasPrefix(path, "/static/")
-}
-
-func (h *Handler) authenticationEnabled() bool {
-	return h.authentication != nil && h.authentication.Enabled()
-}
-
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	needsSetup, err := h.setupManager.NeedsSetup()
 	if err != nil {
@@ -842,320 +698,6 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	page := h.shellPageData(r)
 	page.SetupProgress = progress
 	h.writeTemplate(w, "index.html", page)
-}
-
-func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	if _, valid, err := h.currentSessionUser(r); err != nil {
-		h.logger.Error("check existing authentication session", "error", err)
-		http.Error(w, "The authentication state could not be checked.", http.StatusInternalServerError)
-		return
-	} else if valid {
-		http.Redirect(w, r, safeRedirectTarget(r.URL.Query().Get("next")), http.StatusSeeOther)
-		return
-	}
-
-	errorMessage := loginErrorMessage(r.URL.Query().Get("error"))
-	target := safeRedirectTarget(r.URL.Query().Get("next"))
-	h.writeLoginPage(w, http.StatusOK, loginPageData{
-		Error:          errorMessage,
-		GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-	})
-}
-
-func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	redirectURL, err := h.oauthRedirectURL(r)
-	if err != nil {
-		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
-		http.Error(w, "Google sign-in could not be started.", http.StatusInternalServerError)
-		return
-	}
-	state, err := newCSRFToken()
-	if err != nil {
-		h.logger.Error("create Google OAuth state", "error", err)
-		http.Error(w, "Google sign-in could not be started.", http.StatusInternalServerError)
-		return
-	}
-	target := safeRedirectTarget(r.URL.Query().Get("next"))
-	secure := h.secureCookie(r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName,
-		Value:    state,
-		Path:     "/",
-		MaxAge:   10 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   secure,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthRedirectCookieName,
-		Value:    base64.RawURLEncoding.EncodeToString([]byte(target)),
-		Path:     "/",
-		MaxAge:   10 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   secure,
-	})
-	http.Redirect(w, r, h.authorizationURL(state, redirectURL), http.StatusFound)
-}
-
-func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	target := "/"
-	if cookie, err := r.Cookie(oauthRedirectCookieName); err == nil {
-		if decoded, decodeErr := base64.RawURLEncoding.DecodeString(cookie.Value); decodeErr == nil {
-			target = safeRedirectTarget(string(decoded))
-		}
-	}
-	h.expireOAuthCookies(w, r)
-
-	stateCookie, err := r.Cookie(oauthStateCookieName)
-	if err != nil || !validCSRFToken(r.URL.Query().Get("state"), stateCookie.Value) {
-		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
-			Error:          "The Google sign-in session expired. Start again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	if r.URL.Query().Get("error") != "" {
-		h.redirectToLoginWithError(w, r, target, "cancelled")
-		return
-	}
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
-			Error:          "Google did not return an authorization code. Start again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-
-	redirectURL, err := h.oauthRedirectURL(r)
-	if err != nil {
-		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
-		http.Error(w, "Google sign-in could not be completed.", http.StatusInternalServerError)
-		return
-	}
-	user, err := h.completeLogin(r.Context(), code, redirectURL)
-	if errors.Is(err, redlaunchauth.ErrNotAuthorized) || errors.Is(err, redlaunchauth.ErrEmailNotVerified) || errors.Is(err, application.ErrEmailInvalid) {
-		h.redirectToLoginWithError(w, r, target, "unauthorized")
-		return
-	}
-	if err != nil {
-		h.logger.Error("complete Google login", "error", err)
-		h.writeLoginPage(w, http.StatusBadGateway, loginPageData{
-			Error:          "Google sign-in could not be completed. Try again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	session, err := h.authentication.NewSession(user)
-	if err != nil {
-		h.logger.Error("create authentication session", "error", err)
-		h.writeLoginPage(w, http.StatusInternalServerError, loginPageData{
-			Error:          "Your sign-in could not be saved. Try again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    session,
-		Path:     "/",
-		MaxAge:   int(h.authentication.SessionDuration().Seconds()),
-		Expires:  time.Now().Add(h.authentication.SessionDuration()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.secureCookie(r),
-	})
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (h *Handler) currentSessionUser(r *http.Request) (redlaunchauth.User, bool, error) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return redlaunchauth.User{}, false, nil
-	}
-	return h.authentication.ValidateSession(r.Context(), cookie.Value)
-}
-
-func (h *Handler) authorizationURL(state, redirectURL string) string {
-	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
-		return authentication.AuthorizationURLForRedirect(state, redirectURL)
-	}
-	return h.authentication.AuthorizationURL(state)
-}
-
-func (h *Handler) completeLogin(ctx context.Context, code, redirectURL string) (redlaunchauth.User, error) {
-	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
-		return authentication.CompleteLoginForRedirect(ctx, code, redirectURL)
-	}
-	return h.authentication.CompleteLogin(ctx, code)
-}
-
-func (h *Handler) oauthRedirectURL(r *http.Request) (string, error) {
-	if _, ok := h.authentication.(authenticationRedirectService); !ok {
-		return "", nil
-	}
-	publicAccess, err := h.redlaunchPublicAccess.GetRedlaunchPublicAccess(r.Context())
-	if err != nil {
-		return "", fmt.Errorf("read Redlaunch public access settings: %w", err)
-	}
-	if !publicAccess.Enabled {
-		return "", nil
-	}
-	domain, err := application.ValidateDomainName(publicAccess.Domain)
-	if err != nil {
-		return "", fmt.Errorf("validate Redlaunch public access domain: %w", err)
-	}
-	if !requestUsesPublicHost(r, domain) {
-		return "", nil
-	}
-	return (&url.URL{Scheme: "https", Host: domain, Path: oauthCallbackPath}).String(), nil
-}
-
-func requestUsesPublicHost(r *http.Request, expectedDomain string) bool {
-	host := strings.TrimSpace(r.Host)
-	if host == "" && r.URL != nil {
-		host = strings.TrimSpace(r.URL.Host)
-	}
-	if host == "" {
-		return false
-	}
-	parsed, err := url.Parse("//" + host)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	if port := parsed.Port(); port != "" && port != "443" {
-		return false
-	}
-	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	expectedDomain = strings.TrimSuffix(strings.ToLower(expectedDomain), ".")
-	return hostname != "" && hostname == expectedDomain
-}
-
-func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "The logout request was invalid.", http.StatusBadRequest)
-		return
-	}
-	if !h.validRequestCSRF(r) {
-		http.Error(w, "This logout request expired. Refresh the page and try again.", http.StatusForbidden)
-		return
-	}
-
-	h.expireSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
-func (h *Handler) redirectToLogin(w http.ResponseWriter, r *http.Request, target string) {
-	h.redirectToLoginWithError(w, r, target, "")
-}
-
-func (h *Handler) redirectToLoginWithError(w http.ResponseWriter, r *http.Request, target, errorCode string) {
-	values := url.Values{"next": {safeRedirectTarget(target)}}
-	if errorCode != "" {
-		values.Set("error", errorCode)
-	}
-	http.Redirect(w, r, "/login?"+values.Encode(), http.StatusSeeOther)
-}
-
-func loginErrorMessage(code string) string {
-	switch code {
-	case "cancelled":
-		return "Google sign-in was cancelled."
-	case "unauthorized":
-		return "This Google account is not authorized to use Redlaunch."
-	case "oauth":
-		return "Google sign-in could not be completed. Try again."
-	default:
-		return ""
-	}
-}
-
-func safeRedirectTarget(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "/"
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Path == "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") || strings.Contains(parsed.Path, "\\") {
-		return "/"
-	}
-	return parsed.RequestURI()
-}
-
-func (h *Handler) secureCookie(r *http.Request) bool {
-	return r.TLS != nil || h.cookieSecure || h.accessMode == accessModeManagedHTTPS || h.authentication != nil && h.authentication.CookieSecure()
-}
-
-func (h *Handler) csrfTokenForRequest(r *http.Request) string {
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		return cookie.Value
-	}
-	return h.csrfToken
-}
-
-func (h *Handler) validRequestCSRF(r *http.Request) bool {
-	cookie, err := r.Cookie(csrfCookieName)
-	return err == nil && validCSRFTokenFormat(cookie.Value) && validCSRFToken(r.Form.Get("csrf_token"), cookie.Value)
-}
-
-func (h *Handler) setCSRFCookie(w http.ResponseWriter, r *http.Request) string {
-	token := h.csrfTokenForRequest(r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   h.secureCookie(r),
-	})
-	return token
-}
-
-func (h *Handler) expireOAuthCookies(w http.ResponseWriter, r *http.Request) {
-	secure := h.secureCookie(r)
-	for _, name := range []string{oauthStateCookieName, oauthRedirectCookieName} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			Expires:  time.Unix(1, 0),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Secure:   secure,
-		})
-	}
-}
-
-func (h *Handler) expireSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		Expires:  time.Unix(1, 0),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.secureCookie(r),
-	})
 }
 
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
@@ -1557,8 +1099,7 @@ func (h *Handler) updateRedlaunchPublicAccess(w http.ResponseWriter, r *http.Req
 		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The public access request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1638,8 +1179,7 @@ func (h *Handler) updateApplicationVariable(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The variable save request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1698,8 +1238,7 @@ func (h *Handler) deleteApplicationVariable(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The variable delete request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1755,8 +1294,7 @@ func (h *Handler) moveApplicationVariableToSecrets(w http.ResponseWriter, r *htt
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The move variable request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1800,8 +1338,7 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The secret save request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1868,8 +1405,7 @@ func (h *Handler) deleteApplicationSecret(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The secret delete request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1925,8 +1461,7 @@ func (h *Handler) moveApplicationSecretToVariables(w http.ResponseWriter, r *htt
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The move secret request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -1970,8 +1505,7 @@ func (h *Handler) createApplicationDomain(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The domain save request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -2021,8 +1555,7 @@ func (h *Handler) deleteApplicationDomain(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The domain delete request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -2747,8 +2280,7 @@ func (h *Handler) prepareBackupRequest(w http.ResponseWriter, r *http.Request) (
 		return 0, "", false
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The backup request was invalid.", http.StatusBadRequest)
 		return 0, "", false
 	}
@@ -2848,8 +2380,7 @@ func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application deletion request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -2929,8 +2460,7 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The service deletion request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -2981,8 +2511,7 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 		return
 	}
 	serviceName := r.PathValue("service")
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The service action request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3325,8 +2854,7 @@ func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The PostgreSQL service request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3408,8 +2936,7 @@ func (h *Handler) createRedisService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The Redis service request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3491,8 +3018,7 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application container request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3618,8 +3144,7 @@ func (h *Handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3687,16 +3212,6 @@ func (h *Handler) writeLoginPage(w http.ResponseWriter, status int, data loginPa
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(body.Bytes())
-}
-
-func (h *Handler) withSecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://googleusercontent.com https://*.googleusercontent.com; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
 }
 
 func userMessage(err error) string {
@@ -5198,29 +4713,6 @@ func (h *Handler) setupProgress(r *http.Request) (*setupProgressData, bool) {
 	}
 	progress := job.snapshot()
 	return &progress, true
-}
-
-func newCSRFToken() (string, error) {
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(token), nil
-}
-
-func validCSRFToken(got, want string) bool {
-	if !validCSRFTokenFormat(got) || !validCSRFTokenFormat(want) || len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-}
-
-func validCSRFTokenFormat(token string) bool {
-	if token == "" || len(token) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(token)
-	return err == nil
 }
 
 func discoverServerInfo() ServerInfo {
