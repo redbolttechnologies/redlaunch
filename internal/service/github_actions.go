@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"text/template"
 	"time"
 
@@ -300,7 +299,7 @@ type GitHubActionsService struct {
 	registry     githubActionsRegistryManager
 	runner       githubActionsComposeRunner
 	keyGenerator SSHKeyGenerator
-	mu           sync.Mutex
+	gatewayLocks *projectLockManager
 }
 
 // NewGitHubActionsService constructs the GitHub Actions deployment service.
@@ -329,7 +328,15 @@ func NewGitHubActionsService(projectsRoot string, repository GitHubActionsReposi
 		registry:     registry,
 		runner:       runner,
 		keyGenerator: keyGenerator,
+		gatewayLocks: newProjectLockManager(),
 	}, nil
+}
+
+func (s *GitHubActionsService) acquireGatewayProject(ctx context.Context) (*projectLockLease, error) {
+	if s.gatewayLocks == nil {
+		return nil, errors.New("GitHub Actions gateway lock is not configured")
+	}
+	return s.gatewayLocks.acquire(ctx, githubActionsGatewayProjectLockKey)
 }
 
 // Get returns the non-secret integration for an application.
@@ -359,9 +366,6 @@ func (s *GitHubActionsService) configure(ctx context.Context, applicationID int6
 	if err != nil {
 		return application.GitHubActionsSetup{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if _, err := s.applications.Get(ctx, applicationID); err != nil {
 		return application.GitHubActionsSetup{}, err
 	}
@@ -386,6 +390,12 @@ func (s *GitHubActionsService) configure(ctx context.Context, applicationID int6
 			return application.GitHubActionsSetup{}, fmt.Errorf("ensure local registry: %w", err)
 		}
 	}
+
+	lease, err := s.acquireGatewayProject(ctx)
+	if err != nil {
+		return application.GitHubActionsSetup{}, err
+	}
+	defer lease.release()
 
 	gatewayDirectory := filepath.Join(s.projectsRoot, coreDir, githubActionsGatewayDir)
 	reportGitHubActionsProgress(progress, "gateway", "Preparing the restricted SSH gateway")
@@ -491,8 +501,11 @@ func (s *GitHubActionsService) RevokeWithProgress(ctx context.Context, applicati
 }
 
 func (s *GitHubActionsService) revoke(ctx context.Context, applicationID int64, progress func(stage, message string)) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireGatewayProject(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 	integration, err := s.repository.GetGitHubActions(ctx, applicationID)
 	if err != nil {
 		return err
@@ -532,13 +545,16 @@ func (s *GitHubActionsService) CleanupApplicationKey(ctx context.Context, applic
 	if applicationID < 1 {
 		return application.ErrNotFound
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, err := s.applications.Get(ctx, applicationID); err == nil {
 		return nil
 	} else if !errors.Is(err, application.ErrNotFound) {
 		return fmt.Errorf("check application before GitHub Actions cleanup: %w", err)
 	}
+	lease, err := s.acquireGatewayProject(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	gatewayDirectory := filepath.Join(s.projectsRoot, coreDir, githubActionsGatewayDir)
 	authorizedPath := filepath.Join(gatewayDirectory, "authorized_keys")

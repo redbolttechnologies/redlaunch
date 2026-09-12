@@ -50,17 +50,20 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		return application.Service{}, errors.New("application service repository is not configured")
 	}
 
-	item, err := s.detailsRepository.Get(ctx, applicationID)
-	if err != nil {
-		return application.Service{}, err
-	}
-
 	serviceName, postgresVersion, databaseName, databaseUser, databasePassword, err := validatePostgreSQLServiceInput(input)
 	if err != nil {
 		return application.Service{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {

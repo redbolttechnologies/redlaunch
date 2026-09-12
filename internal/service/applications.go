@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -68,6 +69,11 @@ func (s *Applications) GetEnvironmentFiles(ctx context.Context, applicationID in
 	if s.detailsRepository == nil {
 		return application.EnvironmentFiles{}, errors.New("application details repository is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.EnvironmentFiles{}, err
+	}
+	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -77,9 +83,6 @@ func (s *Applications) GetEnvironmentFiles(ctx context.Context, applicationID in
 	if err != nil {
 		return application.EnvironmentFiles{}, err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	variables, variablesAvailable, err := readEnvironmentFile(filepath.Join(directory, varsEnvFile), false)
 	if err != nil {
@@ -176,6 +179,11 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 	if s.detailsRepository == nil {
 		return errors.New("application details repository is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -185,9 +193,6 @@ func (s *Applications) moveApplicationEnvironmentVariable(ctx context.Context, a
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	sourcePath := filepath.Join(directory, sourceFile)
 	sourceSnapshot, err := snapshotManagedFile(sourcePath)
@@ -309,6 +314,11 @@ func (s *Applications) modifyApplicationEnvironmentFile(ctx context.Context, app
 	if fileName != varsEnvFile && fileName != secretsEnvFile {
 		return errors.New("unsupported application environment file")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
 		return err
@@ -317,9 +327,6 @@ func (s *Applications) modifyApplicationEnvironmentFile(ctx context.Context, app
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	path := filepath.Join(directory, fileName)
 	snapshot, err := snapshotManagedFile(path)
@@ -386,8 +393,8 @@ type composeServiceFullLogsInspector interface {
 	AllLogs(context.Context, string, string) (string, error)
 }
 
-type composeServiceEnvironmentInspector interface {
-	Environment(context.Context, string, string) ([]compose.EnvironmentVariable, error)
+type composeServiceLogStreamer interface {
+	OpenLogs(context.Context, string, string) (io.ReadCloser, error)
 }
 
 type composeServiceController interface {
@@ -431,7 +438,35 @@ type Applications struct {
 	proxyDirectory     string
 	managementPort     int
 	runner             composeRunner
-	mu                 sync.Mutex
+	projectLocks       *projectLockManager
+	mu                 sync.RWMutex
+}
+
+func (s *Applications) acquireApplicationProject(ctx context.Context, applicationID int64) (*projectLockLease, error) {
+	if applicationID < 1 {
+		return nil, application.ErrNotFound
+	}
+	s.mu.Lock()
+	if s.projectLocks == nil {
+		s.projectLocks = newProjectLockManager()
+	}
+	locks := s.projectLocks
+	s.mu.Unlock()
+	return locks.acquire(ctx, applicationProjectLockKey(applicationID))
+}
+
+func (s *Applications) acquireProjectKey(ctx context.Context, key string) (*projectLockLease, error) {
+	s.mu.Lock()
+	if s.projectLocks == nil {
+		s.projectLocks = newProjectLockManager()
+	}
+	locks := s.projectLocks
+	s.mu.Unlock()
+	return locks.acquire(ctx, key)
+}
+
+func (s *Applications) acquireProxyProject(ctx context.Context) (*projectLockLease, error) {
+	return s.acquireProjectKey(ctx, proxyProjectLockKey)
 }
 
 // SetApplicationDeletionDependencies supplies the optional infrastructure
@@ -449,9 +484,15 @@ func (s *Applications) SetApplicationDeletionDependencies(scheduleDisabler appli
 // workflow owns deployment-key cleanup. The HTTP compatibility path uses this
 // to avoid running a second cleanup after the workflow has already completed.
 func (s *Applications) ApplicationDeletionHandlesKeyCleanup() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.keyCleanup != nil
+}
+
+func (s *Applications) applicationDeletionDependencies() (applicationDeletionScheduleDisabler, applicationDeletionCleanup) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.scheduleDisabler, s.keyCleanup
 }
 
 // GetApplicationDeletion exposes only the non-secret tombstone needed by the
@@ -515,6 +556,7 @@ func NewApplicationsWithOptions(repository ApplicationRepository, projectsRoot s
 		proxyDirectory:     filepath.Join(root, coreDir, proxyDir),
 		managementPort:     managementPortFromHTTPAddr(options.ManagementHTTPAddr),
 		runner:             runner,
+		projectLocks:       newProjectLockManager(),
 	}, nil
 }
 
@@ -574,6 +616,11 @@ func (s *Applications) CreateDomain(ctx context.Context, applicationID int64, na
 	if s.domainRepository == nil {
 		return application.Domain{}, errors.New("application domain repository is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Domain{}, err
+	}
+	defer lease.release()
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
 		return application.Domain{}, err
@@ -597,6 +644,11 @@ func (s *Applications) DeleteDomain(ctx context.Context, applicationID int64, na
 	if err != nil {
 		return err
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 	if s.routingRepository == nil {
 		return s.domainRepository.DeleteDomain(ctx, applicationID, name)
 	}
@@ -615,9 +667,6 @@ func (s *Applications) DeleteDomain(ctx context.Context, applicationID int64, na
 	if domain.ID == 0 {
 		return application.ErrDomainNotFound
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	routings, err := s.routingRepository.ListRoutings(ctx, applicationID, domain.ID)
 	if err != nil {
@@ -659,6 +708,15 @@ func (s *Applications) ListServices(ctx context.Context, applicationID int64) ([
 	if s.detailsRepository == nil {
 		return nil, errors.New("application details repository is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.release()
+	return s.listServicesLocked(ctx, applicationID)
+}
+
+func (s *Applications) listServicesLocked(ctx context.Context, applicationID int64) ([]application.Service, error) {
 	services, err := s.detailsRepository.ListServices(ctx, applicationID)
 	if err != nil || len(services) == 0 {
 		return services, err
@@ -705,6 +763,12 @@ func (s *Applications) ListServices(ctx context.Context, applicationID int64) ([
 // entries. Docker inspection failures leave the runtime fields unavailable so
 // the dashboard can still show the configured domains.
 func (s *Applications) GetProxyDetails(ctx context.Context) (application.ProxyDetails, error) {
+	lease, err := s.acquireProxyProject(ctx)
+	if err != nil {
+		return application.ProxyDetails{}, err
+	}
+	defer lease.release()
+
 	var details application.ProxyDetails
 
 	if s.routingRepository != nil {
@@ -770,25 +834,43 @@ func proxyDomainsFromRoutings(routings []application.Routing, applicationNames m
 	return domains
 }
 
-// GetProxyFullLogs returns the complete log history for the managed proxy.
-// Unlike the dashboard data, this method deliberately does not apply a line
-// limit so the HTTP layer can return it as a download response.
+// GetProxyFullLogs returns the managed proxy log history up to the Compose
+// adapter's configured download limit. HTTP handlers use OpenProxyLogs
+// directly so the response remains backpressured.
 func (s *Applications) GetProxyFullLogs(ctx context.Context) (string, error) {
-	inspector, ok := s.runner.(composeServiceFullLogsInspector)
-	if !ok {
-		return "", errors.New("proxy log inspection is not configured")
+	stream, err := s.OpenProxyLogs(ctx)
+	if err != nil {
+		return "", err
 	}
-	logs, err := inspector.AllLogs(ctx, s.proxyDirectory, proxyDir)
+	defer stream.Close()
+	logs, err := io.ReadAll(stream)
 	if err != nil {
 		return "", fmt.Errorf("read proxy logs: %w", err)
 	}
-	return logs, nil
+	return string(logs), nil
+}
+
+// OpenProxyLogs opens a bounded, cancellable stream for the managed proxy.
+// The legacy string inspector remains a compatibility fallback for small
+// adapters; the production CommandRunner implements the streaming capability.
+func (s *Applications) OpenProxyLogs(ctx context.Context) (io.ReadCloser, error) {
+	if streamer, ok := s.runner.(composeServiceLogStreamer); ok {
+		return streamer.OpenLogs(ctx, s.proxyDirectory, proxyDir)
+	}
+	if inspector, ok := s.runner.(composeServiceFullLogsInspector); ok {
+		logs, err := inspector.AllLogs(ctx, s.proxyDirectory, proxyDir)
+		if err != nil {
+			return nil, fmt.Errorf("read proxy logs: %w", err)
+		}
+		return io.NopCloser(strings.NewReader(logs)), nil
+	}
+	return nil, errors.New("proxy log inspection is not configured")
 }
 
 // GetServiceDetails returns the registered service metadata together with
-// best-effort Docker logs and resolved environment values for the dashboard.
-// Docker inspection failures leave the corresponding widget unavailable while
-// preserving the service metadata and any runtime fields that were found.
+// best-effort Docker runtime and recent log information. Environment values
+// are loaded only by the dedicated environment page, so sensitive Compose
+// resolution is not part of this request.
 func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDetails, error) {
 	if s.detailsRepository == nil {
 		return application.ServiceDetails{}, errors.New("application details repository is not configured")
@@ -798,11 +880,17 @@ func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int6
 		return application.ServiceDetails{}, err
 	}
 
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.ServiceDetails{}, err
+	}
+	defer lease.release()
+
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
 		return application.ServiceDetails{}, err
 	}
-	services, err := s.ListServices(ctx, applicationID)
+	services, err := s.listServicesLocked(ctx, applicationID)
 	if err != nil {
 		return application.ServiceDetails{}, err
 	}
@@ -819,8 +907,7 @@ func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int6
 	}
 
 	logsInspector, hasLogs := s.runner.(composeServiceLogsInspector)
-	environmentInspector, hasEnvironment := s.runner.(composeServiceEnvironmentInspector)
-	if !hasLogs && !hasEnvironment {
+	if !hasLogs {
 		return details, nil
 	}
 	directory, err := s.managedApplicationDirectory(item)
@@ -834,69 +921,70 @@ func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int6
 			details.LogsAvailable = true
 		}
 	}
-	if hasEnvironment {
-		if environment, err := environmentInspector.Environment(ctx, directory, serviceName); err == nil {
-			details.Environment = make([]application.EnvironmentVariable, 0, len(environment))
-			for _, variable := range environment {
-				details.Environment = append(details.Environment, application.EnvironmentVariable{
-					Key:       variable.Key,
-					Value:     variable.Value,
-					Sensitive: application.IsSensitiveEnvironmentKey(variable.Key),
-				})
-			}
-			sort.SliceStable(details.Environment, func(left, right int) bool {
-				return details.Environment[left].Key < details.Environment[right].Key
-			})
-			details.EnvironmentAvailable = true
-		}
-	}
 	return details, nil
 }
 
-// GetServiceFullLogs returns the complete log history for one managed service.
-// Unlike the service details data, this method deliberately does not apply a
-// line limit so the HTTP layer can return it as a download response.
+// GetServiceFullLogs returns the log history for one managed service up to the
+// Compose adapter's configured download limit. HTTP handlers use
+// OpenServiceLogs directly so the response remains backpressured.
 func (s *Applications) GetServiceFullLogs(ctx context.Context, applicationID int64, serviceName string) (string, error) {
-	if s.detailsRepository == nil {
-		return "", errors.New("application details repository is not configured")
-	}
-	serviceName, err := application.ValidateServiceName(serviceName)
+	stream, err := s.OpenServiceLogs(ctx, applicationID, serviceName)
 	if err != nil {
 		return "", err
 	}
-
-	item, err := s.detailsRepository.Get(ctx, applicationID)
-	if err != nil {
-		return "", err
-	}
-	services, err := s.detailsRepository.ListServices(ctx, applicationID)
-	if err != nil {
-		return "", err
-	}
-	registered := false
-	for _, service := range services {
-		if service.Name == serviceName {
-			registered = true
-			break
-		}
-	}
-	if !registered {
-		return "", application.ErrServiceNotFound
-	}
-
-	inspector, ok := s.runner.(composeServiceFullLogsInspector)
-	if !ok {
-		return "", errors.New("service log inspection is not configured")
-	}
-	directory, err := s.managedApplicationDirectory(item)
-	if err != nil {
-		return "", err
-	}
-	logs, err := inspector.AllLogs(ctx, directory, serviceName)
+	defer stream.Close()
+	logs, err := io.ReadAll(stream)
 	if err != nil {
 		return "", fmt.Errorf("read service logs: %w", err)
 	}
-	return logs, nil
+	return string(logs), nil
+}
+
+// OpenServiceLogs validates ownership and opens a bounded, cancellable stream
+// for one registered service.
+func (s *Applications) OpenServiceLogs(ctx context.Context, applicationID int64, serviceName string) (io.ReadCloser, error) {
+	if s.detailsRepository == nil {
+		return nil, errors.New("application details repository is not configured")
+	}
+	serviceName, err := application.ValidateServiceName(serviceName)
+	if err != nil {
+		return nil, err
+	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	for _, service := range services {
+		if service.Name != serviceName {
+			continue
+		}
+		directory, err := s.managedApplicationDirectory(item)
+		if err != nil {
+			return nil, err
+		}
+		if streamer, ok := s.runner.(composeServiceLogStreamer); ok {
+			return streamer.OpenLogs(ctx, directory, serviceName)
+		}
+		if inspector, ok := s.runner.(composeServiceFullLogsInspector); ok {
+			logs, err := inspector.AllLogs(ctx, directory, serviceName)
+			if err != nil {
+				return nil, fmt.Errorf("read service logs: %w", err)
+			}
+			return io.NopCloser(strings.NewReader(logs)), nil
+		}
+		return nil, errors.New("service log inspection is not configured")
+	}
+	return nil, application.ErrServiceNotFound
 }
 
 const serviceLogTail = application.ServiceLogLineLimit
@@ -976,6 +1064,11 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 	if !ok {
 		return errors.New("compose service remover is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -995,9 +1088,6 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 	if !registered {
 		return application.ErrServiceNotFound
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
@@ -1088,6 +1178,12 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 		return errors.New("compose project remover is not configured")
 	}
 
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	var intent application.ApplicationDeletionIntent
 	if err != nil {
@@ -1113,9 +1209,15 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 	if intent.State == "complete" {
 		return nil
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	folderName, err := application.ValidateFolderName(item.FolderName)
+	if err != nil {
+		return fmt.Errorf("validate stored application folder for deletion: %w", err)
+	}
+	folderLease, err := s.acquireProjectKey(ctx, applicationFolderLockKey(folderName))
+	if err != nil {
+		return err
+	}
+	defer folderLease.release()
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
@@ -1180,6 +1282,7 @@ const (
 )
 
 func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicationID int64, intent application.ApplicationDeletionIntent, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
+	scheduleDisabler, keyCleanup := s.applicationDeletionDependencies()
 	stage := intent.Stage
 	if stage == "" {
 		stage = applicationDeletionStageSchedules
@@ -1189,8 +1292,8 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 	}
 
 	if stage == applicationDeletionStageSchedules {
-		if s.scheduleDisabler != nil {
-			if err := s.scheduleDisabler.DisableApplicationSchedules(ctx, applicationID); err != nil {
+		if scheduleDisabler != nil {
+			if err := scheduleDisabler.DisableApplicationSchedules(ctx, applicationID); err != nil {
 				return s.failApplicationDeletion(applicationID, applicationDeletionStageSchedules, err)
 			}
 		}
@@ -1236,8 +1339,8 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 	}
 
 	if stage == applicationDeletionStageKeys {
-		if s.keyCleanup != nil {
-			if err := s.keyCleanup.CleanupApplicationKey(ctx, applicationID); err != nil {
+		if keyCleanup != nil {
+			if err := keyCleanup.CleanupApplicationKey(ctx, applicationID); err != nil {
 				return s.failApplicationDeletion(applicationID, applicationDeletionStageKeys, err)
 			}
 		}
@@ -1402,6 +1505,12 @@ func (s *Applications) runServiceAction(ctx context.Context, applicationID int64
 	if !ok {
 		return errors.New("compose service controller is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
 		return fmt.Errorf("get application for service action: %w", err)
@@ -1435,6 +1544,11 @@ func (s *Applications) runProxyAction(ctx context.Context, action string, run fu
 	if !ok {
 		return errors.New("compose service controller is not configured")
 	}
+	lease, err := s.acquireProxyProject(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 	if err := run(controller, s.proxyDirectory, proxyDir); err != nil {
 		return fmt.Errorf("%s proxy: %w", action, err)
 	}
@@ -1454,8 +1568,11 @@ func (s *Applications) Create(ctx context.Context, name, folderName string) (app
 		return application.Application{}, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireProjectKey(ctx, applicationFolderLockKey(folderName))
+	if err != nil {
+		return application.Application{}, err
+	}
+	defer lease.release()
 
 	if err := ensureDirectory(s.applicationsDir); err != nil {
 		return application.Application{}, fmt.Errorf("ensure applications directory: %w", err)

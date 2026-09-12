@@ -246,6 +246,15 @@ the <code>projects</code> directory beside the Compose file. If you set
 <code>PROJECTS_ROOT</code> in <code>.env</code>, use an absolute path on the VPS
 and run the Compose commands from the installation directory.
 
+The Dashboard is manager-scoped by default in the bundled container: its
+resource values describe the manager's visible process and filesystem
+environment. To display VPS-wide values, deliberately add read-only host
+mounts for procfs and the filesystem, then set
+<code>METRICS_SCOPE=vps</code>, <code>METRICS_PROC_ROOT</code>, and
+<code>METRICS_FILESYSTEM_ROOT</code> to the corresponding paths inside the
+container. Running the binary directly on the VPS can use the default
+<code>/proc</code> and <code>/</code> paths with <code>METRICS_SCOPE=vps</code>.
+
 The generated <code>.env</code> uses this local fallback callback:
 
 ~~~text

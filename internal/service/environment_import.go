@@ -29,6 +29,11 @@ func (s *Applications) ImportEnvironmentFiles(ctx context.Context, applicationID
 	if s.detailsRepository == nil {
 		return errors.New("application details repository is not configured")
 	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -38,9 +43,6 @@ func (s *Applications) ImportEnvironmentFiles(ctx context.Context, applicationID
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	varsPath := filepath.Join(directory, varsEnvFile)
 	varsSnapshot, err := snapshotManagedFile(varsPath)

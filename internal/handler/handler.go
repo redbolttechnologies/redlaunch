@@ -80,6 +80,7 @@ type Handler struct {
 	applicationDeleteJobs          *applicationDeleteJobStore
 	backupJobs                     *backupJobStore
 	jobs                           *trackedJobRuntime
+	logDownloads                   chan struct{}
 	csrfToken                      string
 	accessMode                     string
 	cookieSecure                   bool
@@ -189,6 +190,10 @@ type serviceFullLogsService interface {
 	GetServiceFullLogs(context.Context, int64, string) (string, error)
 }
 
+type serviceLogStreamService interface {
+	OpenServiceLogs(context.Context, int64, string) (io.ReadCloser, error)
+}
+
 type serviceActionService interface {
 	StartService(context.Context, int64, string) error
 	StopService(context.Context, int64, string) error
@@ -244,6 +249,10 @@ type dashboardMetricsService interface {
 
 type proxyFullLogsService interface {
 	GetProxyFullLogs(context.Context) (string, error)
+}
+
+type proxyLogStreamService interface {
+	OpenProxyLogs(context.Context) (io.ReadCloser, error)
 }
 
 type applicationContainerInputValidator interface {
@@ -302,6 +311,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"dashboardSize":         dashboardSize,
 		"dashboardTime":         dashboardTime,
 		"dashboardTimeISO":      dashboardTimeISO,
+		"dashboardMetricsScope": dashboardMetricsScope,
+		"dashboardMetricAge":    dashboardMetricAge,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -601,6 +612,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		backupJobs:                     backupJobs,
 		githubActionsJobs:              githubActionsJobs,
 		jobs:                           jobs,
+		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
 		csrfToken:                      csrfToken,
 		accessMode:                     security.AccessMode,
 		cookieSecure:                   security.CookieSecure,
@@ -2460,8 +2472,9 @@ func (h *Handler) downloadServiceLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logsService, ok := h.serviceDetails.(serviceFullLogsService)
-	if !ok {
+	logsService, hasLegacyLogs := h.serviceDetails.(serviceFullLogsService)
+	streamer, hasStream := h.serviceDetails.(serviceLogStreamService)
+	if !hasLegacyLogs && !hasStream {
 		http.Error(w, "Service log downloads are not configured.", http.StatusInternalServerError)
 		return
 	}
@@ -2474,6 +2487,27 @@ func (h *Handler) downloadServiceLogs(w http.ResponseWriter, r *http.Request) {
 	validatedServiceName, err := application.ValidateServiceName(serviceName)
 	if err != nil || validatedServiceName != serviceName {
 		http.NotFound(w, r)
+		return
+	}
+	release, err := h.acquireLogDownload(r.Context())
+	if err != nil {
+		http.Error(w, "Too many log downloads are active. Try again shortly.", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
+
+	if hasStream {
+		stream, err := streamer.OpenServiceLogs(r.Context(), id, serviceName)
+		if err != nil {
+			if errors.Is(err, application.ErrNotFound) || errors.Is(err, application.ErrServiceNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error("open full service log stream", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The service logs could not be read.", http.StatusInternalServerError)
+			return
+		}
+		h.writeLogDownload(w, stream, "service-logs.txt", "service")
 		return
 	}
 

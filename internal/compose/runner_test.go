@@ -2,6 +2,8 @@ package compose
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -456,6 +458,123 @@ func TestCommandRunnerAllLogsDoesNotApplyTail(t *testing.T) {
 	}
 }
 
+func TestCommandOutputBuffersAreBoundedAtWriteTime(t *testing.T) {
+	contents := make([]byte, maxCommandOutput*4)
+	tail := newTailBuffer(maxCommandOutput)
+	if written, err := tail.Write(contents); err != nil || written != len(contents) {
+		t.Fatalf("tail Write() = (%d, %v), want all input accepted", written, err)
+	}
+	if len(tail.Bytes()) != maxCommandOutput || !tail.truncated {
+		t.Fatalf("tail buffer = (%d bytes, truncated=%v), want %d-byte bounded tail", len(tail.Bytes()), tail.truncated, maxCommandOutput)
+	}
+
+	structured := newBoundedBuffer(maxCommandOutput)
+	if written, err := structured.Write(contents); err != nil || written != len(contents) {
+		t.Fatalf("structured Write() = (%d, %v), want all input accepted", written, err)
+	}
+	if len(structured.Bytes()) != maxCommandOutput || !structured.truncated {
+		t.Fatalf("structured buffer = (%d bytes, truncated=%v), want %d-byte bounded output", len(structured.Bytes()), structured.truncated, maxCommandOutput)
+	}
+}
+
+func TestLogStreamAdmissionIsBoundedAndCancellable(t *testing.T) {
+	releases := make([]func(), 0, maxConcurrentLogStreams)
+	t.Cleanup(func() {
+		for _, release := range releases {
+			release()
+		}
+	})
+	for index := 0; index < maxConcurrentLogStreams; index++ {
+		release, err := acquireLogStream(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := acquireLogStream(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("contended log stream acquire error = %v, want context canceled", err)
+	}
+
+	for _, release := range releases {
+		release()
+	}
+	releases = nil
+	release, err := acquireLogStream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+}
+
+func TestCommandRunnerRejectsOversizedStructuredOutput(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nhead -c 5000000 /dev/zero\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (CommandRunner{Binary: binary}).ConfigServices(context.Background(), projectDir)
+	if err == nil || !strings.Contains(err.Error(), "structured output exceeds") {
+		t.Fatalf("ConfigServices() error = %v, want bounded structured-output error", err)
+	}
+}
+
+func TestCommandDiagnosticsKeepOnlyRedactedTail(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "secrets.env"), []byte("DATABASE_PASSWORD=super-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "diagnostic")
+	script := "#!/bin/sh\nhead -c 100000 /dev/zero >&2\nprintf ' DATABASE_PASSWORD=super-secret\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runDiagnosticCommand(exec.Command(binary), "diagnostic command", projectDir)
+	if err == nil {
+		t.Fatal("runDiagnosticCommand() error = nil, want command failure")
+	}
+	if strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("diagnostic error leaked secret: %v", err)
+	}
+	if len(err.Error()) > maxCommandOutput+128 {
+		t.Fatalf("diagnostic error length = %d, want bounded tail", len(err.Error()))
+	}
+}
+
+func TestCommandRunnerOpenLogsStreamsAndStopsAtLimit(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '12345'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	stream, err := (CommandRunner{Binary: binary, MaxLogBytes: 4}).OpenLogs(context.Background(), projectDir, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, readErr := io.ReadAll(stream)
+	closeErr := stream.Close()
+	if string(contents) != "1234" {
+		t.Fatalf("streamed log contents = %q, want 4-byte prefix", contents)
+	}
+	if !errors.Is(readErr, ErrLogOutputTooLarge) {
+		t.Fatalf("stream read error = %v, want ErrLogOutputTooLarge", readErr)
+	}
+	if closeErr != nil && !errors.Is(closeErr, ErrLogOutputTooLarge) {
+		t.Fatalf("stream close error = %v, want nil or size error", closeErr)
+	}
+}
+
 func TestCommandRunnerEnvironmentReadsResolvedComposeConfig(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
@@ -541,16 +660,19 @@ func TestComposeProjectNamesSeparateApplicationAndCoreResources(t *testing.T) {
 
 func TestCommandRunnerExcludesManagerOnlyEnvironment(t *testing.T) {
 	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    environment:\n      APP_VALUE: ${APP_INTERPOLATION_VALUE}\n      MANAGER_VALUE: ${AUTH_SESSION_SECRET}\n      GOOGLE_VALUE: ${GOOGLE_CLIENT_SECRET}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    environment:\n      APP_VALUE: ${APP_INTERPOLATION_VALUE}\n      MANAGER_VALUE: ${AUTH_SESSION_SECRET}\n      GOOGLE_VALUE: ${GOOGLE_CLIENT_SECRET}\n      METRICS_SCOPE_VALUE: ${METRICS_SCOPE}\n      METRICS_PROC_VALUE: ${METRICS_PROC_ROOT}\n      METRICS_FILESYSTEM_VALUE: ${METRICS_FILESYSTEM_ROOT}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AUTH_SESSION_SECRET", "manager-only-marker")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "manager-google-marker")
+	t.Setenv("METRICS_SCOPE", "vps")
+	t.Setenv("METRICS_PROC_ROOT", "/host/proc")
+	t.Setenv("METRICS_FILESYSTEM_ROOT", "/host/root")
 	t.Setenv("APP_INTERPOLATION_VALUE", "application-marker")
 
 	binary := filepath.Join(t.TempDir(), "docker")
 	script := `#!/bin/sh
-printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s","GOOGLE_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}" "${GOOGLE_CLIENT_SECRET-unset}"
+printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s","GOOGLE_VALUE":"%s","METRICS_SCOPE_VALUE":"%s","METRICS_PROC_VALUE":"%s","METRICS_FILESYSTEM_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}" "${GOOGLE_CLIENT_SECRET-unset}" "${METRICS_SCOPE-unset}" "${METRICS_PROC_ROOT-unset}" "${METRICS_FILESYSTEM_ROOT-unset}"
 `
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -569,6 +691,11 @@ printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s"
 	}
 	if values["GOOGLE_VALUE"] != "unset" {
 		t.Fatal("manager-only OAuth environment reached Docker Compose")
+	}
+	for _, key := range []string{"METRICS_SCOPE_VALUE", "METRICS_PROC_VALUE", "METRICS_FILESYSTEM_VALUE"} {
+		if values[key] != "unset" {
+			t.Fatalf("manager-only metrics environment %s reached Docker Compose", key)
+		}
 	}
 	if values["APP_VALUE"] != "application-marker" {
 		t.Fatalf("application interpolation environment = %q, want application-marker", values["APP_VALUE"])

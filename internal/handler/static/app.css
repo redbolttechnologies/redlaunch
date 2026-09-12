@@ -921,10 +921,16 @@ h1 {
 
 .dashboard-metrics-meta {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
   justify-content: flex-end;
   margin-bottom: var(--space-3);
   color: hsl(var(--muted-foreground));
   font-size: 0.75rem;
+}
+
+.dashboard-metrics-stale {
+  color: hsl(var(--destructive));
 }
 
 .dashboard-overview-grid {

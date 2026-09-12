@@ -66,7 +66,7 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 - Import an existing Compose project.
 - Start, stop, restart, and remove managed services.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
-- Show container status, ports, logs, and host resource usage.
+- Show container status, ports, logs, and explicitly scoped resource usage.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
@@ -99,6 +99,10 @@ projects/
 
 Each application has its own Compose file and environment files. Secret values
 are stored outside SQLite and are masked in the web interface.
+
+Dashboard log views use a bounded byte tail. Full log downloads are streamed
+with a 64 MiB safety limit and at most two active downloads per Redlaunch
+process.
 
 PostgreSQL and Redis services also load service-specific
 environment files (for example, `db.vars.env` and `db.secrets.env`) after the
@@ -152,6 +156,9 @@ The main configuration values are:
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
 | `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies when TLS terminates in front of Redlaunch |
 | `MANAGEMENT_ACCESS_MODE` | `ssh-only` | `ssh-only` keeps the host listener private; `managed-https` requires a configured TLS proxy |
+| `METRICS_SCOPE` | `manager` | Dashboard visibility scope: `manager` reads the manager process environment; `vps` is for explicitly mounted host paths |
+| `METRICS_PROC_ROOT` | empty (`/proc`) | Procfs path used by the dashboard metrics collector; set this to a read-only host procfs mount for VPS scope in Docker |
+| `METRICS_FILESYSTEM_ROOT` | empty (`/`) | Filesystem path used for dashboard disk metrics; set this to a read-only host-root mount for VPS scope in Docker |
 | `APP_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the Docker deployment; use `0.0.0.0` only with managed HTTPS and firewalling |
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
 
@@ -164,6 +171,14 @@ configure the public hostname in Redlaunch, and restrict the host firewall to
 the intended HTTP/HTTPS entry points. Managed HTTPS forces secure session and
 CSRF cookies; SSH-only keeps the local HTTP callback usable through the SSH
 tunnel. Do not rely on arbitrary forwarded headers to select a mode.
+
+The Dashboard reports the resource scope shown above and does not claim that a
+container-scoped sample represents the whole VPS. The bundled Compose file
+defaults to `METRICS_SCOPE=manager`; selecting `vps` in Docker is meaningful
+only after deliberately adding read-only host mounts and setting
+`METRICS_PROC_ROOT` and `METRICS_FILESYSTEM_ROOT` to their in-container paths.
+Running the binary directly on a VPS can use `METRICS_SCOPE=vps` with the
+default `/proc` and `/` paths.
 
 See [.env.example](.env.example) for the authentication settings. Environment
 variables override values loaded from `.env`.

@@ -16,30 +16,45 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const maxCommandOutput = 8 * 1024
+const (
+	maxCommandOutput        = 8 * 1024
+	maxStructuredOutput     = 4 * 1024 * 1024
+	maxRecentLogOutput      = 1 * 1024 * 1024
+	maxLogDownloadBytes     = 64 * 1024 * 1024
+	maxConcurrentLogStreams = 2
+)
+
+// ErrLogOutputTooLarge means a log stream exceeded the maximum number of
+// bytes Redlaunch will send or retain. The process is canceled as soon as the
+// limit is observed so a noisy container cannot keep consuming resources.
+var ErrLogOutputTooLarge = errors.New("log output exceeds the configured limit")
 
 var managerEnvironmentKeys = map[string]struct{}{
-	"AUTH_COOKIE_SECURE":     {},
-	"AUTH_SESSION_SECRET":    {},
-	"BACKUP_CONTAINER_NAME":  {},
-	"BACKUP_DOCKER_BINARY":   {},
-	"BACKUP_ROOT":            {},
-	"DB_PATH":                {},
-	"DOTENV_FILE":            {},
-	"GOOGLE_CLIENT_ID":       {},
-	"GOOGLE_CLIENT_SECRET":   {},
-	"GOOGLE_REDIRECT_URL":    {},
-	"HTTP_ADDR":              {},
-	"APP_BIND_ADDRESS":       {},
-	"APP_PORT":               {},
-	"MANAGEMENT_ACCESS_MODE": {},
-	"PROJECTS_ROOT":          {},
-	"SYSTEMD_BINARY":         {},
-	"SYSTEMD_SCOPE":          {},
-	"SYSTEMD_UNIT_DIR":       {},
+	"AUTH_COOKIE_SECURE":      {},
+	"AUTH_SESSION_SECRET":     {},
+	"BACKUP_CONTAINER_NAME":   {},
+	"BACKUP_DOCKER_BINARY":    {},
+	"BACKUP_ROOT":             {},
+	"DB_PATH":                 {},
+	"DOTENV_FILE":             {},
+	"GOOGLE_CLIENT_ID":        {},
+	"GOOGLE_CLIENT_SECRET":    {},
+	"GOOGLE_REDIRECT_URL":     {},
+	"HTTP_ADDR":               {},
+	"APP_BIND_ADDRESS":        {},
+	"APP_PORT":                {},
+	"MANAGEMENT_ACCESS_MODE":  {},
+	"METRICS_FILESYSTEM_ROOT": {},
+	"METRICS_PROC_ROOT":       {},
+	"METRICS_SCOPE":           {},
+	"PROJECTS_ROOT":           {},
+	"SYSTEMD_BINARY":          {},
+	"SYSTEMD_SCOPE":           {},
+	"SYSTEMD_UNIT_DIR":        {},
 }
 
 var composeHostEnvironmentKeys = map[string]struct{}{
@@ -59,6 +74,257 @@ var composeHostEnvironmentKeys = map[string]struct{}{
 type CommandRunner struct {
 	// Binary is the Docker CLI binary to execute. An empty value uses docker.
 	Binary string
+	// MaxLogBytes overrides the default per-download log limit. It is intended
+	// for isolated integrations and tests; zero uses maxLogDownloadBytes.
+	MaxLogBytes int64
+}
+
+// tailBuffer retains only the last max bytes written to it. os/exec writes to
+// an io.Writer while the child is running, so bounding the writer is
+// materially different from truncating CombinedOutput after the process has
+// already finished.
+type tailBuffer struct {
+	max       int
+	contents  []byte
+	truncated bool
+}
+
+func newTailBuffer(max int) *tailBuffer {
+	if max < 1 {
+		max = 1
+	}
+	return &tailBuffer{max: max, contents: make([]byte, 0, max)}
+}
+
+func (b *tailBuffer) Write(contents []byte) (int, error) {
+	if b == nil || len(contents) == 0 {
+		return len(contents), nil
+	}
+	if len(contents) >= b.max {
+		b.contents = b.contents[:b.max]
+		copy(b.contents, contents[len(contents)-b.max:])
+		b.truncated = true
+		return len(contents), nil
+	}
+	if overflow := len(b.contents) + len(contents) - b.max; overflow > 0 {
+		copy(b.contents, b.contents[overflow:])
+		b.contents = b.contents[:len(b.contents)-overflow]
+		b.truncated = true
+	}
+	b.contents = append(b.contents, contents...)
+	return len(contents), nil
+}
+
+func (b *tailBuffer) Bytes() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.contents
+}
+
+type boundedBuffer struct {
+	max       int
+	contents  []byte
+	truncated bool
+}
+
+func newBoundedBuffer(max int) *boundedBuffer {
+	if max < 1 {
+		max = 1
+	}
+	return &boundedBuffer{max: max, contents: make([]byte, 0, max)}
+}
+
+func (b *boundedBuffer) Write(contents []byte) (int, error) {
+	if b == nil || len(contents) == 0 {
+		return len(contents), nil
+	}
+	remaining := b.max - len(b.contents)
+	if remaining <= 0 {
+		b.truncated = true
+		return len(contents), nil
+	}
+	if len(contents) > remaining {
+		b.contents = append(b.contents, contents[:remaining]...)
+		b.truncated = true
+		return len(contents), nil
+	}
+	b.contents = append(b.contents, contents...)
+	return len(contents), nil
+}
+
+func (b *boundedBuffer) Bytes() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.contents
+}
+
+var logStreamSlots = make(chan struct{}, maxConcurrentLogStreams)
+
+type commandLogStream struct {
+	stdout     io.ReadCloser
+	command    *exec.Cmd
+	ctx        context.Context
+	cancel     context.CancelFunc
+	release    func()
+	stderr     *tailBuffer
+	projectDir string
+	maxBytes   int64
+	readBytes  int64
+	streamErr  error
+	waitOnce   sync.Once
+	waitErr    error
+}
+
+func (s *commandLogStream) Read(contents []byte) (int, error) {
+	if s == nil || s.stdout == nil {
+		return 0, errors.New("log stream is not configured")
+	}
+	if s.streamErr != nil {
+		return 0, s.streamErr
+	}
+	if len(contents) == 0 {
+		return 0, nil
+	}
+
+	if s.maxBytes > 0 && s.readBytes >= s.maxBytes {
+		var probe [1]byte
+		n, err := s.stdout.Read(probe[:])
+		if n > 0 {
+			s.cancel()
+			s.streamErr = ErrLogOutputTooLarge
+			return 0, s.streamErr
+		}
+		if err != nil {
+			return 0, s.finish(err)
+		}
+	}
+
+	if remaining := s.maxBytes - s.readBytes; remaining > 0 && int64(len(contents)) > remaining {
+		contents = contents[:remaining]
+	}
+	n, err := s.stdout.Read(contents)
+	s.readBytes += int64(n)
+	if err != nil {
+		return n, s.finish(err)
+	}
+	return n, nil
+}
+
+func (s *commandLogStream) finish(readErr error) error {
+	waitErr := s.wait()
+	if readErr != io.EOF {
+		if waitErr != nil {
+			return errors.Join(readErr, waitErr)
+		}
+		return readErr
+	}
+	if waitErr != nil {
+		return waitErr
+	}
+	return io.EOF
+}
+
+func (s *commandLogStream) wait() error {
+	s.waitOnce.Do(func() {
+		waitErr := s.command.Wait()
+		if s.ctx != nil && s.ctx.Err() != nil {
+			s.waitErr = s.ctx.Err()
+		} else {
+			s.waitErr = waitErr
+		}
+		s.cancel()
+		s.release()
+	})
+	if s.waitErr == nil {
+		return nil
+	}
+	return composeCommandErrorForProject("read service logs", s.waitErr, s.stderr.Bytes(), s.projectDir)
+}
+
+func (s *commandLogStream) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.cancel()
+	closeErr := s.stdout.Close()
+	waitErr := s.wait()
+	if closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+		return errors.Join(closeErr, waitErr)
+	}
+	if s.streamErr != nil {
+		return errors.Join(s.streamErr, waitErr)
+	}
+	return waitErr
+}
+
+func (r CommandRunner) logLimit() int64 {
+	if r.MaxLogBytes > 0 {
+		return r.MaxLogBytes
+	}
+	return maxLogDownloadBytes
+}
+
+func acquireLogStream(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case logStreamSlots <- struct{}{}:
+		return func() { <-logStreamSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func runDiagnosticCommand(command *exec.Cmd, operation, projectDir string) error {
+	stdout := newTailBuffer(maxCommandOutput)
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		return composeCommandErrorForProject(operation, err, diagnosticOutput(stdout.Bytes(), stderr.Bytes()), projectDir)
+	}
+	return nil
+}
+
+func diagnosticOutput(stdout, stderr []byte) []byte {
+	if len(stdout) == 0 {
+		return stderr
+	}
+	if len(stderr) == 0 {
+		return stdout
+	}
+	output := make([]byte, 0, len(stdout)+1+len(stderr))
+	output = append(output, stdout...)
+	output = append(output, '\n')
+	output = append(output, stderr...)
+	return output
+}
+
+func runStructuredCommand(command *exec.Cmd, operation, projectDir string) ([]byte, error) {
+	stdout := newBoundedBuffer(maxStructuredOutput)
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		return nil, composeCommandErrorForProject(operation, err, stderr.Bytes(), projectDir)
+	}
+	if stdout.truncated {
+		return nil, fmt.Errorf("%s: structured output exceeds %d bytes", operation, maxStructuredOutput)
+	}
+	return stdout.Bytes(), nil
 }
 
 // ServiceRuntime contains the Docker Compose runtime fields shown for a
@@ -118,6 +384,7 @@ func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName st
 // projects consume this network as external infrastructure; optional core
 // components do not implicitly own its lifetime.
 func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) error {
+	ctx = normalizeContext(ctx)
 	networkName = strings.TrimSpace(networkName)
 	if !validDockerNetworkName(networkName) {
 		return errors.New("Docker network name is invalid")
@@ -129,9 +396,9 @@ func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) er
 
 	list := exec.CommandContext(ctx, binary, "network", "ls", "--filter", "name=^"+regexp.QuoteMeta(networkName)+"$", "--format", "{{.Name}}")
 	list.Env = composeProcessEnvironment(os.Environ(), nil)
-	output, err := list.Output()
+	output, err := runStructuredCommand(list, "list Docker networks", "")
 	if err != nil {
-		return composeCommandError("list Docker networks", err, nil)
+		return err
 	}
 	found := false
 	for _, name := range strings.Fields(string(output)) {
@@ -143,17 +410,17 @@ func (r CommandRunner) EnsureNetwork(ctx context.Context, networkName string) er
 	if !found {
 		create := exec.CommandContext(ctx, binary, "network", "create", "--driver", "bridge", "--label", "redlaunch.managed=true", "--label", "redlaunch.owner=redlaunch", networkName)
 		create.Env = composeProcessEnvironment(os.Environ(), nil)
-		if output, err := create.CombinedOutput(); err != nil {
-			return composeCommandError("create application network", err, output)
+		if err := runDiagnosticCommand(create, "create application network", ""); err != nil {
+			return err
 		}
 		return nil
 	}
 
 	inspect := exec.CommandContext(ctx, binary, "network", "inspect", "--format", "{{json .Labels}}", networkName)
 	inspect.Env = composeProcessEnvironment(os.Environ(), nil)
-	labelsOutput, err := inspect.Output()
+	labelsOutput, err := runStructuredCommand(inspect, "inspect application network", "")
 	if err != nil {
-		return composeCommandError("inspect application network", err, nil)
+		return err
 	}
 	var labels map[string]string
 	if err := json.Unmarshal(bytes.TrimSpace(labelsOutput), &labels); err != nil {
@@ -197,9 +464,9 @@ func (r CommandRunner) ConfigServices(ctx context.Context, projectDir string) ([
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json", "--no-interpolate", "--no-env-resolution", "--no-path-resolution")
-	output, err := command.CombinedOutput()
+	output, err := runStructuredCommand(command, "validate Compose project", projectDir)
 	if err != nil {
-		return nil, composeCommandError("validate Compose project", err, output)
+		return nil, err
 	}
 
 	var config struct {
@@ -254,16 +521,8 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 		operation = fmt.Sprintf("run compose service %q", serviceName)
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		details := strings.TrimSpace(string(output))
-		if len(details) > maxCommandOutput {
-			details = "..." + details[len(details)-maxCommandOutput:]
-		}
-		if details != "" {
-			return fmt.Errorf("%s: %w: %s", operation, err, details)
-		}
-		return fmt.Errorf("%s: %w", operation, err)
+	if err := runDiagnosticCommand(command, operation, projectDir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -282,9 +541,8 @@ func (r CommandRunner) ReloadProxy(ctx context.Context, projectDir string) error
 		return fmt.Errorf("find Compose file: %w", err)
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return composeCommandError("reload Caddy proxy", err, output)
+	if err := runDiagnosticCommand(command, "reload Caddy proxy", projectDir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -328,9 +586,8 @@ func (r CommandRunner) Down(ctx context.Context, projectDir string) error {
 		return err
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "down", "--volumes", "--remove-orphans")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return composeCommandError("remove Compose project", err, output)
+	if err := runDiagnosticCommand(command, "remove Compose project", projectDir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -356,16 +613,8 @@ func (r CommandRunner) runServiceCommandWithOptions(ctx context.Context, project
 	args = append(args, options...)
 	args = append(args, serviceName)
 	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		details := strings.TrimSpace(string(output))
-		if len(details) > maxCommandOutput {
-			details = "..." + details[len(details)-maxCommandOutput:]
-		}
-		if details != "" {
-			return fmt.Errorf("run compose %s for service %q: %w: %s", action, serviceName, err, details)
-		}
-		return fmt.Errorf("run compose %s for service %q: %w", action, serviceName, err)
+	if err := runDiagnosticCommand(command, fmt.Sprintf("run compose %s for service %q", action, serviceName), projectDir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -384,18 +633,9 @@ func (r CommandRunner) ListServices(ctx context.Context, projectDir string) ([]S
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "ps", "-a", "--format", "json")
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
+	output, err := runStructuredCommand(command, "list compose services", projectDir)
 	if err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if len(details) > maxCommandOutput {
-			details = "..." + details[len(details)-maxCommandOutput:]
-		}
-		if details != "" {
-			return nil, fmt.Errorf("list compose services: %w: %s", err, details)
-		}
-		return nil, fmt.Errorf("list compose services: %w", err)
+		return nil, err
 	}
 	return decodeServiceRuntimes(output)
 }
@@ -424,9 +664,20 @@ func (r CommandRunner) Logs(ctx context.Context, projectDir, serviceName string,
 	return r.readLogs(ctx, projectDir, serviceName, strconv.Itoa(tail))
 }
 
-// AllLogs returns the complete log history for one Compose service.
+// AllLogs returns the log history for one Compose service up to the configured
+// download limit. HTTP downloads should use OpenLogs so the caller can apply
+// backpressure instead of buffering this compatibility result in memory.
 func (r CommandRunner) AllLogs(ctx context.Context, projectDir, serviceName string) (string, error) {
-	return r.readLogs(ctx, projectDir, serviceName, "")
+	stream, err := r.OpenLogs(ctx, projectDir, serviceName)
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	contents, readErr := io.ReadAll(stream)
+	if readErr != nil {
+		return "", readErr
+	}
+	return string(contents), nil
 }
 
 func (r CommandRunner) readLogs(ctx context.Context, projectDir, serviceName, tail string) (string, error) {
@@ -446,13 +697,60 @@ func (r CommandRunner) readLogs(ctx context.Context, projectDir, serviceName, ta
 	}
 	args = append(args, "--no-color", "--no-log-prefix", serviceName)
 	command := composeCommand(ctx, binary, projectDir, composeFile, args...)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
-	if err != nil {
-		return "", composeCommandError("read service logs", err, stderr.Bytes())
+	output := newTailBuffer(maxRecentLogOutput)
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stdout = output
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		return "", composeCommandErrorForProject("read service logs", err, stderr.Bytes(), projectDir)
 	}
-	return string(output), nil
+	return string(output.Bytes()), nil
+}
+
+// OpenLogs starts a backpressured Compose log process. The returned reader
+// owns the process and must be closed by the caller. Closing it cancels the
+// process, waits for exit, and releases the global log-stream slot.
+func (r CommandRunner) OpenLogs(ctx context.Context, projectDir, serviceName string) (io.ReadCloser, error) {
+	ctx = normalizeContext(ctx)
+	release, err := acquireLogStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		release()
+		return nil, fmt.Errorf("find Compose file: %w", err)
+	}
+	commandContext, cancel := context.WithCancel(ctx)
+	command := composeCommand(commandContext, binary, projectDir, composeFile, "logs", "--no-color", "--no-log-prefix", serviceName)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		cancel()
+		release()
+		return nil, fmt.Errorf("open service log stream: %w", err)
+	}
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stderr = stderr
+	if err := command.Start(); err != nil {
+		cancel()
+		release()
+		return nil, composeCommandErrorForProject("start service log stream", err, stderr.Bytes(), projectDir)
+	}
+	return &commandLogStream{
+		stdout:     stdout,
+		command:    command,
+		ctx:        ctx,
+		cancel:     cancel,
+		release:    release,
+		stderr:     stderr,
+		projectDir: projectDir,
+		maxBytes:   r.logLimit(),
+	}, nil
 }
 
 const (
@@ -481,10 +779,10 @@ func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, service
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresDumpScript)
 	command.Stdout = output
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stderr = stderr
 	if err := command.Run(); err != nil {
-		return composeCommandError("create PostgreSQL backup", err, stderr.Bytes())
+		return composeCommandErrorForProject("create PostgreSQL backup", err, stderr.Bytes(), projectDir)
 	}
 	return nil
 }
@@ -508,10 +806,10 @@ func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, servic
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresRestoreScript)
 	command.Stdin = input
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
+	stderr := newTailBuffer(maxCommandOutput)
+	command.Stderr = stderr
 	if err := command.Run(); err != nil {
-		return composeCommandError("restore PostgreSQL backup", err, stderr.Bytes())
+		return composeCommandErrorForProject("restore PostgreSQL backup", err, stderr.Bytes(), projectDir)
 	}
 	return nil
 }
@@ -553,18 +851,9 @@ func (r CommandRunner) Environment(ctx context.Context, projectDir, serviceName 
 		return nil, fmt.Errorf("find Compose file: %w", err)
 	}
 	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json", serviceName)
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	output, err := command.Output()
+	output, err := runStructuredCommand(command, "read service environment", projectDir)
 	if err != nil {
-		details := strings.TrimSpace(stderr.String())
-		if len(details) > maxCommandOutput {
-			details = "..." + details[len(details)-maxCommandOutput:]
-		}
-		if details != "" {
-			return nil, fmt.Errorf("read service environment: %w: %s", err, details)
-		}
-		return nil, fmt.Errorf("read service environment: %w", err)
+		return nil, err
 	}
 	return decodeServiceEnvironment(output, serviceName)
 }
@@ -657,8 +946,14 @@ func decodeEnvironmentValue(rawValue json.RawMessage) (string, error) {
 	return fmt.Sprint(scalar), nil
 }
 
+var sensitiveDiagnosticAssignment = regexp.MustCompile(`(?i)(["']?(password|secret|token|api[_-]?key|private[_-]?key|credential)["']?[[:space:]]*[=:][[:space:]]*)("[^"\r\n]*"|'[^'\r\n]*'|[^[:space:],;}\]]+)`)
+
 func composeCommandError(operation string, err error, output []byte) error {
-	details := strings.TrimSpace(string(output))
+	return composeCommandErrorForProject(operation, err, output, "")
+}
+
+func composeCommandErrorForProject(operation string, err error, output []byte, projectDir string) error {
+	details := redactDiagnostic(string(output), projectDir)
 	if len(details) > maxCommandOutput {
 		details = "..." + details[len(details)-maxCommandOutput:]
 	}
@@ -666,6 +961,59 @@ func composeCommandError(operation string, err error, output []byte) error {
 		return fmt.Errorf("%s: %w: %s", operation, err, details)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func redactDiagnostic(output, projectDir string) string {
+	details := strings.TrimSpace(output)
+	for _, secret := range diagnosticSecretValues(projectDir) {
+		if secret != "" {
+			details = strings.ReplaceAll(details, secret, "[REDACTED]")
+		}
+	}
+	details = sensitiveDiagnosticAssignment.ReplaceAllString(details, `${1}[REDACTED]`)
+	return details
+}
+
+func diagnosticSecretValues(projectDir string) []string {
+	values := make([]string, 0)
+	if projectDir != "" {
+		if contents, err := os.ReadFile(filepath.Join(projectDir, "secrets.env")); err == nil {
+			for _, line := range strings.Split(string(contents), "\n") {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				_, value, ok := strings.Cut(trimmed, "=")
+				if !ok {
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if len(value) >= 3 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+					value = value[1 : len(value)-1]
+				}
+				if value != "" {
+					values = append(values, value)
+				}
+			}
+		}
+	}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && sensitiveDiagnosticKey(key) && value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func sensitiveDiagnosticKey(key string) bool {
+	key = strings.ToUpper(key)
+	for _, part := range []string{"PASSWORD", "SECRET", "TOKEN", "API_KEY", "PRIVATE_KEY", "CREDENTIAL"} {
+		if strings.Contains(key, part) {
+			return true
+		}
+	}
+	return false
 }
 
 type composeServiceRuntime struct {
@@ -772,6 +1120,7 @@ func findComposeFile(projectDir string) (string, error) {
 // scopes otherwise identical application trees installed on the same host,
 // while the resource kind keeps core and application directories distinct.
 func composeCommand(ctx context.Context, binary, projectDir, composeFile string, args ...string) *exec.Cmd {
+	ctx = normalizeContext(ctx)
 	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", composeFile}
 	composeArgs = append(composeArgs, args...)
 	command := exec.CommandContext(ctx, binary, composeArgs...)
@@ -915,6 +1264,7 @@ func isEnvironmentVariableNameCharacter(character byte, first bool) bool {
 }
 
 func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir string) error {
+	ctx = normalizeContext(ctx)
 	binary := r.Binary
 	if binary == "" {
 		binary = "docker"
@@ -923,9 +1273,9 @@ func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir st
 	ps := exec.CommandContext(ctx, binary, "ps", "-a", "--filter", "label=com.docker.compose.project="+projectName, "--format", "{{.ID}}")
 	ps.Dir = projectDir
 	ps.Env = composeProcessEnvironment(os.Environ(), nil)
-	output, err := ps.Output()
+	output, err := runStructuredCommand(ps, "verify Compose project ownership", projectDir)
 	if err != nil {
-		return composeCommandError("verify Compose project ownership", err, nil)
+		return err
 	}
 	ids := strings.Fields(string(output))
 	if len(ids) > 0 {
@@ -934,9 +1284,9 @@ func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir st
 		inspect := exec.CommandContext(ctx, binary, args...)
 		inspect.Dir = projectDir
 		inspect.Env = composeProcessEnvironment(os.Environ(), nil)
-		inspectOutput, err := inspect.Output()
+		inspectOutput, err := runStructuredCommand(inspect, "inspect Compose project ownership", projectDir)
 		if err != nil {
-			return composeCommandError("inspect Compose project ownership", err, nil)
+			return err
 		}
 		inspected := 0
 		for _, line := range strings.Split(strings.TrimSpace(string(inspectOutput)), "\n") {
@@ -960,9 +1310,9 @@ func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir st
 	volumeList := exec.CommandContext(ctx, binary, "volume", "ls", "--filter", "label=com.docker.compose.project="+projectName, "--format", "{{.Name}}")
 	volumeList.Dir = projectDir
 	volumeList.Env = composeProcessEnvironment(os.Environ(), nil)
-	volumeOutput, err := volumeList.Output()
+	volumeOutput, err := runStructuredCommand(volumeList, "verify Compose volume ownership", projectDir)
 	if err != nil {
-		return composeCommandError("verify Compose volume ownership", err, nil)
+		return err
 	}
 	volumes := strings.Fields(string(volumeOutput))
 	if len(volumes) == 0 {
@@ -974,9 +1324,9 @@ func (r CommandRunner) verifyProjectOwnership(ctx context.Context, projectDir st
 	volumeInspect := exec.CommandContext(ctx, binary, volumeInspectArgs...)
 	volumeInspect.Dir = projectDir
 	volumeInspect.Env = composeProcessEnvironment(os.Environ(), nil)
-	volumeInspectOutput, err := volumeInspect.Output()
+	volumeInspectOutput, err := runStructuredCommand(volumeInspect, "inspect Compose volume ownership", projectDir)
 	if err != nil {
-		return composeCommandError("inspect Compose volume ownership", err, nil)
+		return err
 	}
 	inspected := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(volumeInspectOutput)), "\n") {

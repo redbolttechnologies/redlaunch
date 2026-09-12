@@ -42,23 +42,25 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 		return application.Service{}, errors.New("application service repository is not configured")
 	}
 
-	item, err := s.detailsRepository.Get(ctx, applicationID)
-	if err != nil {
-		return application.Service{}, err
-	}
-
 	normalizedInput, err := normalizeApplicationServiceInput(input)
 	if err != nil {
 		return application.Service{}, err
 	}
 	serviceName := normalizedInput.ServiceName
 	imageName := normalizedInput.ImageName
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
 	if err := s.validateApplicationServiceDependencies(ctx, item.ID, serviceName, normalizedInput.DependsOn); err != nil {
 		return application.Service{}, err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {

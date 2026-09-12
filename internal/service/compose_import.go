@@ -54,8 +54,11 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 		return nil, err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {

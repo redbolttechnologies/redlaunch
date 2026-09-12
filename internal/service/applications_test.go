@@ -57,29 +57,55 @@ func (s *applicationRepositoryStub) UpdateRedlaunchPublicAccess(_ context.Contex
 }
 
 type serviceRuntimeRunner struct {
-	runtime        []compose.ServiceRuntime
-	configured     []compose.ConfiguredService
-	configErr      error
-	configCheck    func(string) error
-	configCalls    int
-	projectDir     string
-	action         string
-	actions        []string
-	service        string
-	actionErr      error
-	stopErr        error
-	removeErr      error
-	downErr        error
-	logs           string
-	logsTail       int
-	logsErr        error
-	allLogs        string
-	allLogsErr     error
-	allLogsCalled  bool
-	environment    []compose.EnvironmentVariable
-	environmentErr error
-	reloadErr      error
-	reloads        []string
+	runtime          []compose.ServiceRuntime
+	configured       []compose.ConfiguredService
+	configErr        error
+	configCheck      func(string) error
+	configCalls      int
+	projectDir       string
+	action           string
+	actions          []string
+	service          string
+	actionErr        error
+	stopErr          error
+	removeErr        error
+	downErr          error
+	logs             string
+	logsTail         int
+	logsErr          error
+	allLogs          string
+	allLogsErr       error
+	allLogsCalled    bool
+	environment      []compose.EnvironmentVariable
+	environmentErr   error
+	environmentCalls int
+	reloadErr        error
+	reloads          []string
+}
+
+type blockingServiceRuntimeRunner struct {
+	blockedPath string
+	started     chan struct{}
+	release     chan struct{}
+}
+
+func (r *blockingServiceRuntimeRunner) Up(context.Context, string) error {
+	return nil
+}
+
+func (r *blockingServiceRuntimeRunner) ListServices(ctx context.Context, projectDir string) ([]compose.ServiceRuntime, error) {
+	if strings.Contains(projectDir, r.blockedPath) {
+		select {
+		case r.started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, nil
 }
 
 func (r *serviceRuntimeRunner) Up(context.Context, string) error {
@@ -121,6 +147,7 @@ func (r *serviceRuntimeRunner) AllLogs(_ context.Context, projectDir, _ string) 
 
 func (r *serviceRuntimeRunner) Environment(_ context.Context, projectDir, _ string) ([]compose.EnvironmentVariable, error) {
 	r.projectDir = projectDir
+	r.environmentCalls++
 	return r.environment, r.environmentErr
 }
 
@@ -2106,7 +2133,7 @@ func TestApplicationsProxyActionsUseTheManagedProxyService(t *testing.T) {
 	}
 }
 
-func TestApplicationsGetProxyFullLogsReturnsUnboundedLogs(t *testing.T) {
+func TestApplicationsGetProxyFullLogsUsesCompatibilityInspector(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	runner := &serviceRuntimeRunner{allLogs: "old line\nnew line\n"}
 	applications, err := NewApplications(&applicationRepositoryStub{}, root, runner)
@@ -2127,7 +2154,7 @@ func TestApplicationsGetProxyFullLogsReturnsUnboundedLogs(t *testing.T) {
 	}
 }
 
-func TestApplicationsGetServiceDetailsIncludesRuntimeLogsAndEnvironment(t *testing.T) {
+func TestApplicationsGetServiceDetailsIncludesRuntimeAndLogsWithoutEnvironmentResolution(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
@@ -2165,18 +2192,70 @@ func TestApplicationsGetServiceDetailsIncludesRuntimeLogsAndEnvironment(t *testi
 	if !details.LogsAvailable || details.Logs != "database system is ready\n" || runner.logsTail != application.ServiceLogLineLimit {
 		t.Fatalf("service details logs = (%v, %q), tail = %d, want available logs and tail %d", details.LogsAvailable, details.Logs, runner.logsTail, application.ServiceLogLineLimit)
 	}
-	if !details.EnvironmentAvailable || len(details.Environment) != 2 {
-		t.Fatalf("service details environment = (%v, %#v), want two variables", details.EnvironmentAvailable, details.Environment)
-	}
-	if details.Environment[0].Key != "POSTGRES_DB" || details.Environment[0].Sensitive {
-		t.Fatalf("database environment variable = %#v, want non-sensitive POSTGRES_DB", details.Environment[0])
-	}
-	if details.Environment[1].Key != "POSTGRES_PASSWORD" || !details.Environment[1].Sensitive {
-		t.Fatalf("password environment variable = %#v, want sensitive POSTGRES_PASSWORD", details.Environment[1])
+	if details.EnvironmentAvailable || len(details.Environment) != 0 || runner.environmentCalls != 0 {
+		t.Fatalf("service details environment = (%v, %#v), calls = %d, want no resolved environment", details.EnvironmentAvailable, details.Environment, runner.environmentCalls)
 	}
 }
 
-func TestApplicationsGetServiceFullLogsReturnsCompleteHistory(t *testing.T) {
+func TestApplicationsProjectLockDoesNotBlockUnrelatedApplication(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{
+			{ID: 1, Name: "First", FolderName: "first"},
+			{ID: 2, Name: "Second", FolderName: "second"},
+		},
+		services: []application.Service{
+			{ID: 1, ApplicationID: 1, Name: "web"},
+			{ID: 2, ApplicationID: 2, Name: "web"},
+		},
+	}
+	runner := &blockingServiceRuntimeRunner{
+		blockedPath: "first",
+		started:     make(chan struct{}, 1),
+		release:     make(chan struct{}),
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, folderName := range []string{"first", "second"} {
+		if err := os.Mkdir(filepath.Join(root, applicationsDir, folderName), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := applications.ListServices(context.Background(), 1)
+		firstDone <- err
+	}()
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("slow application inspection did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := applications.ListServices(context.Background(), 2)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("unrelated application inspection error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("slow application inspection blocked an unrelated application")
+	}
+
+	close(runner.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplicationsGetServiceFullLogsUsesCompatibilityInspector(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},

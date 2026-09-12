@@ -100,6 +100,33 @@ func dashboardTimeISO(value time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
+func dashboardMetricsScope(scope string) string {
+	if scope == systemmetrics.ScopeVPS {
+		return "VPS"
+	}
+	return "manager"
+}
+
+func dashboardMetricAge(value time.Time) string {
+	if value.IsZero() {
+		return "unavailable"
+	}
+	age := time.Since(value)
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%d min ago", int(age/time.Minute))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%d hr ago", int(age/time.Hour))
+	default:
+		return fmt.Sprintf("%d days ago", int(age/(24*time.Hour)))
+	}
+}
+
 type dashboardPageData struct {
 	Metrics systemmetrics.Snapshot
 	Error   string

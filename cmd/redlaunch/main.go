@@ -156,7 +156,11 @@ func run(ctx context.Context) error {
 		applications,
 		backupManager,
 		githubActions,
-		metrics.New(),
+		metrics.NewWithConfig(metrics.Config{
+			Scope:          cfg.MetricsScope,
+			ProcRoot:       cfg.MetricsProcRoot,
+			FilesystemRoot: cfg.MetricsFilesystemRoot,
+		}),
 		handler.SecurityConfig{
 			AccessMode:   cfg.ManagementAccessMode,
 			CookieSecure: cfg.AuthCookieSecure,

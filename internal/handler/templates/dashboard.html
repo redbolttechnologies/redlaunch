@@ -7,7 +7,7 @@
   <header class="page-heading">
     <div class="page-heading-copy">
       <h1 id="page-title">Dashboard</h1>
-      <p>Monitor the current resource usage of this server.</p>
+      <p>Monitor the resources visible to the Redlaunch manager.</p>
     </div>
     <p class="dashboard-refresh-note" role="status" aria-live="polite">Refreshes every 10 seconds. <span class="dashboard-refresh-indicator" id="dashboard-refresh-indicator">Updating…</span></p>
   </header>
@@ -29,10 +29,11 @@
 </div>
 {{else}}
 <div class="dashboard-metrics-meta">
-  <span>Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time></span>
+  <span>Scope: {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} · Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time> ({{dashboardMetricAge .DashboardPage.Metrics.CollectedAt}})</span>
+  {{if .DashboardPage.Metrics.Stale}}<span class="dashboard-metrics-stale" role="status">Refresh unavailable; showing the last valid sample.</span>{{end}}
 </div>
 
-<section class="dashboard-overview-grid" aria-label="Server resource metrics">
+<section class="dashboard-overview-grid" aria-label="{{dashboardMetricsScope .DashboardPage.Metrics.Scope}} resource metrics">
   <article class="service-widget dashboard-resource-card">
     <header class="service-widget-header">
       <div class="service-widget-heading-with-icon">
@@ -44,7 +45,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>CPU usage</h2>
-          <p>Current server utilization</p>
+          <p>Current {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} utilization</p>
         </div>
       </div>
     </header>
@@ -65,7 +66,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>Memory usage</h2>
-          <p>Current server memory</p>
+          <p>Current {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} memory</p>
         </div>
       </div>
     </header>
@@ -98,7 +99,7 @@
         </span>
         <div class="service-widget-heading">
           <h2>Disk usage</h2>
-          <p>Root filesystem</p>
+          <p>Configured filesystem</p>
         </div>
       </div>
     </header>

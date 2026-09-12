@@ -101,11 +101,30 @@ func (h *Handler) downloadProxyLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logsService, ok := h.proxyManager.(proxyFullLogsService)
-	if !ok {
+	logsService, hasLegacyLogs := h.proxyManager.(proxyFullLogsService)
+	streamer, hasStream := h.proxyManager.(proxyLogStreamService)
+	if !hasLegacyLogs && !hasStream {
 		http.Error(w, "Proxy log downloads are not configured.", http.StatusInternalServerError)
 		return
 	}
+	release, err := h.acquireLogDownload(r.Context())
+	if err != nil {
+		http.Error(w, "Too many log downloads are active. Try again shortly.", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
+
+	if hasStream {
+		stream, err := streamer.OpenProxyLogs(r.Context())
+		if err != nil {
+			h.logger.Error("open full proxy log stream", "error", err)
+			http.Error(w, "The proxy logs could not be read.", http.StatusInternalServerError)
+			return
+		}
+		h.writeLogDownload(w, stream, "proxy-logs.txt", "proxy")
+		return
+	}
+
 	logs, err := logsService.GetProxyFullLogs(r.Context())
 	if err != nil {
 		h.logger.Error("get full proxy logs", "error", err)

@@ -23,6 +23,9 @@ func setBackupConfigTestEnvironment(t *testing.T) {
 	t.Setenv("AUTH_SESSION_SECRET", "")
 	t.Setenv("AUTH_COOKIE_SECURE", "false")
 	t.Setenv("MANAGEMENT_ACCESS_MODE", AccessModeSSHOnly)
+	t.Setenv("METRICS_SCOPE", MetricsScopeManager)
+	t.Setenv("METRICS_PROC_ROOT", "")
+	t.Setenv("METRICS_FILESYSTEM_ROOT", "")
 }
 
 func TestLoadAcceptsGoogleAuthenticationConfiguration(t *testing.T) {
@@ -152,5 +155,40 @@ func TestLoadRejectsUnsupportedManagementAccessMode(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() returned nil error for unsupported management access mode")
+	}
+}
+
+func TestLoadAcceptsExplicitVPSMetricsPaths(t *testing.T) {
+	setBackupConfigTestEnvironment(t)
+	t.Setenv("METRICS_SCOPE", "VPS")
+	t.Setenv("METRICS_PROC_ROOT", "/host/proc")
+	t.Setenv("METRICS_FILESYSTEM_ROOT", "/host/root")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MetricsScope != MetricsScopeVPS || cfg.MetricsProcRoot != "/host/proc" || cfg.MetricsFilesystemRoot != "/host/root" {
+		t.Fatalf("metrics configuration = %#v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidMetricsConfiguration(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "scope", key: "METRICS_SCOPE", value: "host"},
+		{name: "proc root", key: "METRICS_PROC_ROOT", value: "proc"},
+		{name: "filesystem root", key: "METRICS_FILESYSTEM_ROOT", value: "root"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			setBackupConfigTestEnvironment(t)
+			t.Setenv(testCase.key, testCase.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() returned nil error for invalid %s", testCase.key)
+			}
+		})
 	}
 }

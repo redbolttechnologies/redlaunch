@@ -938,6 +938,30 @@ func TestDashboardMetricsFragmentRendersOnlyMetrics(t *testing.T) {
 	}
 }
 
+func TestDashboardRendersMetricsScopeAndStaleState(t *testing.T) {
+	dashboard := &fakeDashboardMetricsService{snapshot: systemmetrics.Snapshot{
+		Scope:       systemmetrics.ScopeVPS,
+		CollectedAt: time.Now().UTC(),
+		Stale:       true,
+	}}
+	web, err := New(nil, dashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/dashboard/metrics", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /dashboard/metrics status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{"Scope: VPS", "Refresh unavailable; showing the last valid sample.", "aria-label=\"VPS resource metrics\""} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("dashboard metrics did not render %q: %s", expected, body)
+		}
+	}
+}
+
 func TestProxyRendersDashboardDetailsAndAssociatedDomains(t *testing.T) {
 	proxy := &fakeProxyService{details: application.ProxyDetails{
 		ContainerName: "redbolt-proxy",

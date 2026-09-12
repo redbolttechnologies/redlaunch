@@ -36,6 +36,11 @@ services:
       AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET:-}"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
       MANAGEMENT_ACCESS_MODE: "${MANAGEMENT_ACCESS_MODE:-ssh-only}"
+      # The bundled container reports resources visible to the manager. VPS
+      # scope requires deliberate read-only host mounts and matching paths.
+      METRICS_SCOPE: "${METRICS_SCOPE:-manager}"
+      METRICS_PROC_ROOT: "${METRICS_PROC_ROOT:-}"
+      METRICS_FILESYSTEM_ROOT: "${METRICS_FILESYSTEM_ROOT:-}"
       # Keep the container listener aligned with the host port so managed
       # Caddy routing through host.docker.internal works when APP_PORT is
       # changed from the default.
