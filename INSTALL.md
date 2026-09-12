@@ -176,14 +176,14 @@ When running the binary outside Docker, the default HTTP listener is also
 loopback; set <code>HTTP_ADDR</code> explicitly only when a local reverse proxy
 needs to reach that listener.
 
-When Redlaunch public access is enabled in Settings, a login started at the
-configured public hostname automatically uses that hostname for the HTTPS
-callback URL. Keep <code>GOOGLE_REDIRECT_URL</code> as the local fallback and
-register both callback URLs in Google. Set
+When one or more Redlaunch public-access domains are configured in Settings, a
+login started at a configured public hostname automatically uses that hostname
+for the HTTPS callback URL. Keep <code>GOOGLE_REDIRECT_URL</code> as the local
+fallback and register both callback URLs in Google. Set
 <code>AUTH_COOKIE_SECURE=true</code> is optional in managed HTTPS because the
 mode forces secure cookies. The Caddy
 service installed from Redlaunch's first-run screen is for routing managed
-application services until public access is enabled; it is not an automatic
+application services until public access is configured; it is not an automatic
 reverse proxy for the Redlaunch UI itself.
 
 For an external HTTPS reverse proxy that is not configured through Redlaunch's
@@ -341,19 +341,18 @@ The project is connected to the shared <code>redlaunch-common</code> network.
 
 ### Publish Redlaunch over HTTPS
 
-If Caddy was selected during first-run setup, open an application's
-**Settings** tab and find **Public access**. Enter the hostname that should
-serve the Redlaunch management interface, enable **Enable access Redlaunch
-publicly (https)**, and save. Use only a hostname such as
-<code>redlaunch.example.com</code>, without a scheme or path.
+If Caddy was selected during first-run setup, open **Settings** in the main
+menu and find **Public access**. Add one or more hostnames that should serve
+the Redlaunch management interface. Use only a hostname such as
+<code>redlaunch.example.com</code>, without a scheme or path. Each configured
+domain serves Redlaunch publicly over HTTPS.
 
-Redlaunch stores this installation-wide setting in SQLite, adds the hostname
-to the managed Caddyfile, routes it through Docker's host gateway to the
+Redlaunch stores these installation-wide domains in SQLite, adds each hostname
+to the managed Caddyfile, routes them through Docker's host gateway to the
 configured Redlaunch listener port, and reloads Caddy. The default listener is
 <code>0.0.0.0:8080</code>; if <code>HTTP_ADDR</code> uses another port, Caddy
-uses that port instead. The same setting is shown from every application's
-Settings tab.
-Point the hostname's DNS record to the VPS before enabling it.
+uses that port instead.
+Point each hostname's DNS record to the VPS before adding it.
 
 Google authentication automatically uses
 <code>https://redlaunch.example.com/auth/google/callback</code> when sign-in is
@@ -699,7 +698,8 @@ projects-root path stable: it is part of the installation-scoped identity.
 ## Troubleshooting
 
 - **<code>redirect_uri_mismatch</code>**: register both the configured local
-  <code>GOOGLE_REDIRECT_URL</code> and, when public access is enabled, the exact
+  <code>GOOGLE_REDIRECT_URL</code> and, for each configured public-access
+  domain, the exact
   <code>https://&lt;public-hostname&gt;/auth/google/callback</code> URI in the
   Google client. The scheme, host, port, path, and trailing slash must match.
 - **Google login says the account is not authorized**: use the email entered

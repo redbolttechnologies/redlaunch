@@ -55,8 +55,9 @@ type applicationRoutingRepository interface {
 }
 
 type redlaunchSettingsRepository interface {
-	GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error)
-	UpdateRedlaunchPublicAccess(context.Context, application.RedlaunchPublicAccess) error
+	ListRedlaunchDomains(context.Context) ([]application.RedlaunchDomain, error)
+	CreateRedlaunchDomain(context.Context, application.RedlaunchDomain) (application.RedlaunchDomain, error)
+	DeleteRedlaunchDomain(context.Context, string) error
 }
 
 type proxyReloader interface {

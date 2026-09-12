@@ -236,10 +236,12 @@ type fakeApplicationService struct {
 	routingDeleteDomainID         int64
 	routingDeleteErr              error
 	routingListErr                error
-	publicAccess                  application.RedlaunchPublicAccess
-	publicAccessInput             application.RedlaunchPublicAccessInput
-	publicAccessGetErr            error
-	publicAccessUpdateErr         error
+	redlaunchDomains              []application.RedlaunchDomain
+	redlaunchCreateName           string
+	redlaunchCreateErr            error
+	redlaunchDeleteName           string
+	redlaunchDeleteErr            error
+	redlaunchListErr              error
 	serviceDetails                application.ServiceDetails
 	serviceDetailsErr             error
 	fullServiceLogs               string
@@ -446,13 +448,26 @@ func (s *fakeApplicationService) DeleteRouting(_ context.Context, applicationID,
 	return s.routingDeleteErr
 }
 
-func (s *fakeApplicationService) GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error) {
-	return s.publicAccess, s.publicAccessGetErr
+func (s *fakeApplicationService) ListRedlaunchDomains(context.Context) ([]application.RedlaunchDomain, error) {
+	if s.redlaunchListErr != nil {
+		return nil, s.redlaunchListErr
+	}
+	return append([]application.RedlaunchDomain(nil), s.redlaunchDomains...), nil
 }
 
-func (s *fakeApplicationService) UpdateRedlaunchPublicAccess(_ context.Context, input application.RedlaunchPublicAccessInput) error {
-	s.publicAccessInput = input
-	return s.publicAccessUpdateErr
+func (s *fakeApplicationService) CreateRedlaunchDomain(_ context.Context, name string) (application.RedlaunchDomain, error) {
+	s.redlaunchCreateName = name
+	if s.redlaunchCreateErr != nil {
+		return application.RedlaunchDomain{}, s.redlaunchCreateErr
+	}
+	created := application.RedlaunchDomain{ID: int64(len(s.redlaunchDomains) + 1), Name: name}
+	s.redlaunchDomains = append(s.redlaunchDomains, created)
+	return created, nil
+}
+
+func (s *fakeApplicationService) DeleteRedlaunchDomain(_ context.Context, name string) error {
+	s.redlaunchDeleteName = name
+	return s.redlaunchDeleteErr
 }
 
 func (s *fakeApplicationService) GetEnvironmentFiles(_ context.Context, _ int64) (application.EnvironmentFiles, error) {
@@ -791,6 +806,9 @@ func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="/proxy"`) || !strings.Contains(body, ">Proxy</span>") {
 		t.Fatalf("GET / did not render the Proxy menu item: %s", body)
+	}
+	if !strings.Contains(body, `href="/settings"`) || !strings.Contains(body, ">Settings</span>") {
+		t.Fatalf("GET / did not render the Settings menu item: %s", body)
 	}
 	if !strings.Contains(body, `<header class="main-header">`) || !strings.Contains(body, `class="server-info"`) || !strings.Contains(body, ">Server</h2>") {
 		t.Fatalf("GET / did not render the server info header: %s", body)
@@ -1330,11 +1348,6 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 		`<h2 id="services-title">Services</h2>`,
 		`id="settings-panel"`,
 		`<h2>Settings</h2>`,
-		`<h3 id="public-access-title">Public access</h3>`,
-		`Enable access Redlaunch publicly (https)`,
-		`name="domain"`,
-		`action="/applications/7/settings/public-access?tab=settings"`,
-		`/static/application-settings.js`,
 		`Danger zone`,
 		`data-application-delete-open`,
 		`id="application-delete-dialog"`,
@@ -1377,6 +1390,15 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	if strings.Contains(body, "applications/status-page") {
 		t.Fatalf("GET /applications/7 rendered the redundant application path: %s", body)
 	}
+	for _, unexpected := range []string{
+		`id="public-access-title"`,
+		`action="/applications/7/settings/public-access`,
+		`/static/application-settings.js`,
+	} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("GET /applications/7 still rendered removed public access %q: %s", unexpected, body)
+		}
+	}
 	if !strings.Contains(body, `id="settings-panel"`) || !strings.Contains(body, `hidden`) {
 		t.Fatalf("GET /applications/7 did not hide the Settings panel by default: %s", body)
 	}
@@ -1408,10 +1430,12 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	}
 }
 
-func TestApplicationDetailsRendersRedlaunchPublicAccessSettings(t *testing.T) {
+func TestSettingsPageRendersPublicAccessDomains(t *testing.T) {
 	applications := &fakeApplicationService{
-		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
-		publicAccess: application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"},
+		redlaunchDomains: []application.RedlaunchDomain{
+			{ID: 1, Name: "admin.example.com"},
+			{ID: 2, Name: "redlaunch.example.com"},
+		},
 	}
 	web, err := New(nil, applications)
 	if err != nil {
@@ -1419,72 +1443,93 @@ func TestApplicationDetailsRendersRedlaunchPublicAccessSettings(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7?tab=settings", nil))
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/settings", nil))
 
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("GET /applications/7?tab=settings status = %d, want %d", recorder.Code, http.StatusOK)
+		t.Fatalf("GET /settings status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 	body := recorder.Body.String()
 	for _, expected := range []string{
-		`id="redlaunch-public-access-enabled" name="enabled" type="checkbox" value="true" role="switch"`,
-		`data-public-access-toggle checked`,
-		`value="admin.example.com"`,
-		`data-public-access-domain required`,
+		`<h1 id="page-title">Settings</h1>`,
+		`<h2 id="public-access-title">Public access</h2>`,
 		`managed Caddy proxy`,
+		`<code>admin.example.com</code>`,
+		`<code>redlaunch.example.com</code>`,
+		`action="/settings/domains"`,
+		`action="/settings/domains/delete"`,
+		`href="/settings"`,
+		`aria-current="page"`,
+		`/static/application-domains.js`,
 	} {
 		if !strings.Contains(body, expected) {
-			t.Fatalf("GET application settings did not render %q: %s", expected, body)
+			t.Fatalf("GET /settings did not render %q: %s", expected, body)
 		}
+	}
+	if strings.Count(body, `<h1`) != 1 {
+		t.Fatalf("GET /settings did not render one page heading: %s", body)
 	}
 }
 
-func TestUpdateRedlaunchPublicAccessRequiresCSRFAndRedirects(t *testing.T) {
-	applications := &fakeApplicationService{
-		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
-	}
+func TestSettingsPageRendersEmptyDomainsState(t *testing.T) {
+	applications := &fakeApplicationService{}
 	web, err := New(nil, applications)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	withoutCSRF := url.Values{"enabled": {"true"}, "domain": {"admin.example.com"}}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(withoutCSRF.Encode()))
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/settings", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /settings status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "No domains are configured for Redlaunch public access.") {
+		t.Fatalf("GET /settings did not render empty state: %s", body)
+	}
+}
+
+func TestCreateRedlaunchDomainRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutCSRF := url.Values{"name": {"admin.example.com"}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/settings/domains", strings.NewReader(withoutCSRF.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	web.Routes().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("POST public access without CSRF status = %d, want %d", recorder.Code, http.StatusForbidden)
+		t.Fatalf("POST /settings/domains without CSRF status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
-	if applications.publicAccessInput != (application.RedlaunchPublicAccessInput{}) {
-		t.Fatalf("public access update without CSRF reached service: %#v", applications.publicAccessInput)
+	if applications.redlaunchCreateName != "" {
+		t.Fatalf("domain create without CSRF reached service: %q", applications.redlaunchCreateName)
 	}
 
 	form := url.Values{
 		"csrf_token": {web.csrfToken},
-		"enabled":    {"true"},
-		"domain":     {" Admin.Example.COM "},
+		"name":       {" Admin.Example.COM "},
 	}
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
+	request = httptest.NewRequest(http.MethodPost, "/settings/domains", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusSeeOther {
-		t.Fatalf("POST public access status = %d, want %d", recorder.Code, http.StatusSeeOther)
+		t.Fatalf("POST /settings/domains status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	if got := recorder.Header().Get("Location"); got != "/applications/7?tab=settings" {
-		t.Fatalf("POST public access Location = %q, want settings tab", got)
+	if got := recorder.Header().Get("Location"); got != "/settings" {
+		t.Fatalf("POST /settings/domains Location = %q, want /settings", got)
 	}
-	want := application.RedlaunchPublicAccessInput{Enabled: true, Domain: " Admin.Example.COM "}
-	if applications.publicAccessInput != want {
-		t.Fatalf("public access input = %#v, want %#v", applications.publicAccessInput, want)
+	if applications.redlaunchCreateName != " Admin.Example.COM " {
+		t.Fatalf("domain create input = %q, want raw form value", applications.redlaunchCreateName)
 	}
 }
 
-func TestUpdateRedlaunchPublicAccessRendersValidationError(t *testing.T) {
+func TestCreateRedlaunchDomainRendersValidationError(t *testing.T) {
 	applications := &fakeApplicationService{
-		applications:          []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
-		publicAccessUpdateErr: application.ErrRedlaunchPublicDomainInvalid,
+		redlaunchCreateErr: application.ErrDomainNameInvalid,
 	}
 	web, err := New(nil, applications)
 	if err != nil {
@@ -1492,21 +1537,84 @@ func TestUpdateRedlaunchPublicAccessRendersValidationError(t *testing.T) {
 	}
 	form := url.Values{
 		"csrf_token": {web.csrfToken},
-		"enabled":    {"true"},
-		"domain":     {"bad/<domain>"},
+		"name":       {"bad/<domain>"},
 	}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
+	request := httptest.NewRequest(http.MethodPost, "/settings/domains", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("POST invalid public access status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		t.Fatalf("POST invalid Redlaunch domain status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 	body := recorder.Body.String()
 	if !strings.Contains(body, "Enter a valid domain name.") || !strings.Contains(body, `value="bad/&lt;domain&gt;"`) {
-		t.Fatalf("POST invalid public access did not render safe field error: %s", body)
+		t.Fatalf("POST invalid Redlaunch domain did not render safe field error: %s", body)
+	}
+}
+
+func TestDeleteRedlaunchDomainRequiresCSRFAndRedirects(t *testing.T) {
+	applications := &fakeApplicationService{
+		redlaunchDomains: []application.RedlaunchDomain{{ID: 1, Name: "admin.example.com"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutCSRF := url.Values{"name": {"admin.example.com"}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/settings/domains/delete", strings.NewReader(withoutCSRF.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("POST /settings/domains/delete without CSRF status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"name":       {"admin.example.com"},
+	}
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/settings/domains/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST /settings/domains/delete status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/settings" {
+		t.Fatalf("POST /settings/domains/delete Location = %q, want /settings", got)
+	}
+	if applications.redlaunchDeleteName != "admin.example.com" {
+		t.Fatalf("domain delete input = %q, want admin.example.com", applications.redlaunchDeleteName)
+	}
+}
+
+func TestDeleteRedlaunchDomainRendersNotFoundError(t *testing.T) {
+	applications := &fakeApplicationService{
+		redlaunchDeleteErr: application.ErrDomainNotFound,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token": {web.csrfToken},
+		"name":       {"missing.example.com"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/settings/domains/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST missing Redlaunch domain status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "could not be found") {
+		t.Fatalf("POST missing Redlaunch domain did not render not-found error: %s", body)
 	}
 }
 
@@ -4694,9 +4802,9 @@ func TestAuthenticationUsesConfiguredPublicHostForOAuthRedirect(t *testing.T) {
 		authorizationURL: "https://accounts.example.test/authorize",
 	}
 	applications := &fakeApplicationService{
-		publicAccess: application.RedlaunchPublicAccess{
-			Enabled: true,
-			Domain:  "Redlaunch.Example.COM",
+		redlaunchDomains: []application.RedlaunchDomain{
+			{ID: 1, Name: "Redlaunch.Example.COM"},
+			{ID: 2, Name: "admin.example.com"},
 		},
 	}
 	web, err := New(nil, applications, authentication)
@@ -4734,9 +4842,8 @@ func TestAuthenticationUsesPublicRedirectForOAuthCallback(t *testing.T) {
 		sessionValue:     "signed-session",
 	}
 	applications := &fakeApplicationService{
-		publicAccess: application.RedlaunchPublicAccess{
-			Enabled: true,
-			Domain:  "redlaunch.example.com",
+		redlaunchDomains: []application.RedlaunchDomain{
+			{ID: 1, Name: "redlaunch.example.com"},
 		},
 	}
 	web, err := New(nil, applications, authentication)

@@ -140,42 +140,66 @@ func (s *Store) ListAuthorizedEmails(ctx context.Context) ([]string, error) {
 	return emails, nil
 }
 
-// GetRedlaunchPublicAccess returns the installation-wide public-access
-// settings for the Redlaunch management interface.
-func (s *Store) GetRedlaunchPublicAccess(ctx context.Context) (application.RedlaunchPublicAccess, error) {
-	var settings application.RedlaunchPublicAccess
-	var enabled int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT public_access_enabled, public_access_domain
-		FROM redlaunch_settings
-		WHERE id = 1`).Scan(&enabled, &settings.Domain)
+// ListRedlaunchDomains returns the hostnames that publish the Redlaunch
+// management interface in creation order. Every stored domain is live.
+func (s *Store) ListRedlaunchDomains(ctx context.Context) ([]application.RedlaunchDomain, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name
+		FROM redlaunch_domains
+		ORDER BY id ASC`)
 	if err != nil {
-		return application.RedlaunchPublicAccess{}, fmt.Errorf("get Redlaunch public access settings: %w", err)
+		return nil, fmt.Errorf("list Redlaunch domains: %w", err)
 	}
-	settings.Enabled = enabled == 1
-	return settings, nil
+	defer rows.Close()
+
+	var domains []application.RedlaunchDomain
+	for rows.Next() {
+		var item application.RedlaunchDomain
+		if err := rows.Scan(&item.ID, &item.Name); err != nil {
+			return nil, fmt.Errorf("scan Redlaunch domain: %w", err)
+		}
+		domains = append(domains, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Redlaunch domains: %w", err)
+	}
+	return domains, nil
 }
 
-// UpdateRedlaunchPublicAccess persists the installation-wide public-access
-// settings as one atomic SQLite update.
-func (s *Store) UpdateRedlaunchPublicAccess(ctx context.Context, settings application.RedlaunchPublicAccess) error {
-	enabled := 0
-	if settings.Enabled {
-		enabled = 1
-	}
+// CreateRedlaunchDomain persists one hostname for the Redlaunch management
+// interface.
+func (s *Store) CreateRedlaunchDomain(ctx context.Context, item application.RedlaunchDomain) (application.RedlaunchDomain, error) {
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE redlaunch_settings
-		SET public_access_enabled = ?, public_access_domain = ?
-		WHERE id = 1`, enabled, settings.Domain)
+		INSERT INTO redlaunch_domains (name)
+		VALUES (?)`, item.Name)
 	if err != nil {
-		return fmt.Errorf("update Redlaunch public access settings: %w", err)
+		if isUniqueConstraint(err) {
+			return application.RedlaunchDomain{}, application.ErrDomainAlreadyExists
+		}
+		return application.RedlaunchDomain{}, fmt.Errorf("create Redlaunch domain: %w", err)
+	}
+	item.ID, err = result.LastInsertId()
+	if err != nil {
+		return application.RedlaunchDomain{}, fmt.Errorf("read Redlaunch domain ID: %w", err)
+	}
+	return item, nil
+}
+
+// DeleteRedlaunchDomain removes one hostname from the Redlaunch management
+// interface.
+func (s *Store) DeleteRedlaunchDomain(ctx context.Context, name string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM redlaunch_domains
+		WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("delete Redlaunch domain: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read updated Redlaunch settings count: %w", err)
+		return fmt.Errorf("read deleted Redlaunch domain count: %w", err)
 	}
-	if affected != 1 {
-		return errors.New("Redlaunch public access settings are not initialized")
+	if affected == 0 {
+		return application.ErrDomainNotFound
 	}
 	return nil
 }
@@ -1555,6 +1579,28 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (14, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record service deletion migration: %w", err)
+		}
+	}
+
+	var redlaunchDomainsMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 15`).Scan(&redlaunchDomainsMigrationApplied); err != nil {
+		return fmt.Errorf("check Redlaunch domains migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS redlaunch_domains (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE COLLATE NOCASE
+		)`); err != nil {
+		return fmt.Errorf("create Redlaunch domains table: %w", err)
+	}
+	if redlaunchDomainsMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (15, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record Redlaunch domains migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

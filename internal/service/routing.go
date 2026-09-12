@@ -15,23 +15,54 @@ import (
 
 const defaultManagementPort = 8080
 
-// GetRedlaunchPublicAccess returns the installation-wide public-access
-// settings shown on the application settings tab.
-func (s *Applications) GetRedlaunchPublicAccess(ctx context.Context) (application.RedlaunchPublicAccess, error) {
+// ListRedlaunchDomains returns the hostnames that publish the Redlaunch
+// management interface in creation order.
+func (s *Applications) ListRedlaunchDomains(ctx context.Context) ([]application.RedlaunchDomain, error) {
 	if s.settingsRepository == nil {
-		return application.RedlaunchPublicAccess{}, errors.New("Redlaunch settings repository is not configured")
+		return nil, errors.New("Redlaunch settings repository is not configured")
 	}
-	return s.settingsRepository.GetRedlaunchPublicAccess(ctx)
+	return s.settingsRepository.ListRedlaunchDomains(ctx)
 }
 
-// UpdateRedlaunchPublicAccess validates and persists the management-interface
-// hostname, then applies the complete configuration to Caddy. A failed Caddy
-// update restores the previous persisted setting.
-func (s *Applications) UpdateRedlaunchPublicAccess(ctx context.Context, input application.RedlaunchPublicAccessInput) error {
+// CreateRedlaunchDomain validates and persists one Redlaunch hostname, then
+// applies the complete configuration to Caddy. A failed Caddy update removes
+// the persisted domain again.
+func (s *Applications) CreateRedlaunchDomain(ctx context.Context, name string) (application.RedlaunchDomain, error) {
+	if s.settingsRepository == nil {
+		return application.RedlaunchDomain{}, errors.New("Redlaunch settings repository is not configured")
+	}
+	name, err := application.ValidateDomainName(name)
+	if err != nil {
+		return application.RedlaunchDomain{}, err
+	}
+
+	lease, err := s.acquireProxyProject(ctx)
+	if err != nil {
+		return application.RedlaunchDomain{}, err
+	}
+	defer lease.release()
+
+	created, err := s.settingsRepository.CreateRedlaunchDomain(ctx, application.RedlaunchDomain{Name: name})
+	if err != nil {
+		return application.RedlaunchDomain{}, err
+	}
+	if err := s.refreshProxyConfigurationLocked(ctx); err != nil {
+		rollbackErr := s.settingsRepository.DeleteRedlaunchDomain(ctx, name)
+		if rollbackErr != nil {
+			return application.RedlaunchDomain{}, fmt.Errorf("apply Caddy Redlaunch configuration: %w (rollback domain: %v)", err, rollbackErr)
+		}
+		return application.RedlaunchDomain{}, fmt.Errorf("apply Caddy Redlaunch configuration: %w", err)
+	}
+	return created, nil
+}
+
+// DeleteRedlaunchDomain removes one Redlaunch hostname and applies the
+// remaining configuration to Caddy. A failed Caddy update restores the domain.
+func (s *Applications) DeleteRedlaunchDomain(ctx context.Context, name string) error {
 	if s.settingsRepository == nil {
 		return errors.New("Redlaunch settings repository is not configured")
 	}
-	settings, err := application.ValidateRedlaunchPublicAccess(input)
+	name, err := application.ValidateDomainName(name)
 	if err != nil {
 		return err
 	}
@@ -42,22 +73,13 @@ func (s *Applications) UpdateRedlaunchPublicAccess(ctx context.Context, input ap
 	}
 	defer lease.release()
 
-	previous, err := s.settingsRepository.GetRedlaunchPublicAccess(ctx)
-	if err != nil {
+	if err := s.settingsRepository.DeleteRedlaunchDomain(ctx, name); err != nil {
 		return err
-	}
-	if settings == previous {
-		return nil
-	}
-	if err := s.settingsRepository.UpdateRedlaunchPublicAccess(ctx, settings); err != nil {
-		return err
-	}
-	if !previous.Enabled && !settings.Enabled {
-		return nil
 	}
 	if err := s.refreshProxyConfigurationLocked(ctx); err != nil {
-		if rollbackErr := s.settingsRepository.UpdateRedlaunchPublicAccess(ctx, previous); rollbackErr != nil {
-			return fmt.Errorf("apply Caddy Redlaunch configuration: %w (rollback settings: %v)", err, rollbackErr)
+		_, rollbackErr := s.settingsRepository.CreateRedlaunchDomain(ctx, application.RedlaunchDomain{Name: name})
+		if rollbackErr != nil {
+			return fmt.Errorf("apply Caddy Redlaunch configuration: %w (rollback domain: %v)", err, rollbackErr)
 		}
 		return fmt.Errorf("apply Caddy Redlaunch configuration: %w", err)
 	}
@@ -263,11 +285,11 @@ func managementUpstream(port int) string {
 // renderCaddyfile creates the complete Caddy configuration for all persisted
 // mappings. Host blocks are grouped so mappings for the same host share one
 // Caddy site, and longer path matchers are evaluated first.
-func renderCaddyfile(routings []application.Routing, publicAccess application.RedlaunchPublicAccess) string {
-	return renderCaddyfileWithManagementPort(routings, publicAccess, defaultManagementPort)
+func renderCaddyfile(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain) string {
+	return renderCaddyfileWithManagementPort(routings, redlaunchDomains, defaultManagementPort)
 }
 
-func renderCaddyfileWithManagementPort(routings []application.Routing, publicAccess application.RedlaunchPublicAccess, managementPort int) string {
+func renderCaddyfileWithManagementPort(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain, managementPort int) string {
 	byHost := make(map[string][]application.Routing)
 	for _, item := range routings {
 		host := routingHost(item.DomainName, item.Subdomain)
@@ -276,9 +298,15 @@ func renderCaddyfileWithManagementPort(routings []application.Routing, publicAcc
 		}
 		byHost[host] = append(byHost[host], item)
 	}
-	if publicAccess.Enabled && publicAccess.Domain != "" {
-		if _, ok := byHost[publicAccess.Domain]; !ok {
-			byHost[publicAccess.Domain] = nil
+	redlaunchHosts := make(map[string]struct{}, len(redlaunchDomains))
+	for _, domain := range redlaunchDomains {
+		host := strings.TrimSpace(strings.ToLower(domain.Name))
+		if host == "" {
+			continue
+		}
+		redlaunchHosts[host] = struct{}{}
+		if _, ok := byHost[host]; !ok {
+			byHost[host] = nil
 		}
 	}
 
@@ -320,7 +348,7 @@ func renderCaddyfileWithManagementPort(routings []application.Routing, publicAcc
 			builder.WriteString("\n")
 			builder.WriteString("    }\n")
 		}
-		if publicAccess.Enabled && publicAccess.Domain == host {
+		if _, ok := redlaunchHosts[host]; ok {
 			builder.WriteString("    handle {\n")
 			builder.WriteString("        reverse_proxy ")
 			builder.WriteString(managementUpstream(managementPort))
@@ -349,11 +377,11 @@ func (s *Applications) refreshProxyConfigurationLocked(ctx context.Context) erro
 	if err != nil {
 		return fmt.Errorf("list routings for Caddy: %w", err)
 	}
-	var publicAccess application.RedlaunchPublicAccess
+	var redlaunchDomains []application.RedlaunchDomain
 	if s.settingsRepository != nil {
-		publicAccess, err = s.settingsRepository.GetRedlaunchPublicAccess(ctx)
+		redlaunchDomains, err = s.settingsRepository.ListRedlaunchDomains(ctx)
 		if err != nil {
-			return fmt.Errorf("read Redlaunch public access settings for Caddy: %w", err)
+			return fmt.Errorf("list Redlaunch domains for Caddy: %w", err)
 		}
 	}
 
@@ -391,7 +419,7 @@ func (s *Applications) refreshProxyConfigurationLocked(ctx context.Context) erro
 	if err != nil {
 		return fmt.Errorf("read Caddyfile: %w", err)
 	}
-	configuration := renderCaddyfileWithManagementPort(routings, publicAccess, s.managementPort)
+	configuration := renderCaddyfileWithManagementPort(routings, redlaunchDomains, s.managementPort)
 	caddyChanged := !caddySnapshot.exists || string(caddySnapshot.contents) != configuration
 	if !composeChanged && !caddyChanged {
 		return nil

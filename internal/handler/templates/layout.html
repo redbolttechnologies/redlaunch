@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Redlaunch application control plane">
-  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .GitHubActionsPage}} · GitHub Actions{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
+  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .GitHubActionsPage}} · GitHub Actions{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .SettingsPage}} · Settings{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
   {{if .DashboardPage}}<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>{{end}}
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
@@ -13,7 +13,8 @@
   {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .GitHubActionsProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
-  {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-settings.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script>{{end}}
+  {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script>{{end}}
+  {{if .SettingsPage}}<script src="/static/application-domains.js" defer></script>{{end}}
   {{if .ApplicationRoutingPage}}<script src="/static/application-routings.js" defer></script>{{end}}
   {{if .ApplicationContainerPage}}<script src="/static/application-container.js" defer></script>{{end}}
   {{if .ServiceDetailsPage}}<script src="/static/backup-schedule.js" defer></script><script src="/static/service-details.js" defer></script>{{end}}
@@ -52,6 +53,13 @@
             <path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"></path>
           </svg>
           <span>Proxy</span>
+        </a>
+        <a class="side-menu-item{{if eq .ActivePage "settings"}} side-menu-item-active{{end}}" href="/settings"{{if eq .ActivePage "settings"}} aria-current="page"{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path>
+          </svg>
+          <span>Settings</span>
         </a>
       </nav>
 
@@ -119,7 +127,7 @@
       </section>
     </header>
 
-    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .GitHubActionsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
+    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .GitHubActionsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .SettingsPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
       {{if .Setup}}
       {{template "setup.html" .}}
       {{else if .DashboardPage}}
@@ -140,6 +148,8 @@
       {{template "application-details-content.html" .}}
       {{else if .ProxyPage}}
       {{template "proxy-content.html" .}}
+      {{else if .SettingsPage}}
+      {{template "settings-content.html" .}}
       {{else if eq .ActivePage "applications"}}
       {{template "applications-content.html" .}}
       {{end}}

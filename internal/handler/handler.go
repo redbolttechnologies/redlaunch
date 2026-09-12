@@ -39,7 +39,7 @@ type Handler struct {
 	applicationDetails             applicationDetailsService
 	applicationDomains             applicationDomainService
 	applicationRoutings            applicationRoutingService
-	redlaunchPublicAccess          redlaunchPublicAccessService
+	redlaunchDomains               redlaunchDomainService
 	applicationEnvironment         applicationEnvironmentService
 	applicationEditor              applicationEnvironmentEditor
 	serviceDetails                 serviceDetailsService
@@ -142,9 +142,10 @@ type applicationRoutingService interface {
 	DeleteRouting(context.Context, int64, int64, int64) error
 }
 
-type redlaunchPublicAccessService interface {
-	GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error)
-	UpdateRedlaunchPublicAccess(context.Context, application.RedlaunchPublicAccessInput) error
+type redlaunchDomainService interface {
+	ListRedlaunchDomains(context.Context) ([]application.RedlaunchDomain, error)
+	CreateRedlaunchDomain(context.Context, string) (application.RedlaunchDomain, error)
+	DeleteRedlaunchDomain(context.Context, string) error
 }
 
 type applicationEnvironmentService interface {
@@ -316,7 +317,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	details := applicationDetailsService(noApplicationService{})
 	domains := applicationDomainService(noApplicationService{})
 	routings := applicationRoutingService(noApplicationService{})
-	publicAccess := redlaunchPublicAccessService(noApplicationService{})
+	redlaunchDomains := redlaunchDomainService(noApplicationService{})
 	environment := applicationEnvironmentService(noApplicationService{})
 	editor := applicationEnvironmentEditor(noApplicationService{})
 	var serviceDetails serviceDetailsService
@@ -395,8 +396,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 				if routingsDependency, ok := dependency.(applicationRoutingService); ok {
 					routings = routingsDependency
 				}
-				if publicAccessDependency, ok := dependency.(redlaunchPublicAccessService); ok {
-					publicAccess = publicAccessDependency
+				if redlaunchDependency, ok := dependency.(redlaunchDomainService); ok {
+					redlaunchDomains = redlaunchDependency
 				}
 			}
 		case applicationDetailsService:
@@ -441,9 +442,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				routings = dependency
 			}
-		case redlaunchPublicAccessService:
+		case redlaunchDomainService:
 			if dependency != nil {
-				publicAccess = dependency
+				redlaunchDomains = dependency
 			}
 		case applicationEnvironmentService:
 			if dependency != nil {
@@ -575,7 +576,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationDetails:             details,
 		applicationDomains:             domains,
 		applicationRoutings:            routings,
-		redlaunchPublicAccess:          publicAccess,
+		redlaunchDomains:               redlaunchDomains,
 		applicationEnvironment:         environment,
 		applicationEditor:              editor,
 		serviceDetails:                 serviceDetails,
@@ -641,7 +642,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /applications/{id}/domains/{domainID}/routing", h.applicationRoutingPage)
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing", h.saveApplicationRouting)
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing/delete", h.deleteApplicationRouting)
-	mux.HandleFunc("POST /applications/{id}/settings/public-access", h.updateRedlaunchPublicAccess)
+	mux.HandleFunc("GET /settings", h.settingsPage)
+	mux.HandleFunc("POST /settings/domains", h.createRedlaunchDomain)
+	mux.HandleFunc("POST /settings/domains/delete", h.deleteRedlaunchDomain)
 	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
 	mux.HandleFunc("POST /applications/{id}/deployments/github-actions", h.configureGitHubActions)
 	mux.HandleFunc("POST /applications/{id}/deployments/github-actions/revoke", h.revokeGitHubActions)
@@ -1042,15 +1045,10 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 			environmentFiles = application.EnvironmentFiles{}
 		}
 	}
-	publicAccess, err := h.redlaunchPublicAccess.GetRedlaunchPublicAccess(ctx)
-	if err != nil {
-		return applicationDetailsPageData{}, fmt.Errorf("read Redlaunch public access settings: %w", err)
-	}
 	return applicationDetailsPageData{
-		Application:  item,
-		Services:     services,
-		Domains:      domains,
-		PublicAccess: publicAccess,
+		Application: item,
+		Services:    services,
+		Domains:     domains,
 		Variables: environmentFilePageData{
 			ID:              "variables",
 			ApplicationID:   item.ID,
@@ -1073,94 +1071,6 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 			MaskValues:      true,
 		},
 	}, nil
-}
-
-func (h *Handler) updateRedlaunchPublicAccess(w http.ResponseWriter, r *http.Request) {
-	needsSetup, err := h.setupManager.NeedsSetup()
-	if err != nil {
-		h.logger.Error("inspect setup state", "error", err)
-		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
-		return
-	}
-	if needsSetup {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id < 1 {
-		http.NotFound(w, r)
-		return
-	}
-	if _, err := h.applicationDetails.Get(r.Context(), id); errors.Is(err, application.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
-		h.logger.Error("get application before public access update", "application_id", id, "error", err)
-		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
-		return
-	}
-	if err := parseBoundedForm(w, r); err != nil {
-		http.Error(w, "The public access request was invalid.", http.StatusBadRequest)
-		return
-	}
-	if !h.validRequestCSRF(r) {
-		http.Error(w, "This settings page expired. Submit the refreshed page to continue.", http.StatusForbidden)
-		return
-	}
-
-	input := application.RedlaunchPublicAccessInput{
-		Enabled: r.Form.Has("enabled"),
-		Domain:  r.Form.Get("domain"),
-	}
-	if err := h.redlaunchPublicAccess.UpdateRedlaunchPublicAccess(r.Context(), input); err != nil {
-		status := http.StatusInternalServerError
-		message := "The public access settings could not be saved right now."
-		if redlaunchPublicAccessUserError(err) {
-			status = http.StatusBadRequest
-			message = redlaunchPublicAccessMessage(err)
-		} else {
-			h.logger.Error("update Redlaunch public access", "application_id", id, "error", err)
-		}
-		h.renderRedlaunchPublicAccessError(w, r, id, input, message, status)
-		return
-	}
-	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=settings", http.StatusSeeOther)
-}
-
-func (h *Handler) renderRedlaunchPublicAccessError(w http.ResponseWriter, r *http.Request, id int64, input application.RedlaunchPublicAccessInput, message string, status int) {
-	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
-	if errors.Is(err, application.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		h.logger.Error("load application details after public access failure", "application_id", id, "error", err)
-		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
-		return
-	}
-	data.PublicAccess = application.RedlaunchPublicAccess{Enabled: input.Enabled, Domain: strings.TrimSpace(input.Domain)}
-	data.PublicAccessError = message
-	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
-}
-
-func redlaunchPublicAccessUserError(err error) bool {
-	return errors.Is(err, application.ErrRedlaunchPublicDomainRequired) ||
-		errors.Is(err, application.ErrRedlaunchPublicDomainTooLong) ||
-		errors.Is(err, application.ErrRedlaunchPublicDomainInvalid)
-}
-
-func redlaunchPublicAccessMessage(err error) string {
-	switch {
-	case errors.Is(err, application.ErrRedlaunchPublicDomainRequired):
-		return "Enter a domain before enabling public access."
-	case errors.Is(err, application.ErrRedlaunchPublicDomainTooLong):
-		return "The domain name is too long."
-	case errors.Is(err, application.ErrRedlaunchPublicDomainInvalid):
-		return "Enter a valid domain name."
-	default:
-		return "The public access settings could not be saved."
-	}
 }
 
 func (h *Handler) updateApplicationVariable(w http.ResponseWriter, r *http.Request) {
@@ -4113,6 +4023,7 @@ type pageData struct {
 	ApplicationContainerPage     *applicationContainerPageData
 	GitHubActionsPage            *githubActionsPageData
 	DashboardPage                *dashboardPageData
+	SettingsPage                 *settingsPageData
 }
 
 type sidebarUserData struct {
@@ -4207,8 +4118,6 @@ type applicationDetailsPageData struct {
 	EnvironmentImportError    string
 	EnvironmentImportKind     string
 	Domains                   []application.Domain
-	PublicAccess              application.RedlaunchPublicAccess
-	PublicAccessError         string
 	Variables                 environmentFilePageData
 	Secrets                   environmentFilePageData
 	CSRFToken                 string
@@ -4336,6 +4245,13 @@ type serviceDetailsPageData struct {
 type proxyPageData struct {
 	Details   application.ProxyDetails
 	CSRFToken string
+}
+
+type settingsPageData struct {
+	Domains      []application.RedlaunchDomain
+	CSRFToken    string
+	DomainEdit   *domainEditPageData
+	DomainDelete *domainDeletePageData
 }
 
 type postgresqlServicePageData struct {
@@ -4475,11 +4391,15 @@ func (noApplicationService) DeleteRouting(context.Context, int64, int64, int64) 
 	return errors.New("application service is not configured")
 }
 
-func (noApplicationService) GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error) {
-	return application.RedlaunchPublicAccess{}, nil
+func (noApplicationService) ListRedlaunchDomains(context.Context) ([]application.RedlaunchDomain, error) {
+	return nil, nil
 }
 
-func (noApplicationService) UpdateRedlaunchPublicAccess(context.Context, application.RedlaunchPublicAccessInput) error {
+func (noApplicationService) CreateRedlaunchDomain(context.Context, string) (application.RedlaunchDomain, error) {
+	return application.RedlaunchDomain{}, errors.New("application service is not configured")
+}
+
+func (noApplicationService) DeleteRedlaunchDomain(context.Context, string) error {
 	return errors.New("application service is not configured")
 }
 

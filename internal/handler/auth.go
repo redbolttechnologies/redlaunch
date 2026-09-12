@@ -223,21 +223,23 @@ func (h *Handler) oauthRedirectURL(r *http.Request) (string, error) {
 	if _, ok := h.authentication.(authenticationRedirectService); !ok {
 		return "", nil
 	}
-	publicAccess, err := h.redlaunchPublicAccess.GetRedlaunchPublicAccess(r.Context())
-	if err != nil {
-		return "", fmt.Errorf("read Redlaunch public access settings: %w", err)
-	}
-	if !publicAccess.Enabled {
+	if h.redlaunchDomains == nil {
 		return "", nil
 	}
-	domain, err := application.ValidateDomainName(publicAccess.Domain)
+	domains, err := h.redlaunchDomains.ListRedlaunchDomains(r.Context())
 	if err != nil {
-		return "", fmt.Errorf("validate Redlaunch public access domain: %w", err)
+		return "", fmt.Errorf("list Redlaunch domains: %w", err)
 	}
-	if !requestUsesPublicHost(r, domain) {
-		return "", nil
+	for _, domain := range domains {
+		name, err := application.ValidateDomainName(domain.Name)
+		if err != nil {
+			continue
+		}
+		if requestUsesPublicHost(r, name) {
+			return (&url.URL{Scheme: "https", Host: name, Path: oauthCallbackPath}).String(), nil
+		}
 	}
-	return (&url.URL{Scheme: "https", Host: domain, Path: oauthCallbackPath}).String(), nil
+	return "", nil
 }
 
 func requestUsesPublicHost(r *http.Request, expectedDomain string) bool {

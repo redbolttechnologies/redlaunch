@@ -139,9 +139,6 @@ var (
 	ErrEmailTooLong                     = errors.New("email address is too long")
 	ErrEmailInvalid                     = errors.New("email address is invalid")
 	ErrAuthorizedEmailAlreadyExists     = errors.New("authorized email already exists")
-	ErrRedlaunchPublicDomainRequired    = errors.New("Redlaunch public domain is required")
-	ErrRedlaunchPublicDomainTooLong     = errors.New("Redlaunch public domain is too long")
-	ErrRedlaunchPublicDomainInvalid     = errors.New("Redlaunch public domain is invalid")
 	ErrComposeFileRequired              = errors.New("Docker Compose file is required")
 	ErrComposeFileTooLarge              = errors.New("Docker Compose file is too large")
 	ErrComposeFileInvalid               = errors.New("Docker Compose file is invalid")
@@ -421,18 +418,12 @@ type Domain struct {
 	Name          string
 }
 
-// RedlaunchPublicAccess controls whether the Redlaunch management interface
-// is published through the managed Caddy proxy.
-type RedlaunchPublicAccess struct {
-	Enabled bool
-	Domain  string
-}
-
-// RedlaunchPublicAccessInput contains the public-access settings supplied by
-// the settings form.
-type RedlaunchPublicAccessInput struct {
-	Enabled bool
-	Domain  string
+// RedlaunchDomain is one hostname that publishes the Redlaunch management
+// interface through the managed Caddy proxy. Every stored domain is live;
+// there is no separate enabled flag.
+type RedlaunchDomain struct {
+	ID   int64
+	Name string
 }
 
 // Routing is one request-path mapping for an application's associated domain.
@@ -993,29 +984,6 @@ func ValidateDomainName(value string) (string, error) {
 		}
 	}
 	return strings.ToLower(name), nil
-}
-
-// ValidateRedlaunchPublicAccess normalizes the optional public hostname and
-// requires it whenever public access is enabled.
-func ValidateRedlaunchPublicAccess(input RedlaunchPublicAccessInput) (RedlaunchPublicAccess, error) {
-	domain := strings.TrimSpace(input.Domain)
-	if domain == "" {
-		if input.Enabled {
-			return RedlaunchPublicAccess{}, ErrRedlaunchPublicDomainRequired
-		}
-		return RedlaunchPublicAccess{}, nil
-	}
-
-	normalized, err := ValidateDomainName(domain)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrDomainNameTooLong):
-			return RedlaunchPublicAccess{}, ErrRedlaunchPublicDomainTooLong
-		default:
-			return RedlaunchPublicAccess{}, ErrRedlaunchPublicDomainInvalid
-		}
-	}
-	return RedlaunchPublicAccess{Enabled: input.Enabled, Domain: normalized}, nil
 }
 
 // ValidateRoutingSubdomain validates the optional labels prepended to an

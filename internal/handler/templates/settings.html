@@ -1,0 +1,130 @@
+{{define "settings.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "settings-content.html"}}
+<section class="settings-page" aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Settings</h1>
+      <p>Global settings for this Redlaunch installation.</p>
+    </div>
+  </header>
+
+  <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="public-access-title">Public access</h2>
+        <p>Publish the Redlaunch management interface through the managed Caddy proxy. Caddy obtains and renews the HTTPS certificate automatically. Each configured domain serves Redlaunch.</p>
+      </div>
+      <button class="button button-primary" type="button" data-domain-add aria-controls="domain-edit-dialog" aria-haspopup="dialog" aria-expanded="false">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"></path>
+        </svg>
+        <span>Add domain</span>
+      </button>
+    </header>
+    <div class="service-widget-body">
+      {{if .SettingsPage.Domains}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table">
+          <caption class="sr-only">Domains configured for Redlaunch public access</caption>
+          <thead>
+            <tr>
+              <th scope="col">Domain</th>
+              <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .SettingsPage.Domains}}
+            <tr>
+              <th scope="row"><code>{{.Name}}</code></th>
+              <td class="application-environment-actions">
+                <div class="application-environment-action-group">
+                  <button class="application-environment-delete" type="button" data-domain-delete data-domain-name="{{.Name}}" aria-controls="domain-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Delete domain {{.Name}}">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 6h18"></path>
+                      <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+                      <path d="M10 11v5M14 11v5"></path>
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="service-widget-empty" role="status">
+        <p>No domains are configured for Redlaunch public access.</p>
+      </div>
+      {{end}}
+    </div>
+  </section>
+</section>
+
+<dialog class="application-dialog domain-edit-dialog" id="domain-edit-dialog" data-domain-edit-dialog{{with .SettingsPage.DomainEdit}}{{if .Open}} data-domain-edit-open{{end}}{{end}} aria-modal="true" aria-labelledby="domain-edit-dialog-title" aria-describedby="domain-edit-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="domain-edit-dialog-title">Add domain</h2>
+        <p id="domain-edit-dialog-description">Configure a domain name for accessing Redlaunch publicly.</p>
+      </div>
+      <button class="icon-button" type="button" data-domain-edit-close aria-label="Close add domain dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/domains">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      {{with .SettingsPage.DomainEdit}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <div class="field">
+        <label for="domain-edit-name">Domain name</label>
+        <input id="domain-edit-name" name="name" type="text" value="{{with .SettingsPage.DomainEdit}}{{.Name}}{{end}}" maxlength="253" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="redlaunch.example.com" required>
+        <span class="field-help">Enter the hostname only, without <code>https://</code> or a path.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-domain-edit-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-domain-edit-submit>Save</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog domain-delete-dialog" id="domain-delete-dialog" data-domain-delete-dialog{{with .SettingsPage.DomainDelete}}{{if .Open}} data-domain-delete-open{{end}}{{end}} aria-modal="true" aria-labelledby="domain-delete-dialog-title" aria-describedby="domain-delete-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="domain-delete-dialog-title">Delete domain</h2>
+        <p id="domain-delete-dialog-description">Remove <code data-domain-delete-name-display>{{with .SettingsPage.DomainDelete}}{{.Name}}{{end}}</code> from Redlaunch public access? This action cannot be undone.</p>
+      </div>
+      <button class="icon-button" type="button" data-domain-delete-close aria-label="Close delete domain dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/domains/delete">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      <input type="hidden" name="name" value="{{with .SettingsPage.DomainDelete}}{{.Name}}{{end}}" data-domain-delete-name-input>
+      {{with .SettingsPage.DomainDelete}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-domain-delete-close data-domain-delete-cancel>Cancel</button>
+        <button class="button button-destructive" type="submit" data-domain-delete-submit>Delete domain</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

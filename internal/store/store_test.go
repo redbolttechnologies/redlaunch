@@ -173,31 +173,59 @@ func TestStoreAuthorizedEmailsRejectInvalidAddress(t *testing.T) {
 	}
 }
 
-func TestStoreRedlaunchPublicAccessRoundTrip(t *testing.T) {
+func TestStoreRedlaunchDomainsRoundTrip(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
 
-	settings, err := database.GetRedlaunchPublicAccess(t.Context())
+	domains, err := database.ListRedlaunchDomains(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings != (application.RedlaunchPublicAccess{}) {
-		t.Fatalf("initial public access = %#v, want disabled empty settings", settings)
+	if len(domains) != 0 {
+		t.Fatalf("initial Redlaunch domains = %#v, want none", domains)
 	}
 
-	want := application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"}
-	if err := database.UpdateRedlaunchPublicAccess(t.Context(), want); err != nil {
-		t.Fatal(err)
-	}
-	got, err := database.GetRedlaunchPublicAccess(t.Context())
+	first, err := database.CreateRedlaunchDomain(t.Context(), application.RedlaunchDomain{Name: "admin.example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != want {
-		t.Fatalf("public access = %#v, want %#v", got, want)
+	if first.ID < 1 || first.Name != "admin.example.com" {
+		t.Fatalf("created Redlaunch domain = %#v, want persisted identity", first)
+	}
+	second, err := database.CreateRedlaunchDomain(t.Context(), application.RedlaunchDomain{Name: "redlaunch.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID < 1 || second.Name != "redlaunch.example.com" {
+		t.Fatalf("created Redlaunch domain = %#v, want persisted identity", second)
+	}
+
+	domains, err = database.ListRedlaunchDomains(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 2 || domains[0] != first || domains[1] != second {
+		t.Fatalf("ListRedlaunchDomains() = %#v, want [%#v %#v]", domains, first, second)
+	}
+	if _, err := database.CreateRedlaunchDomain(t.Context(), application.RedlaunchDomain{Name: "ADMIN.EXAMPLE.COM"}); !errors.Is(err, application.ErrDomainAlreadyExists) {
+		t.Fatalf("CreateRedlaunchDomain(duplicate) error = %v, want %v", err, application.ErrDomainAlreadyExists)
+	}
+
+	if err := database.DeleteRedlaunchDomain(t.Context(), "admin.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	domains, err = database.ListRedlaunchDomains(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 || domains[0] != second {
+		t.Fatalf("ListRedlaunchDomains() after deletion = %#v, want [%#v]", domains, second)
+	}
+	if err := database.DeleteRedlaunchDomain(t.Context(), "admin.example.com"); !errors.Is(err, application.ErrDomainNotFound) {
+		t.Fatalf("DeleteRedlaunchDomain(missing) error = %v, want %v", err, application.ErrDomainNotFound)
 	}
 }
 

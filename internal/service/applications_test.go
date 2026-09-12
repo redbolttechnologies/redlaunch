@@ -25,7 +25,7 @@ type applicationRepositoryStub struct {
 	service              application.Service
 	domain               application.Domain
 	routing              application.Routing
-	publicAccess         application.RedlaunchPublicAccess
+	redlaunchDomains     []application.RedlaunchDomain
 	err                  error
 	serviceErr           error
 	domainErr            error
@@ -33,7 +33,7 @@ type applicationRepositoryStub struct {
 	routingListErr       error
 	routingUpdateErr     error
 	routingDeleteErr     error
-	publicAccessErr      error
+	redlaunchDomainsErr  error
 	deleteErr            error
 	applicationDeleteErr error
 	deletedID            int64
@@ -44,16 +44,38 @@ type applicationRepositoryStub struct {
 	deletedRoutingID     int64
 }
 
-func (s *applicationRepositoryStub) GetRedlaunchPublicAccess(context.Context) (application.RedlaunchPublicAccess, error) {
-	return s.publicAccess, s.publicAccessErr
+func (s *applicationRepositoryStub) ListRedlaunchDomains(context.Context) ([]application.RedlaunchDomain, error) {
+	if s.redlaunchDomainsErr != nil {
+		return nil, s.redlaunchDomainsErr
+	}
+	return append([]application.RedlaunchDomain(nil), s.redlaunchDomains...), nil
 }
 
-func (s *applicationRepositoryStub) UpdateRedlaunchPublicAccess(_ context.Context, settings application.RedlaunchPublicAccess) error {
-	if s.publicAccessErr != nil {
-		return s.publicAccessErr
+func (s *applicationRepositoryStub) CreateRedlaunchDomain(_ context.Context, item application.RedlaunchDomain) (application.RedlaunchDomain, error) {
+	if s.redlaunchDomainsErr != nil {
+		return application.RedlaunchDomain{}, s.redlaunchDomainsErr
 	}
-	s.publicAccess = settings
-	return nil
+	for _, existing := range s.redlaunchDomains {
+		if existing.Name == item.Name {
+			return application.RedlaunchDomain{}, application.ErrDomainAlreadyExists
+		}
+	}
+	item.ID = int64(len(s.redlaunchDomains) + 1)
+	s.redlaunchDomains = append(s.redlaunchDomains, item)
+	return item, nil
+}
+
+func (s *applicationRepositoryStub) DeleteRedlaunchDomain(_ context.Context, name string) error {
+	if s.redlaunchDomainsErr != nil {
+		return s.redlaunchDomainsErr
+	}
+	for index, existing := range s.redlaunchDomains {
+		if existing.Name == name {
+			s.redlaunchDomains = append(s.redlaunchDomains[:index], s.redlaunchDomains[index+1:]...)
+			return nil
+		}
+	}
+	return application.ErrDomainNotFound
 }
 
 type serviceRuntimeRunner struct {
@@ -917,7 +939,7 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 	}
 }
 
-func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
+func TestApplicationsRedlaunchDomainsRefreshCaddy(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
 	runner := &serviceRuntimeRunner{}
@@ -927,17 +949,18 @@ func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{
-		Enabled: true,
-		Domain:  " Admin.Example.COM ",
-	}); err != nil {
+	created, err := applications.CreateRedlaunchDomain(t.Context(), " Admin.Example.COM ")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if repository.publicAccess != (application.RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"}) {
-		t.Fatalf("stored public access = %#v, want enabled normalized domain", repository.publicAccess)
+	if created.Name != "admin.example.com" {
+		t.Fatalf("created Redlaunch domain = %#v, want normalized name", created)
+	}
+	if len(repository.redlaunchDomains) != 1 {
+		t.Fatalf("stored Redlaunch domains = %#v, want one domain", repository.redlaunchDomains)
 	}
 	if len(runner.reloads) != 1 {
-		t.Fatalf("Caddy reloads after enabling public access = %d, want 1", len(runner.reloads))
+		t.Fatalf("Caddy reloads after creating domain = %d, want 1", len(runner.reloads))
 	}
 	caddyPath := filepath.Join(root, coreDir, proxyDir, "Caddyfile")
 	caddy := readServiceFile(t, caddyPath)
@@ -947,20 +970,35 @@ func TestApplicationsUpdateRedlaunchPublicAccessRefreshesCaddy(t *testing.T) {
 		}
 	}
 
-	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{
-		Domain: "admin.example.com",
-	}); err != nil {
+	if _, err := applications.CreateRedlaunchDomain(t.Context(), "redlaunch.example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if repository.publicAccess.Enabled {
-		t.Fatalf("stored public access after disabling = %#v, want disabled", repository.publicAccess)
+	caddy = readServiceFile(t, caddyPath)
+	for _, expected := range []string{"admin.example.com {", "redlaunch.example.com {"} {
+		if !strings.Contains(caddy, expected) {
+			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, caddy)
+		}
+	}
+
+	if err := applications.DeleteRedlaunchDomain(t.Context(), "admin.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.redlaunchDomains) != 1 {
+		t.Fatalf("stored Redlaunch domains after deletion = %#v, want one domain", repository.redlaunchDomains)
+	}
+	if got := readServiceFile(t, caddyPath); strings.Contains(got, "admin.example.com {") {
+		t.Fatalf("Caddyfile after deleting domain still contains admin host:\n%s", got)
+	}
+
+	if err := applications.DeleteRedlaunchDomain(t.Context(), "redlaunch.example.com"); err != nil {
+		t.Fatal(err)
 	}
 	if got := readServiceFile(t, caddyPath); got != "# Routes managed by Redlaunch.\n" {
-		t.Fatalf("Caddyfile after disabling public access = %q, want managed header only", got)
+		t.Fatalf("Caddyfile after deleting all domains = %q, want managed header only", got)
 	}
 }
 
-func TestApplicationsUpdateRedlaunchPublicAccessValidatesAndRollsBack(t *testing.T) {
+func TestApplicationsRedlaunchDomainsValidateAndRollBack(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}
 	runner := &serviceRuntimeRunner{reloadErr: errors.New("Caddy unavailable")}
@@ -970,20 +1008,20 @@ func TestApplicationsUpdateRedlaunchPublicAccessValidatesAndRollsBack(t *testing
 		t.Fatal(err)
 	}
 
-	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true}); !errors.Is(err, application.ErrRedlaunchPublicDomainRequired) {
-		t.Fatalf("UpdateRedlaunchPublicAccess(missing domain) error = %v, want %v", err, application.ErrRedlaunchPublicDomainRequired)
+	if _, err := applications.CreateRedlaunchDomain(t.Context(), "   "); !errors.Is(err, application.ErrDomainNameRequired) {
+		t.Fatalf("CreateRedlaunchDomain(blank) error = %v, want %v", err, application.ErrDomainNameRequired)
 	}
-	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true, Domain: "bad/domain"}); !errors.Is(err, application.ErrRedlaunchPublicDomainInvalid) {
-		t.Fatalf("UpdateRedlaunchPublicAccess(invalid domain) error = %v, want %v", err, application.ErrRedlaunchPublicDomainInvalid)
+	if _, err := applications.CreateRedlaunchDomain(t.Context(), "bad/domain"); !errors.Is(err, application.ErrDomainNameInvalid) {
+		t.Fatalf("CreateRedlaunchDomain(invalid) error = %v, want %v", err, application.ErrDomainNameInvalid)
 	}
-	if err := applications.UpdateRedlaunchPublicAccess(t.Context(), application.RedlaunchPublicAccessInput{Enabled: true, Domain: "admin.example.com"}); err == nil {
-		t.Fatal("UpdateRedlaunchPublicAccess(Caddy failure) error = nil, want error")
+	if _, err := applications.CreateRedlaunchDomain(t.Context(), "admin.example.com"); err == nil {
+		t.Fatal("CreateRedlaunchDomain(Caddy failure) error = nil, want error")
 	}
-	if repository.publicAccess != (application.RedlaunchPublicAccess{}) {
-		t.Fatalf("public access after Caddy failure = %#v, want previous settings", repository.publicAccess)
+	if len(repository.redlaunchDomains) != 0 {
+		t.Fatalf("Redlaunch domains after Caddy failure = %#v, want none", repository.redlaunchDomains)
 	}
 	if got := readServiceFile(t, filepath.Join(root, coreDir, proxyDir, "Caddyfile")); got != "# Routes managed by Redlaunch.\n" {
-		t.Fatalf("Caddyfile after failed update = %q, want original contents", got)
+		t.Fatalf("Caddyfile after failed create = %q, want original contents", got)
 	}
 }
 

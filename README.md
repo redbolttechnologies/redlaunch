@@ -37,10 +37,10 @@ ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
 Keep the tunnel open while using <http://localhost:8080> in your browser.
 Alternatively, place the management interface behind an HTTPS reverse proxy.
 
-When Redlaunch public access is enabled, a login started at its configured
-public hostname uses `https://<hostname>/auth/google/callback` automatically.
-Register that public callback URI in the same Google OAuth client as the local
-callback URI.
+When one or more Redlaunch public-access domains are configured in Settings, a
+login started at a configured public hostname uses
+`https://<hostname>/auth/google/callback` automatically. Register each public
+callback URI in the same Google OAuth client as the local callback URI.
 
 For an external HTTPS reverse proxy that is not configured through Redlaunch's
 Public access setting, set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.

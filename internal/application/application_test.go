@@ -117,29 +117,6 @@ func TestValidateDomainName(t *testing.T) {
 	}
 }
 
-func TestValidateRedlaunchPublicAccess(t *testing.T) {
-	got, err := ValidateRedlaunchPublicAccess(RedlaunchPublicAccessInput{
-		Enabled: true,
-		Domain:  " Admin.Example.COM ",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != (RedlaunchPublicAccess{Enabled: true, Domain: "admin.example.com"}) {
-		t.Fatalf("ValidateRedlaunchPublicAccess() = %#v, want enabled normalized domain", got)
-	}
-
-	if _, err := ValidateRedlaunchPublicAccess(RedlaunchPublicAccessInput{Enabled: true}); !errors.Is(err, ErrRedlaunchPublicDomainRequired) {
-		t.Fatalf("ValidateRedlaunchPublicAccess(missing domain) error = %v, want %v", err, ErrRedlaunchPublicDomainRequired)
-	}
-	if _, err := ValidateRedlaunchPublicAccess(RedlaunchPublicAccessInput{Domain: "bad/domain"}); !errors.Is(err, ErrRedlaunchPublicDomainInvalid) {
-		t.Fatalf("ValidateRedlaunchPublicAccess(invalid domain) error = %v, want %v", err, ErrRedlaunchPublicDomainInvalid)
-	}
-	if got, err := ValidateRedlaunchPublicAccess(RedlaunchPublicAccessInput{}); err != nil || got != (RedlaunchPublicAccess{}) {
-		t.Fatalf("ValidateRedlaunchPublicAccess(disabled empty) = (%#v, %v), want zero settings", got, err)
-	}
-}
-
 func TestValidateRoutingValues(t *testing.T) {
 	if got, err := ValidateRoutingSubdomain(" API.V1 "); err != nil || got != "api.v1" {
 		t.Fatalf("ValidateRoutingSubdomain() = (%q, %v), want (api.v1, nil)", got, err)
