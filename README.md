@@ -57,8 +57,12 @@ deployment.
 The same operation is available in the web interface: open **Settings**, find
 **Update Redlaunch**, and click **Update**. It pulls the latest version from
 GitHub and then rebuilds with `docker compose up -d --build` in the Redlaunch
-directory. The rebuild runs in a detached helper container and restarts
-Redlaunch, so refresh the page shortly after the update starts.
+directory. The rebuild runs in a detached helper container named
+`redbolt-redlaunch-updater` and restarts Redlaunch, so refresh the page
+shortly after the update starts. While a rebuild is running, further update
+requests are refused until it finishes. If stale updater containers from an
+older release remain, remove them once with
+`docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)`.
 
 For the GitHub Actions wizard, generated workflow, and secure handoff steps,
 see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).

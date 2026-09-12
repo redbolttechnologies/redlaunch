@@ -17,6 +17,13 @@ const (
 
 	defaultSelfUpdateDockerSocket = "/var/run/docker.sock"
 	defaultSelfUpdateImage        = "redlaunch:local"
+
+	// selfUpdateHelperName is the fixed name of the detached rebuild helper.
+	// A fixed name single-flights rebuilds across manager restarts (the
+	// in-memory job store does not survive the restart the rebuild causes):
+	// a second update refuses to start while the helper is still running
+	// instead of piling up concurrent full rebuilds.
+	selfUpdateHelperName = "redbolt-redlaunch-updater"
 )
 
 // SelfUpdateService pulls the latest Redlaunch source from GitHub and rebuilds
@@ -30,8 +37,8 @@ const (
 // synchronously and then hands the rebuild to a detached, auto-removed helper
 // container started through the Docker socket (see QueueUpdateWithProgress).
 // The helper is not part of the Compose project, so recreating the manager
-// does not kill it. The synchronous Update method remains for that helper
-// (the `selfupdate-run` command) and for direct host execution.
+// does not kill it. The synchronous Update method remains for direct host
+// execution and the `selfupdate-run` operator command.
 type SelfUpdateService struct {
 	directory    string
 	gitBinary    string
@@ -52,9 +59,12 @@ type SelfUpdateOptions struct {
 	// DockerSocket is mounted into the detached helper so it can talk to the
 	// host daemon. Defaults to /var/run/docker.sock.
 	DockerSocket string
-	// UpdaterImage is the image used for the detached helper. It must contain
-	// git and the Docker CLI with the Compose plugin; the Redlaunch image
-	// itself qualifies. Defaults to redlaunch:local.
+	// UpdaterImage is the image used for the detached helper. It only needs
+	// the Docker CLI with the Compose plugin; the helper overrides the
+	// entrypoint to run `docker compose` directly, so the image does not
+	// need to contain the Redlaunch update code itself. This matters because
+	// the helper boots the pre-update image by definition. Defaults to
+	// redlaunch:local.
 	UpdaterImage string
 }
 
@@ -140,10 +150,9 @@ func (s *SelfUpdateService) Directory() string {
 }
 
 // Update pulls the latest version and rebuilds the Redlaunch container
-// synchronously. It runs inside the detached helper (the `selfupdate-run`
-// command), which is not part of the Compose project and therefore survives
-// recreating the manager container. Never call it from the web handler: the
-// manager would terminate its own rebuild mid-recreate.
+// synchronously. It is for direct host execution and the `selfupdate-run`
+// operator command. Never call it from the web handler: the manager would
+// terminate its own rebuild mid-recreate (see QueueUpdateWithProgress).
 func (s *SelfUpdateService) Update(ctx context.Context) error {
 	return s.UpdateWithProgress(ctx, nil)
 }
@@ -247,7 +256,9 @@ func (s *SelfUpdateService) runGitPull(ctx context.Context, directory string) er
 	command.Dir = directory
 	// Git needs the operator's environment (HOME for SSH configuration,
 	// PATH, GIT_* settings) to reach GitHub the same way `make update` does.
-	command.Env = os.Environ()
+	// GIT_TERMINAL_PROMPT=0 keeps a headless update from hanging on an
+	// interactive credential prompt; it fails with an error instead.
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	output := newSelfUpdateTailBuffer(selfUpdateMaxCommandOutput)
 	command.Stdout = output
 	command.Stderr = output
@@ -273,20 +284,49 @@ func (s *SelfUpdateService) runComposeRebuild(ctx context.Context, directory str
 }
 
 // startDetachedRebuild launches an auto-removed helper container that runs
-// `selfupdate-run --directory <repo>` (the synchronous Update above) and
-// returns its container ID. All arguments are fixed or server-configured and
-// validated; no shell is involved. The helper mounts the Docker socket and
-// the checkout at its identical host path, so the Compose bind mounts and
-// build context resolve the same way as on the host. It carries no Compose
-// project labels, so recreating the manager stack never touches it.
+// `docker compose --project-directory <repo> up -d --build` and returns its
+// container ID. All arguments are fixed or server-configured and validated;
+// no shell is involved.
+//
+// The helper overrides the image entrypoint to run the Docker CLI directly
+// instead of the Redlaunch binary. That keeps the helper working even when
+// the currently deployed image predates newer Redlaunch subcommands: the
+// helper boots the pre-update image by definition, so it must not depend on
+// post-update code. The helper mounts the Docker socket and the checkout at
+// its identical host path, so the Compose bind mounts and build context
+// resolve the same way as on the host, and `-e PWD` keeps `${PWD}` Compose
+// interpolation aligned with `make update`. It carries no Compose project
+// labels, so recreating the manager stack never touches it.
+//
+// The helper has a fixed name: a rebuild already running refuses a second
+// one instead of piling up concurrent full rebuilds. The in-memory job store
+// cannot provide this across the manager restart the rebuild causes.
 func (s *SelfUpdateService) startDetachedRebuild(ctx context.Context, directory string) (string, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return "", fmt.Errorf("resolve Redlaunch directory: %w", err)
 	}
 	absolute = filepath.Clean(absolute)
+	running, err := s.helperRunning(ctx)
+	if err != nil {
+		return "", err
+	}
+	if running {
+		return "", errors.New("a Redlaunch rebuild is already running; inspect it with `docker logs " + selfUpdateHelperName + "`")
+	}
+	// Best effort: drop a previous exited helper so the fixed name is free.
+	// A running helper is refused above and never removed here.
+	remove := exec.CommandContext(ctx, s.dockerBinary, "rm", "-f", selfUpdateHelperName)
+	remove.Dir = directory
+	remove.Env = os.Environ()
+	removeOutput := newSelfUpdateTailBuffer(selfUpdateMaxCommandOutput)
+	remove.Stdout = removeOutput
+	remove.Stderr = removeOutput
+	_ = remove.Run()
+
 	args := []string{
-		"run", "--rm", "-d",
+		"run", "--rm", "-d", "--pull", "never",
+		"--name", selfUpdateHelperName,
 		"--label", "redlaunch.managed=true",
 		"--label", "redlaunch.updater=true",
 		"-v", s.dockerSocket + ":" + s.dockerSocket,
@@ -294,8 +334,9 @@ func (s *SelfUpdateService) startDetachedRebuild(ctx context.Context, directory 
 		"-w", absolute,
 		"-e", "PWD=" + absolute,
 		"-e", "REDLAUNCH_DIR=" + absolute,
+		"--entrypoint", "docker",
 		s.updaterImage,
-		"selfupdate-run", "--directory", absolute,
+		"compose", "--project-directory", absolute, "up", "-d", "--build",
 	}
 	command := exec.CommandContext(ctx, s.dockerBinary, args...)
 	command.Dir = directory
@@ -307,6 +348,30 @@ func (s *SelfUpdateService) startDetachedRebuild(ctx context.Context, directory 
 		return "", fmt.Errorf("start Redlaunch rebuild helper: %w: %s", err, strings.TrimSpace(string(output.Bytes())))
 	}
 	return strings.TrimSpace(string(output.Bytes())), nil
+}
+
+// helperRunning reports whether the fixed-name rebuild helper currently
+// exists and is running. A missing container is not an error.
+func (s *SelfUpdateService) helperRunning(ctx context.Context) (bool, error) {
+	command := exec.CommandContext(ctx, s.dockerBinary, "inspect", "-f", "{{.State.Running}}", selfUpdateHelperName)
+	command.Env = os.Environ()
+	output := newSelfUpdateTailBuffer(selfUpdateMaxCommandOutput)
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Run(); err != nil {
+		if isDockerNoSuchContainer(output.Bytes()) {
+			return false, nil
+		}
+		// An uninspectable daemon state fails closed: spawning another
+		// rebuild next to an unknown helper risks the duplicate-container
+		// pileup this check exists to prevent.
+		return false, fmt.Errorf("inspect Redlaunch rebuild helper: %w: %s", err, strings.TrimSpace(string(output.Bytes())))
+	}
+	return strings.EqualFold(strings.TrimSpace(string(output.Bytes())), "true"), nil
+}
+
+func isDockerNoSuchContainer(output []byte) bool {
+	return strings.Contains(strings.ToLower(string(output)), "no such container")
 }
 
 type selfUpdateTailBuffer struct {

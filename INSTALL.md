@@ -723,6 +723,25 @@ projects-root path stable: it is part of the installation-scoped identity.
 - **<code>make setup</code> cannot run Docker**: reconnect after adding the SSH
   user to the <code>docker</code> group, or verify the Docker daemon with
   <code>docker info</code>.
+- **Duplicate <code>redlaunch:local</code> containers after a Settings
+  update**: each update runs its rebuild in a detached
+  <code>redbolt-redlaunch-updater</code> helper; only
+  <code>redbolt-redlaunch</code> should remain afterwards. Releases before the
+  fixed-name helper may leave random-named updater containers behind because
+  their helper booted a manager image without update support. Remove them
+  once, then deploy the latest code over SSH so the running manager includes
+  the fix:
+
+  ~~~sh
+  cd ~/redlaunch
+  docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)
+  git pull
+  docker compose up -d --build
+  ~~~
+
+  Replace <code>~/redlaunch</code> with the installation directory when needed.
+  Later Settings updates refuse to start while a rebuild is already running
+  instead of piling up concurrent helpers.
 - **Scheduled backups report “unavailable” or `systemctl: executable file not
   found in $PATH`**: the bundled container must control host systemd through
   <code>/usr/bin/dbus-send</code>, not the host <code>systemctl</code> binary.

@@ -42,6 +42,12 @@ func TestRunSelfUpdateRequiresDirectory(t *testing.T) {
 	}
 }
 
+func TestDispatchRejectsUnknownCommand(t *testing.T) {
+	if err := dispatch(context.Background(), []string{"selfupdate-rnu"}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("dispatch() error = %v, want unknown command error", err)
+	}
+}
+
 func TestRunSelfUpdatePullsThenRebuildsSynchronously(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "docker-compose.yml"), []byte("services:\n  app:\n    image: redlaunch:local\n"), 0o644); err != nil {

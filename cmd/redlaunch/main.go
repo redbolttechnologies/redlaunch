@@ -31,26 +31,31 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var err error
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "backup-run":
-			err = runBackup(ctx, os.Args[2:])
-		case "selfupdate-run":
-			err = runSelfUpdate(ctx, os.Args[2:])
-		case "auth-add-email", "add-authorized-email":
-			err = runAddAuthorizedEmail(ctx, os.Args[2:])
-		case "compose-project-name":
-			err = runComposeProjectName(os.Args[2:], os.Stdout)
-		default:
-			err = run(ctx)
-		}
-	} else {
-		err = run(ctx)
-	}
-	if err != nil {
+	if err := dispatch(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// dispatch routes CLI invocations. Unknown subcommands fail instead of
+// starting the server: silently booting the full web application on a typo
+// (or on a helper image that predates a subcommand) can leave duplicate
+// Redlaunch servers running side by side.
+func dispatch(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return run(ctx)
+	}
+	switch args[0] {
+	case "backup-run":
+		return runBackup(ctx, args[1:])
+	case "selfupdate-run":
+		return runSelfUpdate(ctx, args[1:])
+	case "auth-add-email", "add-authorized-email":
+		return runAddAuthorizedEmail(ctx, args[1:])
+	case "compose-project-name":
+		return runComposeProjectName(args[1:], os.Stdout)
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
@@ -312,10 +317,9 @@ func runBackup(ctx context.Context, args []string) error {
 }
 
 // runSelfUpdate executes the synchronous Redlaunch update (git pull followed
-// by `docker compose up -d --build`) for the given checkout. It is the entry
-// point of the detached rebuild-helper container spawned by the Settings
-// update action: the helper is not part of the Compose project, so recreating
-// the manager container does not terminate the rebuild mid-flight.
+// by `docker compose up -d --build`) for the given checkout. It is an
+// operator command for host shells and scripts; the Settings update action
+// instead queues a detached helper through the service layer.
 func runSelfUpdate(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("redlaunch selfupdate-run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)

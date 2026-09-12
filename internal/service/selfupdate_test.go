@@ -148,17 +148,64 @@ func TestQueueUpdatePullsThenStartsDetachedHelper(t *testing.T) {
 		t.Fatalf("git invocation = %q, want suffix %q", gitCalls, "git pull --ff-only")
 	}
 	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
+	// The rebuild must leave the manager via a detached helper (`docker
+	// run`), never as a synchronous `docker compose` call that the manager
+	// recreation would terminate mid-flight.
+	if strings.Contains(dockerCalls, "docker compose") {
+		t.Fatalf("docker invocations = %q, must not rebuild synchronously from the manager", dockerCalls)
+	}
 	for _, expected := range []string{
-		"run --rm -d",
-		"selfupdate-run --directory",
+		"docker run --rm -d",
+		"--name redbolt-redlaunch-updater",
+		"--entrypoint docker",
 		"redlaunch:local",
+		"compose --project-directory",
+		"up -d --build",
 	} {
 		if !strings.Contains(dockerCalls, expected) {
-			t.Fatalf("docker invocation = %q, want it to contain %q", dockerCalls, expected)
+			t.Fatalf("docker invocations = %q, want them to contain %q", dockerCalls, expected)
 		}
 	}
-	if strings.Contains(dockerCalls, "compose up") {
-		t.Fatalf("docker invocation = %q, must not rebuild synchronously from the manager", dockerCalls)
+	if strings.Contains(dockerCalls, "selfupdate-run") {
+		t.Fatalf("docker invocations = %q, helper must not depend on post-update manager code", dockerCalls)
+	}
+}
+
+func TestQueueUpdateRefusesWhileHelperRunning(t *testing.T) {
+	directory := writeSelfUpdateFixture(t, "exit 0", "if [ \"$1\" = \"inspect\" ]; then echo \"true\"; exit 0; fi\nexit 0")
+
+	service, err := NewSelfUpdateService(directory, "git", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.QueueUpdateWithProgress(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("QueueUpdateWithProgress() error = %v, want already-running refusal", err)
+	}
+	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
+	if !strings.Contains(dockerCalls, "inspect") {
+		t.Fatalf("docker invocations = %q, want a helper status check", dockerCalls)
+	}
+	if strings.Contains(dockerCalls, " run --rm -d") {
+		t.Fatalf("docker invocations = %q, must not start a second helper while one runs", dockerCalls)
+	}
+}
+
+func TestQueueUpdateReplacesExitedHelper(t *testing.T) {
+	directory := writeSelfUpdateFixture(t, "exit 0", "if [ \"$1\" = \"inspect\" ]; then echo \"false\"; exit 0; fi\necho fake-helper-id\nexit 0")
+
+	service, err := NewSelfUpdateService(directory, "git", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.QueueUpdateWithProgress(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
+	for _, expected := range []string{"inspect", "rm -f redbolt-redlaunch-updater", "docker run --rm -d"} {
+		if !strings.Contains(dockerCalls, expected) {
+			t.Fatalf("docker invocations = %q, want them to contain %q", dockerCalls, expected)
+		}
 	}
 }
 
