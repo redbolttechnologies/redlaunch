@@ -14,16 +14,48 @@ import (
 
 const (
 	selfUpdateMaxCommandOutput = 8 * 1024
+
+	defaultSelfUpdateDockerSocket = "/var/run/docker.sock"
+	defaultSelfUpdateImage        = "redlaunch:local"
 )
 
 // SelfUpdateService pulls the latest Redlaunch source from GitHub and rebuilds
 // the Redlaunch container with Docker Compose. It mirrors `make update`
 // (`git pull` followed by `docker compose up -d --build`) so the Settings page
 // offers the same operation without SSH access.
+//
+// Rebuilding the Redlaunch container from inside that same container would
+// terminate the Docker CLI mid-recreate (the replacement stays `Created`
+// while the old container exits). The web flow therefore only runs `git pull`
+// synchronously and then hands the rebuild to a detached, auto-removed helper
+// container started through the Docker socket (see QueueUpdateWithProgress).
+// The helper is not part of the Compose project, so recreating the manager
+// does not kill it. The synchronous Update method remains for that helper
+// (the `selfupdate-run` command) and for direct host execution.
 type SelfUpdateService struct {
 	directory    string
 	gitBinary    string
 	dockerBinary string
+	dockerSocket string
+	updaterImage string
+}
+
+// SelfUpdateOptions configures a SelfUpdateService beyond the basic
+// directory and binaries.
+type SelfUpdateOptions struct {
+	// Directory is the Redlaunch checkout directory. Required.
+	Directory string
+	// GitBinary defaults to git.
+	GitBinary string
+	// DockerBinary defaults to docker.
+	DockerBinary string
+	// DockerSocket is mounted into the detached helper so it can talk to the
+	// host daemon. Defaults to /var/run/docker.sock.
+	DockerSocket string
+	// UpdaterImage is the image used for the detached helper. It must contain
+	// git and the Docker CLI with the Compose plugin; the Redlaunch image
+	// itself qualifies. Defaults to redlaunch:local.
+	UpdaterImage string
 }
 
 // NewSelfUpdateService constructs a self-update service for the Redlaunch
@@ -32,26 +64,71 @@ type SelfUpdateService struct {
 // path fails with an operator-actionable error instead of running commands in
 // an unexpected location.
 func NewSelfUpdateService(directory, gitBinary, dockerBinary string) (*SelfUpdateService, error) {
-	if strings.TrimSpace(directory) == "" {
+	return NewSelfUpdateServiceWithOptions(SelfUpdateOptions{
+		Directory:    directory,
+		GitBinary:    gitBinary,
+		DockerBinary: dockerBinary,
+	})
+}
+
+// NewSelfUpdateServiceWithOptions constructs a self-update service with
+// explicit socket and helper-image settings.
+func NewSelfUpdateServiceWithOptions(options SelfUpdateOptions) (*SelfUpdateService, error) {
+	if strings.TrimSpace(options.Directory) == "" {
 		return nil, errors.New("redlaunch directory must not be empty")
 	}
-	cleaned := filepath.Clean(strings.TrimSpace(directory))
+	cleaned := filepath.Clean(strings.TrimSpace(options.Directory))
 	if cleaned == string(filepath.Separator) {
 		return nil, errors.New("redlaunch directory must not be the filesystem root")
 	}
-	gitBinary = strings.TrimSpace(gitBinary)
+	gitBinary := strings.TrimSpace(options.GitBinary)
 	if gitBinary == "" {
 		gitBinary = "git"
 	}
-	dockerBinary = strings.TrimSpace(dockerBinary)
+	dockerBinary := strings.TrimSpace(options.DockerBinary)
 	if dockerBinary == "" {
 		dockerBinary = "docker"
+	}
+	dockerSocket := strings.TrimSpace(options.DockerSocket)
+	if dockerSocket == "" {
+		dockerSocket = defaultSelfUpdateDockerSocket
+	}
+	if !filepath.IsAbs(dockerSocket) {
+		return nil, errors.New("docker socket must be an absolute path")
+	}
+	updaterImage := strings.TrimSpace(options.UpdaterImage)
+	if updaterImage == "" {
+		updaterImage = defaultSelfUpdateImage
+	}
+	if !validSelfUpdateImage(updaterImage) {
+		return nil, fmt.Errorf("updater image %q is invalid", updaterImage)
 	}
 	return &SelfUpdateService{
 		directory:    cleaned,
 		gitBinary:    gitBinary,
 		dockerBinary: dockerBinary,
+		dockerSocket: dockerSocket,
+		updaterImage: updaterImage,
 	}, nil
+}
+
+// validSelfUpdateImage accepts Docker image references without whitespace or
+// shell metacharacters. The value is passed as a single exec argument (never
+// through a shell), so this is defense in depth against a misconfigured tag
+// turning into surprising Docker behavior.
+func validSelfUpdateImage(value string) bool {
+	if value == "" || len(value) > 255 {
+		return false
+	}
+	for _, character := range value {
+		letter := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
+		digit := character >= '0' && character <= '9'
+		if letter || digit || strings.ContainsRune("_.:/@-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Directory returns the configured Redlaunch checkout directory.
@@ -62,13 +139,17 @@ func (s *SelfUpdateService) Directory() string {
 	return s.directory
 }
 
-// Update pulls the latest version and rebuilds the Redlaunch container.
+// Update pulls the latest version and rebuilds the Redlaunch container
+// synchronously. It runs inside the detached helper (the `selfupdate-run`
+// command), which is not part of the Compose project and therefore survives
+// recreating the manager container. Never call it from the web handler: the
+// manager would terminate its own rebuild mid-recreate.
 func (s *SelfUpdateService) Update(ctx context.Context) error {
 	return s.UpdateWithProgress(ctx, nil)
 }
 
-// UpdateWithProgress performs the update and reports each active stage before
-// it begins. The callback is synchronous and may be nil.
+// UpdateWithProgress performs the synchronous update and reports each active
+// stage before it begins. The callback is synchronous and may be nil.
 func (s *SelfUpdateService) UpdateWithProgress(ctx context.Context, progress func(stage, message string)) error {
 	if s == nil {
 		return errors.New("self-update service is not configured")
@@ -86,6 +167,36 @@ func (s *SelfUpdateService) UpdateWithProgress(ctx context.Context, progress fun
 	}
 	reportSelfUpdateProgress(progress, "rebuild", "Rebuilding the Redlaunch container")
 	if err := s.runComposeRebuild(ctx, directory); err != nil {
+		return err
+	}
+	return nil
+}
+
+// QueueUpdateWithProgress is the web-handler entry point. It runs `git pull`
+// synchronously (safe: pulling does not touch the running container) so git
+// failures surface in the settings progress dialog, then starts a detached,
+// auto-removed helper container that performs the synchronous rebuild. The
+// helper outlives the manager container being recreated, which is exactly
+// what a synchronous `docker compose up -d --build` from inside the manager
+// cannot do: the CLI would be killed mid-recreate, leaving the replacement
+// `Created` and the old container `Exited`.
+func (s *SelfUpdateService) QueueUpdateWithProgress(ctx context.Context, progress func(stage, message string)) error {
+	if s == nil {
+		return errors.New("self-update service is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	directory, err := s.validatedDirectory()
+	if err != nil {
+		return err
+	}
+	reportSelfUpdateProgress(progress, "pull", "Pulling the latest Redlaunch version from GitHub")
+	if err := s.runGitPull(ctx, directory); err != nil {
+		return err
+	}
+	reportSelfUpdateProgress(progress, "rebuild", "Rebuilding the Redlaunch container in the background")
+	if _, err := s.startDetachedRebuild(ctx, directory); err != nil {
 		return err
 	}
 	return nil
@@ -148,6 +259,7 @@ func (s *SelfUpdateService) runGitPull(ctx context.Context, directory string) er
 
 func (s *SelfUpdateService) runComposeRebuild(ctx context.Context, directory string) error {
 	// Mirrors `make update`: rebuild images and recreate the stack detached.
+	// Only safe outside the manager container itself (helper or host shell).
 	command := exec.CommandContext(ctx, s.dockerBinary, "compose", "up", "-d", "--build")
 	command.Dir = directory
 	command.Env = os.Environ()
@@ -158,6 +270,43 @@ func (s *SelfUpdateService) runComposeRebuild(ctx context.Context, directory str
 		return fmt.Errorf("rebuild Redlaunch container: %w: %s", err, strings.TrimSpace(string(output.Bytes())))
 	}
 	return nil
+}
+
+// startDetachedRebuild launches an auto-removed helper container that runs
+// `selfupdate-run --directory <repo>` (the synchronous Update above) and
+// returns its container ID. All arguments are fixed or server-configured and
+// validated; no shell is involved. The helper mounts the Docker socket and
+// the checkout at its identical host path, so the Compose bind mounts and
+// build context resolve the same way as on the host. It carries no Compose
+// project labels, so recreating the manager stack never touches it.
+func (s *SelfUpdateService) startDetachedRebuild(ctx context.Context, directory string) (string, error) {
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return "", fmt.Errorf("resolve Redlaunch directory: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	args := []string{
+		"run", "--rm", "-d",
+		"--label", "redlaunch.managed=true",
+		"--label", "redlaunch.updater=true",
+		"-v", s.dockerSocket + ":" + s.dockerSocket,
+		"-v", absolute + ":" + absolute,
+		"-w", absolute,
+		"-e", "PWD=" + absolute,
+		"-e", "REDLAUNCH_DIR=" + absolute,
+		s.updaterImage,
+		"selfupdate-run", "--directory", absolute,
+	}
+	command := exec.CommandContext(ctx, s.dockerBinary, args...)
+	command.Dir = directory
+	command.Env = os.Environ()
+	output := newSelfUpdateTailBuffer(selfUpdateMaxCommandOutput)
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Run(); err != nil {
+		return "", fmt.Errorf("start Redlaunch rebuild helper: %w: %s", err, strings.TrimSpace(string(output.Bytes())))
+	}
+	return strings.TrimSpace(string(output.Bytes())), nil
 }
 
 type selfUpdateTailBuffer struct {

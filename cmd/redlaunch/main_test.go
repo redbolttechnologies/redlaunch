@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,6 +33,42 @@ func TestRunFailsClosedWithoutGoogleAuthentication(t *testing.T) {
 
 	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "Google authentication must be configured") {
 		t.Fatalf("run() error = %v, want missing Google authentication configuration error", err)
+	}
+}
+
+func TestRunSelfUpdateRequiresDirectory(t *testing.T) {
+	if err := runSelfUpdate(context.Background(), nil); err == nil {
+		t.Fatal("runSelfUpdate() without --directory returned nil error")
+	}
+}
+
+func TestRunSelfUpdatePullsThenRebuildsSynchronously(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "docker-compose.yml"), []byte("services:\n  app:\n    image: redlaunch:local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	callsDirectory := t.TempDir()
+	t.Setenv("SELF_UPDATE_CALLS_DIR", callsDirectory)
+	binDirectory := t.TempDir()
+	for _, name := range []string{"git", "docker"} {
+		script := "#!/bin/sh\necho \"$0 $@\" >> \"$SELF_UPDATE_CALLS_DIR/" + name + ".calls\"\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(binDirectory, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := runSelfUpdate(context.Background(), []string{"--directory", directory}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"git", "docker"} {
+		contents, err := os.ReadFile(filepath.Join(callsDirectory, name+".calls"))
+		if err != nil {
+			t.Fatalf("read %s calls: %v", name, err)
+		}
+		if strings.TrimSpace(string(contents)) == "" {
+			t.Fatalf("%s was not invoked by selfupdate-run", name)
+		}
 	}
 }
 

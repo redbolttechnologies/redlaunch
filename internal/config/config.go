@@ -27,6 +27,7 @@ type Config struct {
 	SystemdScope          string
 	BackupContainerName   string
 	BackupDockerBinary    string
+	RedlaunchImage        string
 	GoogleClientID        string
 	GoogleClientSecret    string
 	GoogleRedirectURL     string
@@ -58,6 +59,7 @@ func Load() (Config, error) {
 		SystemdScope:          valueOrDefault(environment, "SYSTEMD_SCOPE", "system"),
 		BackupContainerName:   valueOrDefault(environment, "BACKUP_CONTAINER_NAME", ""),
 		BackupDockerBinary:    valueOrDefault(environment, "BACKUP_DOCKER_BINARY", "/usr/bin/docker"),
+		RedlaunchImage:        strings.TrimSpace(valueOrDefault(environment, "REDLAUNCH_IMAGE", "redlaunch:local")),
 		GoogleClientID:        strings.TrimSpace(valueOrDefault(environment, "GOOGLE_CLIENT_ID", "")),
 		GoogleClientSecret:    valueOrDefault(environment, "GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:     strings.TrimSpace(valueOrDefault(environment, "GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/google/callback")),
@@ -97,6 +99,9 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.BackupDockerBinary) == "" {
 		return Config{}, errors.New("BACKUP_DOCKER_BINARY must not be empty")
+	}
+	if cfg.RedlaunchImage == "" || !validImageReference(cfg.RedlaunchImage) {
+		return Config{}, errors.New("REDLAUNCH_IMAGE is invalid")
 	}
 	if cfg.ManagementAccessMode != AccessModeSSHOnly && cfg.ManagementAccessMode != AccessModeManagedHTTPS {
 		return Config{}, errors.New("MANAGEMENT_ACCESS_MODE must be ssh-only or managed-https")
@@ -177,4 +182,22 @@ func validContainerName(value string) bool {
 		}
 	}
 	return value != ""
+}
+
+// validImageReference accepts Docker image references without whitespace or
+// shell metacharacters. Values only ever reach exec-style process arguments,
+// so this is defense in depth against a misconfigured tag.
+func validImageReference(value string) bool {
+	if value == "" || len(value) > 255 {
+		return false
+	}
+	for _, character := range value {
+		letter := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
+		digit := character >= '0' && character <= '9'
+		if letter || digit || strings.ContainsRune("_.:/@-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }

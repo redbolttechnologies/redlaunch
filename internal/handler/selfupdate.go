@@ -93,7 +93,10 @@ func (h *Handler) runSelfUpdateJob(ctx context.Context, job *selfUpdateJob) {
 		h.logger.Error("run self-update without an updater")
 		return
 	}
-	if err := h.selfUpdater.UpdateWithProgress(ctx, job.update); err != nil {
+	// The service pulls synchronously and then hands the container rebuild
+	// to a detached helper, so this job finishes before the manager
+	// restarts instead of being killed mid-recreate.
+	if err := h.selfUpdater.QueueUpdateWithProgress(ctx, job.update); err != nil {
 		job.fail(err)
 		snapshot := job.snapshot()
 		h.logger.Error("update Redlaunch", "stage", snapshot.ErrorStage, "error", err)

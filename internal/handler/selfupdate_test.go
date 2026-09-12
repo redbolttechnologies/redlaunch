@@ -22,7 +22,7 @@ type fakeSelfUpdater struct {
 	blocking bool
 }
 
-func (f *fakeSelfUpdater) UpdateWithProgress(ctx context.Context, progress func(stage, message string)) error {
+func (f *fakeSelfUpdater) QueueUpdateWithProgress(ctx context.Context, progress func(stage, message string)) error {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -125,7 +125,7 @@ func TestUpdateRedlaunchRequiresCSRFAndStartsJob(t *testing.T) {
 	if statusRecorder.Code != http.StatusOK {
 		t.Fatalf("GET /settings/update/status status = %d, want %d", statusRecorder.Code, http.StatusOK)
 	}
-	if body := statusRecorder.Body.String(); !strings.Contains(body, "Updating Redlaunch") && !strings.Contains(body, "Update complete") {
+	if body := statusRecorder.Body.String(); !strings.Contains(body, "Updating Redlaunch") && !strings.Contains(body, "Update started") {
 		t.Fatalf("GET /settings/update/status did not render progress: %s", body)
 	}
 }

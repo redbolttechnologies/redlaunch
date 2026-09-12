@@ -36,6 +36,8 @@ func main() {
 		switch os.Args[1] {
 		case "backup-run":
 			err = runBackup(ctx, os.Args[2:])
+		case "selfupdate-run":
+			err = runSelfUpdate(ctx, os.Args[2:])
 		case "auth-add-email", "add-authorized-email":
 			err = runAddAuthorizedEmail(ctx, os.Args[2:])
 		case "compose-project-name":
@@ -147,7 +149,10 @@ func run(ctx context.Context) error {
 	}
 	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
 
-	selfUpdater, err := service.NewSelfUpdateService(cfg.RedlaunchDir, "", "")
+	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
+		Directory:    cfg.RedlaunchDir,
+		UpdaterImage: cfg.RedlaunchImage,
+	})
 	if err != nil {
 		return fmt.Errorf("create self-update service: %w", err)
 	}
@@ -301,6 +306,34 @@ func runBackup(ctx context.Context, args []string) error {
 		return fmt.Errorf("create backup service: %w", err)
 	}
 	if _, err := backups.RunScheduledBackup(ctx, *applicationID, *serviceID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// runSelfUpdate executes the synchronous Redlaunch update (git pull followed
+// by `docker compose up -d --build`) for the given checkout. It is the entry
+// point of the detached rebuild-helper container spawned by the Settings
+// update action: the helper is not part of the Compose project, so recreating
+// the manager container does not terminate the rebuild mid-flight.
+func runSelfUpdate(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("redlaunch selfupdate-run", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	directory := flags.String("directory", "", "Redlaunch checkout directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*directory) == "" {
+		return errors.New("selfupdate directory is required")
+	}
+	if flags.NArg() != 0 {
+		return errors.New("selfupdate-run accepts no positional arguments")
+	}
+	updater, err := service.NewSelfUpdateService(*directory, "", "")
+	if err != nil {
+		return err
+	}
+	if err := updater.Update(ctx); err != nil {
 		return err
 	}
 	return nil

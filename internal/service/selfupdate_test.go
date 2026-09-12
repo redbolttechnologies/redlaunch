@@ -116,3 +116,63 @@ func TestNewSelfUpdateServiceRejectsEmptyAndRootDirectory(t *testing.T) {
 		t.Fatal("NewSelfUpdateService() with filesystem root returned nil error")
 	}
 }
+
+func TestNewSelfUpdateServiceWithOptionsRejectsInvalidImageAndSocket(t *testing.T) {
+	if _, err := NewSelfUpdateServiceWithOptions(SelfUpdateOptions{Directory: t.TempDir(), UpdaterImage: "bad image; rm -rf /"}); err == nil {
+		t.Fatal("NewSelfUpdateServiceWithOptions() with shell metacharacters in image returned nil error")
+	}
+	if _, err := NewSelfUpdateServiceWithOptions(SelfUpdateOptions{Directory: t.TempDir(), DockerSocket: "relative/socket.sock"}); err == nil {
+		t.Fatal("NewSelfUpdateServiceWithOptions() with relative socket returned nil error")
+	}
+}
+
+func TestQueueUpdatePullsThenStartsDetachedHelper(t *testing.T) {
+	directory := writeSelfUpdateFixture(t, "exit 0", "exit 0")
+
+	service, err := NewSelfUpdateService(directory, "git", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	if err := service.QueueUpdateWithProgress(context.Background(), func(stage, _ string) {
+		stages = append(stages, stage)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stages) != 2 || stages[0] != "pull" || stages[1] != "rebuild" {
+		t.Fatalf("progress stages = %v, want [pull rebuild]", stages)
+	}
+
+	gitCalls, _ := readSelfUpdateCalls(t, "git")
+	if !strings.HasSuffix(gitCalls, "git pull --ff-only") {
+		t.Fatalf("git invocation = %q, want suffix %q", gitCalls, "git pull --ff-only")
+	}
+	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
+	for _, expected := range []string{
+		"run --rm -d",
+		"selfupdate-run --directory",
+		"redlaunch:local",
+	} {
+		if !strings.Contains(dockerCalls, expected) {
+			t.Fatalf("docker invocation = %q, want it to contain %q", dockerCalls, expected)
+		}
+	}
+	if strings.Contains(dockerCalls, "compose up") {
+		t.Fatalf("docker invocation = %q, must not rebuild synchronously from the manager", dockerCalls)
+	}
+}
+
+func TestQueueUpdateStopsWhenGitPullFails(t *testing.T) {
+	directory := writeSelfUpdateFixture(t, "echo pull-failed >&2\nexit 1", "exit 0")
+
+	service, err := NewSelfUpdateService(directory, "git", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.QueueUpdateWithProgress(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "pull Redlaunch update") {
+		t.Fatalf("QueueUpdateWithProgress() error = %v, want pull failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("SELF_UPDATE_CALLS_DIR"), "docker.calls")); !os.IsNotExist(err) {
+		t.Fatal("detached helper started after a failed git pull")
+	}
+}

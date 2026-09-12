@@ -255,7 +255,7 @@ type githubActionsService interface {
 }
 
 type selfUpdateService interface {
-	UpdateWithProgress(context.Context, func(stage, message string)) error
+	QueueUpdateWithProgress(context.Context, func(stage, message string)) error
 }
 
 // ServerInfo contains the local machine identity shown in the application shell.

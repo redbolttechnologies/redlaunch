@@ -18,6 +18,7 @@ func setBackupConfigTestEnvironment(t *testing.T) {
 	t.Setenv("SYSTEMD_BINARY", "systemctl")
 	t.Setenv("SYSTEMD_SCOPE", "system")
 	t.Setenv("BACKUP_DOCKER_BINARY", "/usr/bin/docker")
+	t.Setenv("REDLAUNCH_IMAGE", "redlaunch:local")
 	t.Setenv("GOOGLE_CLIENT_ID", "")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "")
 	t.Setenv("GOOGLE_REDIRECT_URL", "")
@@ -132,6 +133,18 @@ func TestLoadRejectsUnsafeBackupContainerName(t *testing.T) {
 			t.Setenv("BACKUP_CONTAINER_NAME", value)
 			if _, err := Load(); err == nil {
 				t.Fatalf("Load() with BACKUP_CONTAINER_NAME=%q returned nil error", value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidRedlaunchImage(t *testing.T) {
+	for _, value := range []string{"", "redlaunch image:latest", "redlaunch;latest"} {
+		t.Run(value, func(t *testing.T) {
+			setBackupConfigTestEnvironment(t)
+			t.Setenv("REDLAUNCH_IMAGE", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() with REDLAUNCH_IMAGE=%q returned nil error", value)
 			}
 		})
 	}

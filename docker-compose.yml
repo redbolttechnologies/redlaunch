@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-    image: redlaunch:local
+    image: "${REDLAUNCH_IMAGE:-redlaunch:local}"
     container_name: redbolt-redlaunch
     # The manager follows the same managed-container rule as every other
     # managed project: it carries the redlaunch.managed label and loads both
@@ -38,6 +38,9 @@ services:
       # It is mounted at the identical host path so Compose bind mounts and the
       # build context resolve the same way inside the container and on the host.
       REDLAUNCH_DIR: "${REDLAUNCH_DIR:-${PWD}}"
+      # Image of the detached rebuild helper spawned by the Settings update
+      # action. Keep it aligned with the service image above.
+      REDLAUNCH_IMAGE: "${REDLAUNCH_IMAGE:-redlaunch:local}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URL: "${GOOGLE_REDIRECT_URL:-http://localhost:8080/auth/google/callback}"

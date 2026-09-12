@@ -6,9 +6,13 @@
         {{if eq .SelfUpdateProgress.State "complete"}}✓{{else if eq .SelfUpdateProgress.State "failed"}}!{{else}}…{{end}}
       </div>
       <div class="setup-progress-heading">
-        <h2 id="selfupdate-progress-title" data-progress-title>{{if eq .SelfUpdateProgress.State "complete"}}Update complete{{else if eq .SelfUpdateProgress.State "failed"}}Update stopped{{else}}Updating Redlaunch{{end}}</h2>
+        <h2 id="selfupdate-progress-title" data-progress-title>{{if eq .SelfUpdateProgress.State "complete"}}Update started{{else if eq .SelfUpdateProgress.State "failed"}}Update stopped{{else}}Updating Redlaunch{{end}}</h2>
       </div>
     </div>
+
+    {{if eq .SelfUpdateProgress.State "complete"}}
+    <p class="setup-progress-description" role="status">The latest version was pulled and the container rebuild is running in the background. Redlaunch will restart shortly; refresh this page in a moment.</p>
+    {{end}}
 
     <ol class="setup-progress-steps" aria-live="polite">
       {{range .SelfUpdateProgress.Steps}}

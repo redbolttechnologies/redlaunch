@@ -56,8 +56,9 @@ deployment.
 
 The same operation is available in the web interface: open **Settings**, find
 **Update Redlaunch**, and click **Update**. It pulls the latest version from
-GitHub and then runs `docker compose up -d --build` in the Redlaunch
-directory.
+GitHub and then rebuilds with `docker compose up -d --build` in the Redlaunch
+directory. The rebuild runs in a detached helper container and restarts
+Redlaunch, so refresh the page shortly after the update starts.
 
 For the GitHub Actions wizard, generated workflow, and secure handoff steps,
 see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
@@ -166,6 +167,7 @@ The main configuration values are:
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
 | `REDLAUNCH_DIR` | `.` (Compose defaults to `${PWD}`) | Redlaunch checkout directory used by the Settings update action |
+| `REDLAUNCH_IMAGE` | `redlaunch:local` | Image of the Redlaunch container and its detached Settings-update helper |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
 | `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies when TLS terminates in front of Redlaunch |
 | `MANAGEMENT_ACCESS_MODE` | `ssh-only` | `ssh-only` keeps the host listener private; `managed-https` requires a configured TLS proxy |
