@@ -100,6 +100,45 @@ func dashboardTimeISO(value time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
+func dashboardMetricsScope(scope string) string {
+	if scope == systemmetrics.ScopeVPS {
+		return "VPS"
+	}
+	return "manager"
+}
+
+// dashboardMetricsScopeDetail states what the scope label actually covers so
+// one label never implies a single resource scope. Aggregate CPU/memory come
+// from procfs files in the configured view (host-wide inside that view),
+// while the process tables only ever list the PIDs visible in this process's
+// namespace and disk follows the configured filesystem root.
+func dashboardMetricsScopeDetail(scope string) string {
+	if scope == systemmetrics.ScopeVPS {
+		return "host view from METRICS_PROC_ROOT and METRICS_FILESYSTEM_ROOT"
+	}
+	return "this process's view: aggregate procfs files, visible PIDs, configured filesystem"
+}
+
+func dashboardMetricAge(value time.Time) string {
+	if value.IsZero() {
+		return "unavailable"
+	}
+	age := time.Since(value)
+	if age < 0 {
+		age = 0
+	}
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%d min ago", int(age/time.Minute))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%d hr ago", int(age/time.Hour))
+	default:
+		return fmt.Sprintf("%d days ago", int(age/(24*time.Hour)))
+	}
+}
+
 type dashboardPageData struct {
 	Metrics systemmetrics.Snapshot
 	Error   string

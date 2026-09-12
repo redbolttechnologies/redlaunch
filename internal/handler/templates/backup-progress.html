@@ -1,0 +1,30 @@
+{{define "backup-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-backup-progress data-progress-content-selector=".service-details-page" data-close-url="{{.BackupProgress.CloseURL}}" data-state="{{.BackupProgress.State}}" data-status-url="{{.BackupProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="backup-progress-title" aria-busy="{{if eq .BackupProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.BackupProgress.State}}" aria-hidden="true">
+        {{if eq .BackupProgress.State "complete"}}✓{{else if eq .BackupProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="backup-progress-title" data-progress-title>{{if eq .BackupProgress.State "complete"}}{{if eq .BackupProgress.Operation "restore"}}Backup restored{{else}}Backup created{{end}}{{else if eq .BackupProgress.State "failed"}}Backup operation stopped{{else}}{{if eq .BackupProgress.Operation "restore"}}Restoring backup{{else}}Creating backup{{end}}{{end}}</h2>
+      </div>
+    </div>
+
+    {{if eq .BackupProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p>{{.BackupProgress.ErrorDetail}}</p>
+    </div>
+    {{else}}
+    <p class="setup-progress-description" role="status">{{if eq .BackupProgress.State "running"}}Database consistency is managed independently of this browser window.{{else}}The database operation completed successfully.{{end}}</p>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the backup progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

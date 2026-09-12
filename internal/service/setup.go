@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	applicationsDir = "applications"
-	coreDir         = "core"
-	proxyDir        = "proxy"
-	registryDir     = "registry"
-	setupMarker     = ".setup-complete"
-	varsEnvFile     = "vars.env"
-	secretsEnvFile  = "secrets.env"
-	envFileMode     = 0o600
+	applicationsDir        = "applications"
+	coreDir                = "core"
+	proxyDir               = "proxy"
+	registryDir            = "registry"
+	applicationNetworkName = "redlaunch-common"
+	setupMarker            = ".setup-complete"
+	varsEnvFile            = "vars.env"
+	secretsEnvFile         = "secrets.env"
+	envFileMode            = 0o600
 
 	proxyCompose = `services:
   proxy:
@@ -48,8 +49,8 @@ const (
 
 networks:
   redlaunch-common:
+    external: true
     name: redlaunch-common
-    driver: bridge
 
 volumes:
   caddy_data:
@@ -96,6 +97,10 @@ type SetupService struct {
 
 type composeRunner interface {
 	Up(ctx context.Context, projectDir string) error
+}
+
+type composeNetworkEnsurer interface {
+	EnsureNetwork(context.Context, string) error
 }
 
 // NewSetupService constructs a setup service for the configured projects root.
@@ -164,15 +169,22 @@ func (s *SetupService) EnsureRegistry(ctx context.Context) error {
 	if err := s.initializeLocked(); err != nil {
 		return err
 	}
-	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
-	composePath := filepath.Join(directory, "compose.yaml")
-	if info, err := os.Lstat(composePath); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return errors.New("registry Compose file is not a regular file")
+	if networkEnsurer, ok := s.runner.(composeNetworkEnsurer); ok {
+		if err := networkEnsurer.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+			return fmt.Errorf("ensure application network: %w", err)
 		}
-		return s.runner.Up(ctx, directory)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect registry Compose file: %w", err)
+	}
+	directory := filepath.Join(s.projectsRoot, coreDir, registryDir)
+	for _, name := range supportedComposeFileNames() {
+		composePath := filepath.Join(directory, name)
+		if info, err := os.Lstat(composePath); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return errors.New("registry Compose file is not a regular file")
+			}
+			return s.runner.Up(ctx, directory)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect registry Compose file: %w", err)
+		}
 	}
 	return s.installRegistry(ctx, nil)
 }
@@ -186,6 +198,11 @@ func (s *SetupService) SetupWithProgress(ctx context.Context, installProxy, inst
 	reportSetupProgress(progress, "directories", "Creating managed application and core directories")
 	if err := s.initializeLocked(); err != nil {
 		return err
+	}
+	if networkEnsurer, ok := s.runner.(composeNetworkEnsurer); ok {
+		if err := networkEnsurer.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+			return fmt.Errorf("ensure application network: %w", err)
+		}
 	}
 
 	if installProxy {
@@ -234,7 +251,7 @@ func (s *SetupService) installProxy(ctx context.Context, progress func(stage, me
 	if err := writeEmptyEnvironmentFiles(directory); err != nil {
 		return fmt.Errorf("write proxy environment files: %w", err)
 	}
-	if err := writeManagedFile(filepath.Join(directory, "compose.yaml"), proxyCompose, 0o644); err != nil {
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), proxyCompose, 0o644); err != nil {
 		return fmt.Errorf("write proxy Compose file: %w", err)
 	}
 	if err := writeManagedFile(filepath.Join(directory, "Caddyfile"), "# Routes managed by Redlaunch.\n", 0o644); err != nil {
@@ -255,7 +272,7 @@ func (s *SetupService) installRegistry(ctx context.Context, progress func(stage,
 	if err := writeEmptyEnvironmentFiles(directory); err != nil {
 		return fmt.Errorf("write registry environment files: %w", err)
 	}
-	if err := writeManagedFile(filepath.Join(directory, "compose.yaml"), registryCompose, 0o644); err != nil {
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), registryCompose, 0o644); err != nil {
 		return fmt.Errorf("write registry Compose file: %w", err)
 	}
 	reportSetupProgress(progress, "registry-start", "Starting the Docker Registry with Docker Compose")
@@ -319,6 +336,14 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 		_ = temporary.Close()
 		return err
 	}
+	// Sync the replacement before renaming so a crash cannot leave a
+	// truncated file at the target path, then sync the parent directory so
+	// the rename itself is durable. In-place bind-mount writes keep their own
+	// sync path in writeManagedFileInPlace.
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
@@ -326,6 +351,9 @@ func writeManagedFile(path, contents string, mode os.FileMode) error {
 		return err
 	}
 	removeTemporary = false
+	if err := syncDirectory(directory); err != nil {
+		return err
+	}
 	return nil
 }
 

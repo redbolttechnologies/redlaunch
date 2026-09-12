@@ -2,11 +2,64 @@ package store
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"redlaunch/internal/application"
 )
+
+func TestPhaseZeroMigrationFixtureCoversLegacyMetadata(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	fixture, err := os.ReadFile("testdata/phase0_migration.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(t.Context(), string(fixture)); err != nil {
+		t.Fatalf("load Phase 0 migration fixture: %v", err)
+	}
+
+	item, err := database.Get(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.FolderName != "proxy" {
+		t.Fatalf("fixture application folder = %q, want colliding proxy name", item.FolderName)
+	}
+	services, err := database.ListServices(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 2 || services[0].Type != application.ServiceTypePostgreSQL || services[1].Type != application.ServiceTypePostgreSQL {
+		t.Fatalf("fixture services = %#v, want two PostgreSQL services", services)
+	}
+	domains, err := database.ListDomains(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 1 {
+		t.Fatalf("fixture domains = %#v, want one", domains)
+	}
+	routings, err := database.ListRoutings(t.Context(), item.ID, domains[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routings) != 1 || routings[0].ServiceName != "db-primary" || routings[0].ServicePort != 80 {
+		t.Fatalf("fixture routings = %#v, want db-primary route", routings)
+	}
+	schedule, err := database.GetBackupSchedule(t.Context(), services[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !schedule.Enabled {
+		t.Fatal("fixture backup timer is disabled, want enabled")
+	}
+}
 
 func TestStoreApplicationRoundTrip(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
@@ -326,6 +379,45 @@ func TestStoreCreatesRedisServiceMetadataWithoutSecret(t *testing.T) {
 	}
 }
 
+func TestStoreCreateServicesIsAtomic(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	created, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	services, err := database.CreateServices(t.Context(), []application.Service{
+		{ApplicationID: created.ID, Name: "web", Type: application.ServiceTypeApplication, ImageName: "nginx:1.27"},
+		{ApplicationID: created.ID, Name: "worker", Type: application.ServiceTypeApplication, ImageName: "busybox:1.36"},
+	})
+	if err != nil || len(services) != 2 {
+		t.Fatalf("CreateServices() = (%#v, %v), want two services", services, err)
+	}
+
+	if _, err := database.CreateServices(t.Context(), []application.Service{
+		{ApplicationID: created.ID, Name: "transient", Type: application.ServiceTypeApplication},
+		{ApplicationID: created.ID, Name: "web", Type: application.ServiceTypeApplication},
+	}); !errors.Is(err, application.ErrServiceAlreadyExists) {
+		t.Fatalf("CreateServices(duplicate) error = %v, want %v", err, application.ErrServiceAlreadyExists)
+	}
+	loaded, err := database.ListServices(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("services after atomic failure = %#v, want original two services", loaded)
+	}
+	for _, item := range loaded {
+		if item.Name == "transient" {
+			t.Fatal("atomic service transaction left the first insert behind")
+		}
+	}
+}
+
 func TestStoreCreatesApplicationContainerMetadata(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {
@@ -540,6 +632,7 @@ func TestStoreCreatesListsUpdatesAndDeletesApplicationRoutings(t *testing.T) {
 		Subdomain:     "api",
 		Path:          "/register",
 		ServiceName:   "identity",
+		ServicePort:   3000,
 		ServicePath:   "/",
 	})
 	if err != nil {
@@ -553,7 +646,7 @@ func TestStoreCreatesListsUpdatesAndDeletesApplicationRoutings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routings) != 1 || routings[0].ID != routing.ID || routings[0].DomainName != "example.com" || routings[0].Subdomain != "api" || routings[0].Path != "/register" || routings[0].ServiceName != "identity" || routings[0].ServicePath != "/" {
+	if len(routings) != 1 || routings[0].ID != routing.ID || routings[0].DomainName != "example.com" || routings[0].Subdomain != "api" || routings[0].Path != "/register" || routings[0].ServiceName != "identity" || routings[0].ServicePort != 3000 || routings[0].ServicePath != "/" {
 		t.Fatalf("ListRoutings() = %#v, want persisted routing with domain name", routings)
 	}
 	if _, err := database.CreateRouting(t.Context(), application.Routing{ApplicationID: created.ID, DomainID: domain.ID, Subdomain: "API", Path: "/register", ServiceName: "other", ServicePath: "/"}); !errors.Is(err, application.ErrRoutingAlreadyExists) {
@@ -563,6 +656,7 @@ func TestStoreCreatesListsUpdatesAndDeletesApplicationRoutings(t *testing.T) {
 	routing.Subdomain = ""
 	routing.Path = "/"
 	routing.ServiceName = "frontend"
+	routing.ServicePort = 8080
 	routing.ServicePath = "/app"
 	if err := database.UpdateRouting(t.Context(), routing); err != nil {
 		t.Fatal(err)
@@ -571,7 +665,7 @@ func TestStoreCreatesListsUpdatesAndDeletesApplicationRoutings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DomainName != "example.com" || got.Subdomain != "" || got.Path != "/" || got.ServiceName != "frontend" || got.ServicePath != "/app" {
+	if got.DomainName != "example.com" || got.Subdomain != "" || got.Path != "/" || got.ServiceName != "frontend" || got.ServicePort != 8080 || got.ServicePath != "/app" {
 		t.Fatalf("GetRouting() = %#v, want updated routing", got)
 	}
 

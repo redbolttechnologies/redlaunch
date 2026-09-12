@@ -69,6 +69,9 @@ func (m Manager) Install(ctx context.Context, serviceUnitName, serviceContents, 
 	if err := validateUnitName(timerUnitName); err != nil {
 		return err
 	}
+	if err := m.checkControllerBinary(); err != nil {
+		return err
+	}
 	if err := ensureUnitDirectory(m.UnitDirectory); err != nil {
 		return fmt.Errorf("ensure systemd unit directory: %w", err)
 	}
@@ -95,6 +98,9 @@ func (m Manager) Disable(ctx context.Context, serviceUnitName, timerUnitName str
 	if err := validateUnitName(timerUnitName); err != nil {
 		return err
 	}
+	if err := m.checkControllerBinary(); err != nil {
+		return err
+	}
 	if err := m.run(ctx, "disable", "--now", timerUnitName); err != nil {
 		return fmt.Errorf("disable systemd timer: %w", err)
 	}
@@ -113,11 +119,33 @@ func (m Manager) Disable(ctx context.Context, serviceUnitName, timerUnitName str
 	return nil
 }
 
-func (m Manager) run(ctx context.Context, args ...string) error {
-	binary := m.Binary
-	if binary == "" {
-		binary = "systemctl"
+// resolveBinary returns the configured controller binary, defaulting to
+// systemctl for direct host execution.
+func (m Manager) resolveBinary() string {
+	if strings.TrimSpace(m.Binary) == "" {
+		return "systemctl"
 	}
+	return m.Binary
+}
+
+// checkControllerBinary verifies the configured controller exists before any
+// unit files are written or removed. Install calls this first so a missing
+// controller (for example, the host default "systemctl" inside the Alpine
+// manager container, which must use "/usr/bin/dbus-send" instead) fails
+// without leaving orphan unit files behind. The returned error always wraps
+// exec.ErrNotFound so callers can map a missing controller to an unavailable
+// scheduler, whether the binary was given as a bare name (PATH lookup) or an
+// absolute path (stat).
+func (m Manager) checkControllerBinary() error {
+	binary := m.resolveBinary()
+	if _, err := exec.LookPath(binary); err != nil {
+		return fmt.Errorf("systemd controller %q: %w", binary, errors.Join(err, exec.ErrNotFound))
+	}
+	return nil
+}
+
+func (m Manager) run(ctx context.Context, args ...string) error {
+	binary := m.resolveBinary()
 	if filepath.Base(binary) == "dbus-send" {
 		return m.runDBus(ctx, binary, args...)
 	}

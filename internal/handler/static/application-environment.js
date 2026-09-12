@@ -239,6 +239,8 @@
 
   const nameInput = dialog.querySelector("#secret-edit-name");
   const valueInput = dialog.querySelector("#secret-edit-value");
+  const clearInput = dialog.querySelector("[data-secret-clear]");
+  const clearWrap = dialog.querySelector("[data-secret-clear-wrap]");
   const operationInput = dialog.querySelector("[name=operation]");
   const originalNameInput = dialog.querySelector("[name=original_name]");
   const title = dialog.querySelector("[data-secret-edit-title]");
@@ -315,6 +317,12 @@
       submitButton.textContent = "Save";
     }
     setSecretVisibility(false);
+    if (clearInput) {
+      clearInput.checked = false;
+    }
+    if (clearWrap) {
+      clearWrap.toggleAttribute("hidden", adding);
+    }
   };
 
   const openEditDialog = (button) => {
@@ -328,7 +336,10 @@
       nameInput.value = button.dataset.secretKey || "";
     }
     if (valueInput) {
-      valueInput.value = button.dataset.secretValue || "";
+      valueInput.value = "";
+    }
+    if (clearInput) {
+      clearInput.checked = false;
     }
     showDialog();
   };
@@ -382,8 +393,19 @@
       const secret = generateSecret();
       if (valueInput && secret) {
         valueInput.value = secret;
+        if (clearInput) {
+          clearInput.checked = false;
+        }
         setSecretVisibility(false);
         valueInput.focus();
+      }
+    });
+  }
+
+  if (valueInput && clearInput) {
+    valueInput.addEventListener("input", () => {
+      if (valueInput.value !== "") {
+        clearInput.checked = false;
       }
     });
   }

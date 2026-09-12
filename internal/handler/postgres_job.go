@@ -65,9 +65,14 @@ func newPostgresJobStore() *postgresJobStore {
 }
 
 func (s *postgresJobStore) create(applicationID int64) (*postgresJob, error) {
+	job, _, err := s.createUnique(applicationID)
+	return job, err
+}
+
+func (s *postgresJobStore) createUnique(applicationID int64) (*postgresJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &postgresJob{
 		id:            id,
@@ -81,14 +86,19 @@ func (s *postgresJobStore) create(applicationID int64) (*postgresJob, error) {
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		existingApplicationID := existing.applicationID
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if existingApplicationID == applicationID && state == postgresJobStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > postgresJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *postgresJobStore) get(applicationID int64, id string) *postgresJob {
@@ -105,6 +115,19 @@ func (s *postgresJobStore) get(applicationID int64, id string) *postgresJob {
 		return nil
 	}
 	return job
+}
+
+func (s *postgresJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > postgresJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *postgresJob) update(stage, _ string) {
@@ -197,17 +220,17 @@ func postgresJobSteps() []postgresJobStep {
 	}
 }
 
-func (h *Handler) runPostgresJob(job *postgresJob, input application.PostgreSQLServiceInput) {
+func (h *Handler) runPostgresJob(ctx context.Context, job *postgresJob, input application.PostgreSQLServiceInput) {
 	defer func() {
 		input.DatabasePassword = ""
 	}()
 
 	var err error
 	if manager, ok := h.postgresManager.(postgresqlProgressService); ok {
-		_, err = manager.CreatePostgreSQLServiceWithProgress(context.Background(), job.applicationID, input, job.update)
+		_, err = manager.CreatePostgreSQLServiceWithProgress(ctx, job.applicationID, input, job.update)
 	} else {
 		job.update("configuration", "Preparing PostgreSQL configuration")
-		_, err = h.postgresManager.CreatePostgreSQLService(context.Background(), job.applicationID, input)
+		_, err = h.postgresManager.CreatePostgreSQLService(ctx, job.applicationID, input)
 	}
 	if err != nil {
 		job.fail(err)

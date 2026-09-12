@@ -13,7 +13,7 @@ import (
 	"redlaunch/internal/application"
 )
 
-const redlaunchPublicUpstream = "http://host.docker.internal:8080"
+const defaultManagementPort = 8080
 
 // GetRedlaunchPublicAccess returns the installation-wide public-access
 // settings shown on the application settings tab.
@@ -36,8 +36,11 @@ func (s *Applications) UpdateRedlaunchPublicAccess(ctx context.Context, input ap
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireProxyProject(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	previous, err := s.settingsRepository.GetRedlaunchPublicAccess(ctx)
 	if err != nil {
@@ -52,7 +55,7 @@ func (s *Applications) UpdateRedlaunchPublicAccess(ctx context.Context, input ap
 	if !previous.Enabled && !settings.Enabled {
 		return nil
 	}
-	if err := s.refreshProxyConfiguration(ctx); err != nil {
+	if err := s.refreshProxyConfigurationLocked(ctx); err != nil {
 		if rollbackErr := s.settingsRepository.UpdateRedlaunchPublicAccess(ctx, previous); rollbackErr != nil {
 			return fmt.Errorf("apply Caddy Redlaunch configuration: %w (rollback settings: %v)", err, rollbackErr)
 		}
@@ -73,6 +76,12 @@ func (s *Applications) ListRoutings(ctx context.Context, applicationID, domainID
 // CreateRouting validates and persists one mapping, then applies the complete
 // routing set to the shared Caddy proxy.
 func (s *Applications) CreateRouting(ctx context.Context, applicationID, domainID int64, input application.RoutingInput) (application.Routing, error) {
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Routing{}, err
+	}
+	defer lease.release()
+
 	item, err := s.prepareRouting(ctx, applicationID, domainID, input)
 	if err != nil {
 		return application.Routing{}, err
@@ -80,9 +89,6 @@ func (s *Applications) CreateRouting(ctx context.Context, applicationID, domainI
 	if s.routingRepository == nil {
 		return application.Routing{}, errors.New("application routing repository is not configured")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	created, err := s.routingRepository.CreateRouting(ctx, item)
 	if err != nil {
@@ -102,6 +108,12 @@ func (s *Applications) CreateRouting(ctx context.Context, applicationID, domainI
 // UpdateRouting validates and updates one mapping, then applies the complete
 // routing set to the shared Caddy proxy.
 func (s *Applications) UpdateRouting(ctx context.Context, applicationID, domainID, routingID int64, input application.RoutingInput) error {
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+
 	item, err := s.prepareRouting(ctx, applicationID, domainID, input)
 	if err != nil {
 		return err
@@ -109,9 +121,6 @@ func (s *Applications) UpdateRouting(ctx context.Context, applicationID, domainI
 	if s.routingRepository == nil {
 		return errors.New("application routing repository is not configured")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	previous, err := s.routingRepository.GetRouting(ctx, applicationID, domainID, routingID)
 	if err != nil {
@@ -138,8 +147,11 @@ func (s *Applications) DeleteRouting(ctx context.Context, applicationID, domainI
 		return errors.New("application routing repository is not configured")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
 
 	previous, err := s.routingRepository.GetRouting(ctx, applicationID, domainID, routingID)
 	if err != nil {
@@ -190,6 +202,10 @@ func (s *Applications) prepareRouting(ctx context.Context, applicationID, domain
 	if err != nil {
 		return application.Routing{}, err
 	}
+	servicePort, err := application.ValidateRoutingPort(input.ServicePort)
+	if err != nil {
+		return application.Routing{}, err
+	}
 	servicePath, err := application.ValidateRoutingPath(input.ServicePath)
 	if err != nil {
 		return application.Routing{}, err
@@ -208,6 +224,7 @@ func (s *Applications) prepareRouting(ctx context.Context, applicationID, domain
 		Subdomain:     subdomain,
 		Path:          path,
 		ServiceName:   serviceName,
+		ServicePort:   servicePort,
 		ServicePath:   servicePath,
 	}, nil
 }
@@ -229,13 +246,28 @@ func routingHost(domainName, subdomain string) string {
 }
 
 func routingUpstream(item application.Routing) string {
-	return managedContainerNamePrefix + strconv.FormatInt(item.ApplicationID, 10) + "-" + item.ServiceName
+	port, err := application.ValidateRoutingPort(item.ServicePort)
+	if err != nil {
+		port = 80
+	}
+	return managedContainerNamePrefix + strconv.FormatInt(item.ApplicationID, 10) + "-" + item.ServiceName + ":" + strconv.Itoa(port)
+}
+
+func managementUpstream(port int) string {
+	if port < 1 || port > 65535 {
+		port = defaultManagementPort
+	}
+	return "http://host.docker.internal:" + strconv.Itoa(port)
 }
 
 // renderCaddyfile creates the complete Caddy configuration for all persisted
 // mappings. Host blocks are grouped so mappings for the same host share one
 // Caddy site, and longer path matchers are evaluated first.
 func renderCaddyfile(routings []application.Routing, publicAccess application.RedlaunchPublicAccess) string {
+	return renderCaddyfileWithManagementPort(routings, publicAccess, defaultManagementPort)
+}
+
+func renderCaddyfileWithManagementPort(routings []application.Routing, publicAccess application.RedlaunchPublicAccess, managementPort int) string {
 	byHost := make(map[string][]application.Routing)
 	for _, item := range routings {
 		host := routingHost(item.DomainName, item.Subdomain)
@@ -291,7 +323,7 @@ func renderCaddyfile(routings []application.Routing, publicAccess application.Re
 		if publicAccess.Enabled && publicAccess.Domain == host {
 			builder.WriteString("    handle {\n")
 			builder.WriteString("        reverse_proxy ")
-			builder.WriteString(redlaunchPublicUpstream)
+			builder.WriteString(managementUpstream(managementPort))
 			builder.WriteString("\n")
 			builder.WriteString("    }\n")
 		}
@@ -301,6 +333,15 @@ func renderCaddyfile(routings []application.Routing, publicAccess application.Re
 }
 
 func (s *Applications) refreshProxyConfiguration(ctx context.Context) error {
+	lease, err := s.acquireProxyProject(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+	return s.refreshProxyConfigurationLocked(ctx)
+}
+
+func (s *Applications) refreshProxyConfigurationLocked(ctx context.Context) error {
 	if s.routingRepository == nil {
 		return errors.New("application routing repository is not configured")
 	}
@@ -350,7 +391,7 @@ func (s *Applications) refreshProxyConfiguration(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read Caddyfile: %w", err)
 	}
-	configuration := renderCaddyfile(routings, publicAccess)
+	configuration := renderCaddyfileWithManagementPort(routings, publicAccess, s.managementPort)
 	caddyChanged := !caddySnapshot.exists || string(caddySnapshot.contents) != configuration
 	if !composeChanged && !caddyChanged {
 		return nil
@@ -409,7 +450,7 @@ func restoreCaddyfile(snapshot managedFileSnapshot) error {
 }
 
 func findProxyComposePath(directory string) (string, error) {
-	for _, name := range []string{"compose.yml", "compose.yaml"} {
+	for _, name := range supportedComposeFileNames() {
 		path := filepath.Join(directory, name)
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {

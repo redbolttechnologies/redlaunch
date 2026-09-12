@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
   {{if .DashboardPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
-  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .GitHubActionsProgress}}<script src="/static/setup.js" defer></script>{{end}}
+  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .GitHubActionsProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-settings.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script>{{end}}

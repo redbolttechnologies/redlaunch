@@ -4,6 +4,16 @@ services:
       context: .
     image: redlaunch:local
     container_name: redbolt-redlaunch
+    # The manager follows the same managed-container rule as every other
+    # managed project: it carries the redlaunch.managed label and loads both
+    # the non-secret vars.env and the secret secrets.env files.
+    labels:
+      redlaunch.managed: "true"
+    env_file:
+      - path: ./vars.env
+        required: false
+      - path: ./secrets.env
+        required: false
     restart: unless-stopped
     init: true
     read_only: true
@@ -13,7 +23,6 @@ services:
     tmpfs:
       - /tmp
     environment:
-      HTTP_ADDR: ":8080"
       DB_PATH: "/data/redlaunch.db"
       # Compose is invoked from inside this container but talks to the host
       # Docker daemon. Keep the managed-project path identical in both
@@ -29,9 +38,19 @@ services:
       GOOGLE_REDIRECT_URL: "${GOOGLE_REDIRECT_URL:-http://localhost:8080/auth/google/callback}"
       AUTH_SESSION_SECRET: "${AUTH_SESSION_SECRET:-}"
       AUTH_COOKIE_SECURE: "${AUTH_COOKIE_SECURE:-false}"
+      MANAGEMENT_ACCESS_MODE: "${MANAGEMENT_ACCESS_MODE:-ssh-only}"
+      # The bundled container reports resources visible to the manager. VPS
+      # scope requires deliberate read-only host mounts and matching paths.
+      METRICS_SCOPE: "${METRICS_SCOPE:-manager}"
+      METRICS_PROC_ROOT: "${METRICS_PROC_ROOT:-}"
+      METRICS_FILESYSTEM_ROOT: "${METRICS_FILESYSTEM_ROOT:-}"
+      # Keep the container listener aligned with the host port so managed
+      # Caddy routing through host.docker.internal works when APP_PORT is
+      # changed from the default.
+      HTTP_ADDR: "0.0.0.0:${APP_PORT:-8080}"
       DOCKER_CONFIG: "/tmp/docker"
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:${APP_PORT:-8080}"
     volumes:
       - app-data:/data
       - "${PROJECTS_ROOT:-${PWD}/projects}:${PROJECTS_ROOT:-${PWD}/projects}"

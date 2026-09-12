@@ -42,29 +42,52 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 		return application.Service{}, errors.New("application service repository is not configured")
 	}
 
-	item, err := s.detailsRepository.Get(ctx, applicationID)
-	if err != nil {
-		return application.Service{}, err
-	}
-
 	normalizedInput, err := normalizeApplicationServiceInput(input)
 	if err != nil {
 		return application.Service{}, err
 	}
 	serviceName := normalizedInput.ServiceName
 	imageName := normalizedInput.ImageName
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return application.Service{}, err
+	}
 	if err := s.validateApplicationServiceDependencies(ctx, item.ID, serviceName, normalizedInput.DependsOn); err != nil {
 		return application.Service{}, err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return application.Service{}, err
 	}
-	composePath := filepath.Join(directory, "compose.yml")
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return application.Service{}, errors.New("application Compose file does not exist")
+	}
+	// Enforce the shared project-aware mount policy against the live
+	// filesystem before mutating anything: lexical validation alone cannot see
+	// a subdirectory symlink pointing outside the project or at a
+	// manager-owned file.
+	for _, mapping := range normalizedInput.VolumeMappings {
+		if _, named := composeNamedVolume(mapping.Source); named {
+			continue
+		}
+		if err := validateResolvedBindSource(directory, mapping.Source); err != nil {
+			return application.Service{}, err
+		}
+	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
 	composeSnapshot, err := snapshotManagedFile(composePath)
@@ -101,6 +124,9 @@ func (s *Applications) CreateApplicationServiceWithProgress(ctx context.Context,
 		_ = restoreManagedFile(composeSnapshot)
 		_ = restoreManagedFile(varsSnapshot)
 		return application.Service{}, fmt.Errorf("write application secrets file: %w", err)
+	}
+	if err := s.validateStagedCompose(ctx, directory); err != nil {
+		return application.Service{}, errors.Join(err, restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot))
 	}
 
 	reportApplicationContainerProgress(progress, "metadata", "Saving application container metadata")
@@ -409,6 +435,12 @@ func validateApplicationVolumeSource(value string) error {
 		return nil
 	}
 	if value != "." && !strings.HasPrefix(value, "./") {
+		return application.ErrApplicationVolumeSourceInvalid
+	}
+	// The project directory itself must never be exposed to a workload: a
+	// writable root mount lets the container replace sibling managed files
+	// such as compose.yml and secrets.env.
+	if path.Clean(value) == "." {
 		return application.ErrApplicationVolumeSourceInvalid
 	}
 	clean := path.Clean(value)

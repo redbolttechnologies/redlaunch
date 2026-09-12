@@ -55,16 +55,11 @@ func (h *Handler) proxyAction(w http.ResponseWriter, r *http.Request, action str
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The proxy action request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This proxy action page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -105,11 +100,30 @@ func (h *Handler) downloadProxyLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logsService, ok := h.proxyManager.(proxyFullLogsService)
-	if !ok {
+	logsService, hasLegacyLogs := h.proxyManager.(proxyFullLogsService)
+	streamer, hasStream := h.proxyManager.(proxyLogStreamService)
+	if !hasLegacyLogs && !hasStream {
 		http.Error(w, "Proxy log downloads are not configured.", http.StatusInternalServerError)
 		return
 	}
+	release, err := h.acquireLogDownload(r.Context())
+	if err != nil {
+		http.Error(w, "Too many log downloads are active. Try again shortly.", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
+
+	if hasStream {
+		stream, err := streamer.OpenProxyLogs(r.Context())
+		if err != nil {
+			h.logger.Error("open full proxy log stream", "error", err)
+			http.Error(w, "The proxy logs could not be read.", http.StatusInternalServerError)
+			return
+		}
+		h.writeLogDownload(w, stream, "proxy-logs.txt", "proxy")
+		return
+	}
+
 	logs, err := logsService.GetProxyFullLogs(r.Context())
 	if err != nil {
 		h.logger.Error("get full proxy logs", "error", err)
@@ -128,19 +142,8 @@ func (h *Handler) downloadProxyLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeProxyPage(w http.ResponseWriter, r *http.Request, status int, data proxyPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
+	csrfToken := h.setCSRFCookie(w, r)
 	data.CSRFToken = csrfToken
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
 	w.Header().Set("Cache-Control", "no-store")
 	page := h.shellPageData(r)
 	page.ActivePage = "proxy"

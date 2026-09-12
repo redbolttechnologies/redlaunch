@@ -24,7 +24,6 @@ const (
 	githubActionsJobStepFailed    = "failed"
 
 	githubActionsJobRetention = time.Hour
-	githubActionsJobTimeout   = 15 * time.Minute
 )
 
 type githubActionsProgressService interface {
@@ -134,6 +133,19 @@ func (s *githubActionsJobStore) get(applicationID int64, id string) *githubActio
 		return nil
 	}
 	return job
+}
+
+func (s *githubActionsJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > githubActionsJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *githubActionsJob) update(stage, _ string) {
@@ -280,14 +292,10 @@ func githubActionsJobSteps(operation string) []githubActionsJobStep {
 	}
 }
 
-func (h *Handler) startGitHubActionsConfigureJob(job *githubActionsJob, input application.GitHubActionsInput) {
-	h.githubActionsJobWorkers.Add(1)
-	go func() {
-		defer h.githubActionsJobWorkers.Done()
-		ctx, cancel := context.WithTimeout(h.githubActionsJobContext, githubActionsJobTimeout)
-		defer cancel()
+func (h *Handler) startGitHubActionsConfigureJob(job *githubActionsJob, input application.GitHubActionsInput) error {
+	return h.startTrackedJob("github-actions:"+strconv.FormatInt(job.applicationID, 10), func(ctx context.Context) {
 		h.runGitHubActionsConfigureJob(ctx, job, input)
-	}()
+	})
 }
 
 func (h *Handler) runGitHubActionsConfigureJob(ctx context.Context, job *githubActionsJob, input application.GitHubActionsInput) {
@@ -310,14 +318,10 @@ func (h *Handler) runGitHubActionsConfigureJob(ctx context.Context, job *githubA
 	job.complete(setup)
 }
 
-func (h *Handler) startGitHubActionsRevokeJob(job *githubActionsJob) {
-	h.githubActionsJobWorkers.Add(1)
-	go func() {
-		defer h.githubActionsJobWorkers.Done()
-		ctx, cancel := context.WithTimeout(h.githubActionsJobContext, githubActionsJobTimeout)
-		defer cancel()
+func (h *Handler) startGitHubActionsRevokeJob(job *githubActionsJob) error {
+	return h.startTrackedJob("github-actions:"+strconv.FormatInt(job.applicationID, 10), func(ctx context.Context) {
 		h.runGitHubActionsRevokeJob(ctx, job)
-	}()
+	})
 }
 
 func (h *Handler) runGitHubActionsRevokeJob(ctx context.Context, job *githubActionsJob) {
@@ -337,21 +341,13 @@ func (h *Handler) runGitHubActionsRevokeJob(ctx context.Context, job *githubActi
 	job.completeRevoke()
 }
 
-// Shutdown cancels in-flight GitHub Actions provisioning jobs and waits for
-// their workers before infrastructure dependencies such as SQLite are closed.
+// Shutdown cancels every tracked operation and waits for its workers before
+// infrastructure dependencies such as SQLite are closed.
 func (h *Handler) Shutdown(ctx context.Context) error {
-	h.githubActionsJobCancel()
-	done := make(chan struct{})
-	go func() {
-		h.githubActionsJobWorkers.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
+	if h.jobs == nil {
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	return h.jobs.shutdown(ctx)
 }
 
 func (h *Handler) githubActionsProgress(applicationID int64, jobID string) (*githubActionsProgressData, bool) {

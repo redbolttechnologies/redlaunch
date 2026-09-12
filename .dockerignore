@@ -1,10 +1,42 @@
+# Keep repository history, local state, and credential variants out of the
+# Docker build context. Only go.mod, go.sum, cmd/, and internal/ are copied
+# into the builder (see Dockerfile); this file is defense in depth so a
+# future COPY cannot pick them up.
+.git/
+.github/
+bin/
+data/
+projects/
+backups/
 /backups/
-/bin/
-/data/
-/projects/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.bak
+*.backup
+*.dump
 .env
+.env.*
 vars.env
+vars.env.*
 secrets.env
+secrets.env.*
+credentials*.json
+*service-account*.json
+application_default_credentials.json
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store

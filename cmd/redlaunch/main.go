@@ -6,9 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -36,6 +38,8 @@ func main() {
 			err = runBackup(ctx, os.Args[2:])
 		case "auth-add-email", "add-authorized-email":
 			err = runAddAuthorizedEmail(ctx, os.Args[2:])
+		case "compose-project-name":
+			err = runComposeProjectName(os.Args[2:], os.Stdout)
 		default:
 			err = run(ctx)
 		}
@@ -48,12 +52,32 @@ func main() {
 	}
 }
 
+func runComposeProjectName(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("redlaunch compose-project-name", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	directory := flags.String("directory", "", "managed project directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*directory) == "" {
+		return errors.New("compose project directory is required")
+	}
+	if flags.NArg() != 0 {
+		return errors.New("compose-project-name accepts no positional arguments")
+	}
+	_, err := fmt.Fprintln(output, compose.ProjectName(*directory))
+	return err
+}
+
 func run(ctx context.Context) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+	if cfg.MetricsScope == config.MetricsScopeVPS && cfg.MetricsProcRoot == "" && cfg.MetricsFilesystemRoot == "" {
+		logger.Warn("METRICS_SCOPE=vps uses the default /proc and / paths without explicit host mounts; dashboard values describe this process's view unless METRICS_PROC_ROOT and METRICS_FILESYSTEM_ROOT point at host mounts (Docker) or the binary runs directly on the VPS")
 	}
 	if !cfg.GoogleAuthEnabled() {
 		return errors.New("Google authentication must be configured before starting Redlaunch")
@@ -77,7 +101,9 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	applications, err := service.NewApplications(database, cfg.ProjectsRoot, compose.CommandRunner{})
+	applications, err := service.NewApplicationsWithOptions(database, cfg.ProjectsRoot, service.ApplicationsOptions{
+		ManagementHTTPAddr: cfg.HTTPAddr,
+	}, compose.CommandRunner{})
 	if err != nil {
 		return fmt.Errorf("create application service: %w", err)
 	}
@@ -95,6 +121,9 @@ func run(ctx context.Context) error {
 	systemdManager, err := systemd.NewManagerWithScope(cfg.SystemdUnitDirectory, cfg.SystemdBinary, cfg.SystemdScope)
 	if err != nil {
 		return fmt.Errorf("create systemd manager: %w", err)
+	}
+	if _, err := exec.LookPath(cfg.SystemdBinary); err != nil {
+		logger.Warn("systemd controller not found; scheduled backups will be unavailable until SYSTEMD_BINARY and the host systemd mounts are configured", "systemd_binary", cfg.SystemdBinary, "error", err)
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -116,21 +145,36 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create backup service: %w", err)
 	}
+	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
 
 	googleAuth, err := redlaunchauth.New(redlaunchauth.Config{
 		ClientID:      cfg.GoogleClientID,
 		ClientSecret:  cfg.GoogleClientSecret,
 		RedirectURL:   cfg.GoogleRedirectURL,
 		SessionSecret: cfg.AuthSessionSecret,
-		CookieSecure:  cfg.AuthCookieSecure,
+		CookieSecure:  cfg.AuthCookieSecure || cfg.ManagementAccessMode == config.AccessModeManagedHTTPS,
 	}, database)
 	if err != nil {
 		return fmt.Errorf("create Google authentication service: %w", err)
 	}
 
-	dependencies := []any{setupService, applications, backupManager, githubActions, metrics.New()}
-	dependencies = append(dependencies, googleAuth)
-	web, err := handler.New(logger, dependencies...)
+	dependencies := handler.Dependencies{
+		Setup:         setupService,
+		Applications:  applications,
+		Backups:       backupManager,
+		GitHubActions: githubActions,
+		Metrics: metrics.NewWithConfig(metrics.Config{
+			Scope:          cfg.MetricsScope,
+			ProcRoot:       cfg.MetricsProcRoot,
+			FilesystemRoot: cfg.MetricsFilesystemRoot,
+		}),
+		Authentication: googleAuth,
+		Security: handler.SecurityConfig{
+			AccessMode:   cfg.ManagementAccessMode,
+			CookieSecure: cfg.AuthCookieSecure,
+		},
+	}
+	web, err := handler.NewWithDependencies(logger, dependencies)
 	if err != nil {
 		return fmt.Errorf("create web handler: %w", err)
 	}

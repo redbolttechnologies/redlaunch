@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"redlaunch/internal/application"
 )
@@ -95,16 +96,11 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The routing save request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This routing page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -117,6 +113,13 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 		ServiceName: firstFormValue(r.Form, "service", "service_name"),
 		ServicePath: firstFormValue(r.Form, "service_path", "target_path"),
 	}
+	servicePort, portErr := parseRoutingPort(r.Form.Get("service_port"))
+	edit.ServicePort = servicePort
+	if portErr != nil {
+		edit.Error = "Enter a service port from 1 to 65535."
+		h.renderApplicationRoutingEditError(w, r, applicationID, domainID, edit, http.StatusBadRequest)
+		return
+	}
 	routingID, err := parseRoutingID(r.Form.Get("routing_id"))
 	if r.Form.Get("operation") == "edit" {
 		if err != nil {
@@ -127,6 +130,7 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 				Subdomain:   edit.Subdomain,
 				Path:        edit.Path,
 				ServiceName: edit.ServiceName,
+				ServicePort: edit.ServicePort,
 				ServicePath: edit.ServicePath,
 			}
 			h.renderApplicationRoutingEditError(w, r, applicationID, domainID, renderRoutingError, http.StatusBadRequest)
@@ -139,6 +143,7 @@ func (h *Handler) saveApplicationRouting(w http.ResponseWriter, r *http.Request)
 		Subdomain:   edit.Subdomain,
 		Path:        edit.Path,
 		ServiceName: edit.ServiceName,
+		ServicePort: edit.ServicePort,
 		ServicePath: edit.ServicePath,
 	}
 	if h.applicationRoutings == nil {
@@ -189,16 +194,11 @@ func (h *Handler) deleteApplicationRouting(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The routing delete request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This routing page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -260,6 +260,7 @@ func routingSaveUserError(err error) bool {
 		errors.Is(err, application.ErrRoutingPathRequired) ||
 		errors.Is(err, application.ErrRoutingPathTooLong) ||
 		errors.Is(err, application.ErrRoutingPathInvalid) ||
+		errors.Is(err, application.ErrRoutingPortInvalid) ||
 		errors.Is(err, application.ErrServiceNameRequired) ||
 		errors.Is(err, application.ErrServiceNameTooLong) ||
 		errors.Is(err, application.ErrServiceNameInvalid) ||
@@ -282,6 +283,8 @@ func routingSaveMessage(err error) string {
 		return "Paths must be 2048 characters or fewer."
 	case errors.Is(err, application.ErrRoutingPathInvalid):
 		return "Paths must start with / and contain no spaces or control characters."
+	case errors.Is(err, application.ErrRoutingPortInvalid):
+		return "Enter a service port from 1 to 65535."
 	case errors.Is(err, application.ErrServiceNameRequired), errors.Is(err, application.ErrServiceNotFound):
 		return "Select a service to route."
 	case errors.Is(err, application.ErrServiceNameTooLong), errors.Is(err, application.ErrServiceNameInvalid):
@@ -293,6 +296,18 @@ func routingSaveMessage(err error) string {
 	default:
 		return "The routing could not be saved."
 	}
+}
+
+func parseRoutingPort(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 80, nil
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, application.ErrRoutingPortInvalid
+	}
+	return application.ValidateRoutingPort(port)
 }
 
 func (h *Handler) renderApplicationRoutingEditError(w http.ResponseWriter, r *http.Request, applicationID, domainID int64, edit *routingEditPageData, status int) {
@@ -326,18 +341,7 @@ func (h *Handler) renderApplicationRoutingDeleteError(w http.ResponseWriter, r *
 }
 
 func (h *Handler) writeApplicationRoutingPage(w http.ResponseWriter, r *http.Request, status int, data applicationRoutingPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)

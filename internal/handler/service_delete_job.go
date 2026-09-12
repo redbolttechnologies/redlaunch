@@ -70,9 +70,14 @@ func newServiceDeleteJobStore() *serviceDeleteJobStore {
 }
 
 func (s *serviceDeleteJobStore) create(applicationID int64, serviceName string) (*serviceDeleteJob, error) {
+	job, _, err := s.createUnique(applicationID, serviceName)
+	return job, err
+}
+
+func (s *serviceDeleteJobStore) createUnique(applicationID int64, serviceName string) (*serviceDeleteJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &serviceDeleteJob{
 		id:            id,
@@ -87,14 +92,20 @@ func (s *serviceDeleteJobStore) create(applicationID int64, serviceName string) 
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		existingApplicationID := existing.applicationID
+		existingServiceName := existing.serviceName
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if existingApplicationID == applicationID && existingServiceName == serviceName && state == serviceDeleteJobStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > serviceDeleteJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *serviceDeleteJobStore) get(applicationID int64, id string) *serviceDeleteJob {
@@ -111,6 +122,19 @@ func (s *serviceDeleteJobStore) get(applicationID int64, id string) *serviceDele
 		return nil
 	}
 	return job
+}
+
+func (s *serviceDeleteJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > serviceDeleteJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *serviceDeleteJob) update(stage, _ string) {
@@ -198,20 +222,22 @@ func (j *serviceDeleteJob) snapshot() serviceDeleteProgressData {
 
 func serviceDeleteJobSteps() []serviceDeleteJobStep {
 	return []serviceDeleteJobStep{
+		{Stage: "schedules", Label: "Disable scheduled backups", State: serviceDeleteJobStepRemaining},
 		{Stage: "stop", Label: "Stop service container", State: serviceDeleteJobStepRemaining},
 		{Stage: "remove", Label: "Remove service container", State: serviceDeleteJobStepRemaining},
 		{Stage: "compose", Label: "Remove service from Compose file", State: serviceDeleteJobStepRemaining},
+		{Stage: "routing", Label: "Remove service routing", State: serviceDeleteJobStepRemaining},
 		{Stage: "metadata", Label: "Delete service metadata", State: serviceDeleteJobStepRemaining},
 	}
 }
 
-func (h *Handler) runServiceDeleteJob(job *serviceDeleteJob) {
+func (h *Handler) runServiceDeleteJob(ctx context.Context, job *serviceDeleteJob) {
 	var err error
 	job.update("stop", "Stopping the service container with Docker Compose")
 	if manager, ok := h.serviceDeletion.(serviceDeletionProgressService); ok {
-		err = manager.DeleteServiceWithProgress(context.Background(), job.applicationID, job.serviceName, job.update)
+		err = manager.DeleteServiceWithProgress(ctx, job.applicationID, job.serviceName, job.update)
 	} else {
-		err = h.serviceDeletion.DeleteService(context.Background(), job.applicationID, job.serviceName)
+		err = h.serviceDeletion.DeleteService(ctx, job.applicationID, job.serviceName)
 	}
 	if err != nil {
 		job.fail(err)
@@ -225,6 +251,9 @@ func (h *Handler) runServiceDeleteJob(job *serviceDeleteJob) {
 func serviceDeletionUserMessage(err error) string {
 	if errors.Is(err, application.ErrServiceNameRequired) || errors.Is(err, application.ErrServiceNameTooLong) || errors.Is(err, application.ErrServiceNameInvalid) {
 		return "The service name is invalid."
+	}
+	if errors.Is(err, application.ErrApplicationDeletionInProgress) {
+		return "The application is being deleted. Try again after deletion finishes."
 	}
 
 	detail := ""

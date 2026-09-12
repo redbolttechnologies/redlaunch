@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,17 +20,37 @@ const (
 	defaultProcRoot       = "/proc"
 	defaultFilesystemRoot = "/"
 	defaultSampleInterval = 100 * time.Millisecond
+	defaultCacheTTL       = 5 * time.Second
 	maxProcesses          = 10
 )
 
-// Snapshot contains one point-in-time view of the host resources.
+const (
+	// ScopeManager describes metrics collected from the Redlaunch process
+	// environment. This is the honest default for the bundled container,
+	// whose /proc and filesystem are container-scoped unless host paths are
+	// explicitly mounted into it.
+	ScopeManager = "manager"
+	// ScopeVPS describes a collector configured with host-visible procfs and
+	// filesystem paths by the deployment.
+	ScopeVPS = "vps"
+)
+
+// Snapshot contains one point-in-time view of the configured resource scope.
 type Snapshot struct {
+	// Scope makes the visibility of the sample explicit in the UI. A manager
+	// scope is the default in the container deployment; VPS scope requires
+	// explicit host-path configuration.
+	Scope           string
 	CPUUsagePercent float64
 	Memory          Memory
 	Disk            Disk
 	TopCPU          []Process
 	TopMemory       []Process
 	CollectedAt     time.Time
+	// Stale means the most recent refresh failed and this snapshot is the last
+	// valid sample. The caller can render this state without exposing an
+	// infrastructure error or path details to the browser.
+	Stale bool
 }
 
 // Memory contains host memory values in bytes.
@@ -55,12 +76,15 @@ type Process struct {
 	MemoryPercent float64
 }
 
-// Config controls the host paths and sampling interval used by a Collector.
-// The default paths target the Linux host on which Redlaunch is running.
+// Config controls the procfs/filesystem paths, scope label, and sampling
+// interval used by a Collector. The default paths target the Linux resource
+// environment in which Redlaunch is running.
 type Config struct {
 	ProcRoot       string
 	FilesystemRoot string
 	SampleInterval time.Duration
+	CacheTTL       time.Duration
+	Scope          string
 }
 
 // Collector reads Linux procfs and filesystem statistics for the Dashboard.
@@ -68,8 +92,18 @@ type Collector struct {
 	procRoot       string
 	filesystemRoot string
 	sampleInterval time.Duration
+	cacheTTL       time.Duration
+	scope          string
 	wait           func(context.Context, time.Duration) error
 	statfs         func(string) (filesystemStats, error)
+	now            func() time.Time
+
+	mu          sync.Mutex
+	cached      Snapshot
+	hasCached   bool
+	lastAttempt time.Time
+	collecting  bool
+	done        chan struct{}
 }
 
 type cpuSample struct {
@@ -111,18 +145,29 @@ func NewWithConfig(config Config) *Collector {
 	if sampleInterval <= 0 {
 		sampleInterval = defaultSampleInterval
 	}
+	cacheTTL := config.CacheTTL
+	if cacheTTL <= 0 {
+		cacheTTL = defaultCacheTTL
+	}
+	scope := strings.ToLower(strings.TrimSpace(config.Scope))
+	if scope != ScopeVPS {
+		scope = ScopeManager
+	}
 	return &Collector{
 		procRoot:       procRoot,
 		filesystemRoot: filesystemRoot,
 		sampleInterval: sampleInterval,
+		cacheTTL:       cacheTTL,
+		scope:          scope,
 		wait:           waitForContext,
 		statfs:         statFilesystem,
+		now:            time.Now,
 	}
 }
 
-// Collect samples the host and returns the current resource usage. CPU and
-// process usage are calculated from two short procfs samples so they reflect
-// activity during the request rather than lifetime counters.
+// Collect returns a short-lived shared resource snapshot. At most one procfs
+// sampling operation runs at a time; concurrent callers wait for that sample,
+// and callers within the cache window reuse it.
 func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	if c == nil {
 		return Snapshot{}, errors.New("metrics collector is not configured")
@@ -134,6 +179,61 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
+	for {
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
+		c.mu.Lock()
+		now := c.clockNow()
+		if c.hasCached && now.Sub(c.lastAttempt) < c.cacheTTL {
+			snapshot := cloneSnapshot(c.cached)
+			c.mu.Unlock()
+			return snapshot, nil
+		}
+		if c.collecting {
+			done := c.done
+			c.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return Snapshot{}, ctx.Err()
+			}
+		}
+		c.collecting = true
+		done := make(chan struct{})
+		c.done = done
+		c.mu.Unlock()
+
+		snapshot, err := c.collectFresh(ctx)
+
+		c.mu.Lock()
+		c.collecting = false
+		c.lastAttempt = c.clockNow()
+		var result Snapshot
+		var resultErr error
+		if err == nil {
+			snapshot.Scope = c.scope
+			snapshot.Stale = false
+			c.cached = snapshot
+			c.hasCached = true
+			result = cloneSnapshot(snapshot)
+		} else if ctx.Err() != nil {
+			resultErr = ctx.Err()
+		} else if c.hasCached {
+			c.cached.Stale = true
+			result = cloneSnapshot(c.cached)
+		} else {
+			resultErr = err
+		}
+		close(done)
+		c.done = nil
+		c.mu.Unlock()
+		return result, resultErr
+	}
+}
+
+func (c *Collector) collectFresh(ctx context.Context) (Snapshot, error) {
 	before, err := c.readSample()
 	if err != nil {
 		return Snapshot{}, err
@@ -161,8 +261,21 @@ func (c *Collector) Collect(ctx context.Context) (Snapshot, error) {
 		Disk:            disk,
 		TopCPU:          topCPUProcesses(before, after, memory.TotalBytes),
 		TopMemory:       topMemoryProcesses(after, memory.TotalBytes),
-		CollectedAt:     time.Now(),
+		CollectedAt:     c.clockNow(),
 	}, nil
+}
+
+func (c *Collector) clockNow() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+func cloneSnapshot(snapshot Snapshot) Snapshot {
+	snapshot.TopCPU = append([]Process(nil), snapshot.TopCPU...)
+	snapshot.TopMemory = append([]Process(nil), snapshot.TopMemory...)
+	return snapshot
 }
 
 func (c *Collector) readSample() (hostSample, error) {

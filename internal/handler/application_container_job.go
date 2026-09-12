@@ -67,9 +67,14 @@ func newApplicationContainerJobStore() *applicationContainerJobStore {
 }
 
 func (s *applicationContainerJobStore) create(applicationID int64, autoStart bool) (*applicationContainerJob, error) {
+	job, _, err := s.createUnique(applicationID, autoStart)
+	return job, err
+}
+
+func (s *applicationContainerJobStore) createUnique(applicationID int64, autoStart bool) (*applicationContainerJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &applicationContainerJob{
 		id:            id,
@@ -84,14 +89,19 @@ func (s *applicationContainerJobStore) create(applicationID int64, autoStart boo
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		existingApplicationID := existing.applicationID
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if existingApplicationID == applicationID && state == applicationContainerJobStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > applicationContainerJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *applicationContainerJobStore) get(applicationID int64, id string) *applicationContainerJob {
@@ -108,6 +118,19 @@ func (s *applicationContainerJobStore) get(applicationID int64, id string) *appl
 		return nil
 	}
 	return job
+}
+
+func (s *applicationContainerJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > applicationContainerJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *applicationContainerJob) update(stage, _ string) {
@@ -204,13 +227,13 @@ func applicationContainerJobSteps(autoStart bool) []applicationContainerJobStep 
 	return steps
 }
 
-func (h *Handler) runApplicationContainerJob(job *applicationContainerJob, input application.ApplicationServiceInput) {
+func (h *Handler) runApplicationContainerJob(ctx context.Context, job *applicationContainerJob, input application.ApplicationServiceInput) {
 	var err error
 	if manager, ok := h.applicationContainerManager.(applicationContainerProgressService); ok {
-		_, err = manager.CreateApplicationServiceWithProgress(context.Background(), job.applicationID, input, job.update)
+		_, err = manager.CreateApplicationServiceWithProgress(ctx, job.applicationID, input, job.update)
 	} else {
 		job.update("configuration", "Preparing application container configuration")
-		_, err = h.applicationContainerManager.CreateApplicationService(context.Background(), job.applicationID, input)
+		_, err = h.applicationContainerManager.CreateApplicationService(ctx, job.applicationID, input)
 	}
 	if err != nil {
 		job.fail(err)

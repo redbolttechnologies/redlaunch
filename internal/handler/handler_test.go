@@ -266,6 +266,7 @@ type fakeApplicationService struct {
 	secretOriginalName            string
 	secretUpdateName              string
 	secretUpdateValue             string
+	secretUpdateReplaceValue      bool
 	secretUpdateErr               error
 	secretAddID                   int64
 	secretAddName                 string
@@ -326,6 +327,15 @@ type fakeApplicationService struct {
 	serviceDeleteDoneOnce         sync.Once
 	applicationDeleteStartOnce    sync.Once
 	applicationDeleteDoneOnce     sync.Once
+}
+
+type fakeApplicationDeletionRecovery struct {
+	*fakeApplicationService
+	intent application.ApplicationDeletionIntent
+}
+
+func (s *fakeApplicationDeletionRecovery) GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error) {
+	return s.intent, nil
 }
 
 func (s *fakeApplicationService) List(context.Context) ([]application.Application, error) {
@@ -420,7 +430,7 @@ func (s *fakeApplicationService) CreateRouting(_ context.Context, applicationID,
 	if s.routingCreateErr != nil {
 		return application.Routing{}, s.routingCreateErr
 	}
-	return application.Routing{ApplicationID: applicationID, DomainID: domainID, Subdomain: input.Subdomain, Path: input.Path, ServiceName: input.ServiceName, ServicePath: input.ServicePath}, nil
+	return application.Routing{ApplicationID: applicationID, DomainID: domainID, Subdomain: input.Subdomain, Path: input.Path, ServiceName: input.ServiceName, ServicePort: input.ServicePort, ServicePath: input.ServicePath}, nil
 }
 
 func (s *fakeApplicationService) UpdateRouting(_ context.Context, applicationID, domainID, routingID int64, input application.RoutingInput) error {
@@ -480,10 +490,19 @@ func (s *fakeApplicationService) MoveEnvironmentVariableToSecrets(_ context.Cont
 }
 
 func (s *fakeApplicationService) UpdateEnvironmentSecret(_ context.Context, id int64, originalName, name, value string) error {
+	return s.updateEnvironmentSecret(id, originalName, name, value, true)
+}
+
+func (s *fakeApplicationService) UpdateEnvironmentSecretValue(_ context.Context, id int64, originalName, name, value string, replaceValue bool) error {
+	return s.updateEnvironmentSecret(id, originalName, name, value, replaceValue)
+}
+
+func (s *fakeApplicationService) updateEnvironmentSecret(id int64, originalName, name, value string, replaceValue bool) error {
 	s.secretUpdateID = id
 	s.secretOriginalName = originalName
 	s.secretUpdateName = name
 	s.secretUpdateValue = value
+	s.secretUpdateReplaceValue = replaceValue
 	return s.secretUpdateErr
 }
 
@@ -916,6 +935,30 @@ func TestDashboardMetricsFragmentRendersOnlyMetrics(t *testing.T) {
 	}
 	if dashboard.calls != 1 {
 		t.Fatalf("dashboard collector calls = %d, want 1", dashboard.calls)
+	}
+}
+
+func TestDashboardRendersMetricsScopeAndStaleState(t *testing.T) {
+	dashboard := &fakeDashboardMetricsService{snapshot: systemmetrics.Snapshot{
+		Scope:       systemmetrics.ScopeVPS,
+		CollectedAt: time.Now().UTC(),
+		Stale:       true,
+	}}
+	web, err := New(nil, dashboard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/dashboard/metrics", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /dashboard/metrics status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{"Scope: VPS", "Refresh unavailable; showing the last valid sample.", "aria-label=\"VPS resource metrics\""} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("dashboard metrics did not render %q: %s", expected, body)
+		}
 	}
 }
 
@@ -1424,6 +1467,7 @@ func TestUpdateRedlaunchPublicAccessRequiresCSRFAndRedirects(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("POST public access status = %d, want %d", recorder.Code, http.StatusSeeOther)
@@ -1454,6 +1498,7 @@ func TestUpdateRedlaunchPublicAccessRendersValidationError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/applications/7/settings/public-access?tab=settings", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	web.Routes().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
@@ -1762,6 +1807,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 			Subdomain:     "api",
 			Path:          "/register",
 			ServiceName:   "identity",
+			ServicePort:   3000,
 			ServicePath:   "/",
 		}},
 	}
@@ -1788,6 +1834,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 		`>Add routing</span>`,
 		`data-routing-edit`,
 		`data-routing-service="identity"`,
+		`data-routing-service-port="3000"`,
 		`data-routing-delete`,
 		`id="routing-edit-dialog"`,
 		`name="subdomain"`,
@@ -1795,6 +1842,7 @@ func TestApplicationRoutingPageRendersDomainRoutingsAndServiceSelector(t *testin
 		`<option value="frontend">frontend</option>`,
 		`<option value="identity">identity</option>`,
 		`name="service_path"`,
+		`name="service_port"`,
 		`id="routing-edit-path" name="path" type="text" value="/"`,
 		`id="routing-edit-service-path" name="service_path" type="text" value="/"`,
 		`id="routing-delete-dialog"`,
@@ -1825,7 +1873,7 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	}
 	handler := web.Routes()
 
-	form := url.Values{"operation": {"add"}, "path": {"/"}, "service": {"frontend"}, "service_path": {"/"}}
+	form := url.Values{"operation": {"add"}, "path": {"/"}, "service": {"frontend"}, "service_port": {"3000"}, "service_path": {"/"}}
 	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/applications/7/domains/2/routing", strings.NewReader(form.Encode()))
 	missingTokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	missingToken := httptest.NewRecorder()
@@ -1852,6 +1900,9 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	if applications.routingCreateID != 7 || applications.routingCreateDomainID != 2 || applications.routingCreateInput.ServiceName != "frontend" {
 		t.Fatalf("routing create = %#v, want application/domain/service", applications)
 	}
+	if applications.routingCreateInput.ServicePort != 3000 {
+		t.Fatalf("routing create service port = %d, want 3000", applications.routingCreateInput.ServicePort)
+	}
 
 	editForm := url.Values{
 		"csrf_token":   {web.csrfToken},
@@ -1860,6 +1911,7 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 		"subdomain":    {"api"},
 		"path":         {"/register"},
 		"service":      {"frontend"},
+		"service_port": {"8080"},
 		"service_path": {"/app"},
 	}
 	editRequest := httptest.NewRequest(http.MethodPost, "/applications/7/domains/2/routing", strings.NewReader(editForm.Encode()))
@@ -1872,6 +1924,9 @@ func TestApplicationRoutingSaveRequiresCSRFAndSupportsCreateAndEdit(t *testing.T
 	}
 	if applications.routingUpdateID != 11 || applications.routingUpdateDomainID != 2 || applications.routingUpdateInput.Subdomain != "api" || applications.routingUpdateInput.ServicePath != "/app" {
 		t.Fatalf("routing update = %#v, want routing ID/domain/input", applications)
+	}
+	if applications.routingUpdateInput.ServicePort != 8080 {
+		t.Fatalf("routing update service port = %d, want 8080", applications.routingUpdateInput.ServicePort)
 	}
 }
 
@@ -2089,7 +2144,6 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 		`data-variable-add`,
 		`>Add variable</span>`,
 		`data-secret-edit`,
-		`data-secret-value="super-secret"`,
 		`aria-label="Edit secret API_TOKEN"`,
 		`data-secret-move`,
 		`aria-label="Move secret API_TOKEN to variables"`,
@@ -2149,6 +2203,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	}
 	if strings.Count(body, `class="service-environment-masked"`) != 1 {
 		t.Fatalf("GET /applications/7 rendered %d masked values, want 1: %s", strings.Count(body, `class="service-environment-masked"`), body)
+	}
+	if strings.Contains(body, "super-secret") || strings.Contains(body, "data-secret-value") {
+		t.Fatal("GET /applications/7 included a secret value in the response")
 	}
 }
 
@@ -2587,6 +2644,57 @@ func TestApplicationSecretUpdateRequiresCSRFAndRedirects(t *testing.T) {
 	}
 }
 
+func TestApplicationSecretUpdateLeavesBlankValueUnchanged(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token":    {web.csrfToken},
+		"original_name": {"API_TOKEN"},
+		"name":          {"API_KEY"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST blank secret value status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if applications.secretUpdateValue != "" || applications.secretUpdateReplaceValue {
+		t.Fatalf("blank secret update = value %q replace=%v, want unchanged", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
+	}
+}
+
+func TestApplicationSecretUpdateRequiresExplicitClear(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{
+		"csrf_token":    {web.csrfToken},
+		"original_name": {"API_TOKEN"},
+		"name":          {"API_TOKEN"},
+		"clear_value":   {"on"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/secrets", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST clear secret status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if applications.secretUpdateValue != "" || !applications.secretUpdateReplaceValue {
+		t.Fatalf("clear secret update = value %q replace=%v, want explicit empty replacement", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
+	}
+}
+
 func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
@@ -2618,7 +2726,7 @@ func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 		`<h2 id="secret-edit-dialog-title" data-secret-edit-title>Add secret</h2>`,
 		`role="alert">Enter a secret name.</div>`,
 		`name="operation" value="add"`,
-		`id="secret-edit-value" name="value" type="password" value="new-secret"`,
+		`id="secret-edit-value" name="value" type="password" value=""`,
 		`data-secret-toggle`,
 		`data-secret-generate`,
 		`Generate secret`,
@@ -2626,6 +2734,9 @@ func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST add secret did not render %q: %s", expected, body)
 		}
+	}
+	if strings.Contains(body, "new-secret") {
+		t.Fatal("POST add secret validation response reflected the submitted secret")
 	}
 }
 
@@ -3399,6 +3510,68 @@ func TestDeleteApplicationRequiresCSRFAndExactConfirmation(t *testing.T) {
 	handler.ServeHTTP(deletedPageRecorder, httptest.NewRequest(http.MethodGet, location.String(), nil))
 	if deletedPageRecorder.Code != http.StatusOK || !strings.Contains(deletedPageRecorder.Body.String(), "Application deleted") {
 		t.Fatalf("deleted application progress page = (%d, %s), want completed progress dialog", deletedPageRecorder.Code, deletedPageRecorder.Body.String())
+	}
+}
+
+func TestDeleteApplicationCanRetryFromDurableIntentAfterMetadataRemoval(t *testing.T) {
+	applications := &fakeApplicationDeletionRecovery{
+		fakeApplicationService: &fakeApplicationService{applicationDeleteStarted: make(chan struct{})},
+		intent: application.ApplicationDeletionIntent{
+			ApplicationID: 7,
+			Name:          "Status page",
+			FolderName:    "status-page",
+			Stage:         "resources",
+			State:         "failed",
+		},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}, "confirmation": {"Status page"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/delete", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST retry application delete status = %d, want %d (%s)", recorder.Code, http.StatusSeeOther, recorder.Body.String())
+	}
+	select {
+	case <-applications.applicationDeleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("retried application deletion did not start")
+	}
+	if applications.applicationDeleteID != 7 {
+		t.Fatalf("retried application deletion target = %d, want 7", applications.applicationDeleteID)
+	}
+}
+
+func TestApplicationDetailsShowsDurableDeletionAfterRestart(t *testing.T) {
+	applications := &fakeApplicationDeletionRecovery{
+		fakeApplicationService: &fakeApplicationService{},
+		intent: application.ApplicationDeletionIntent{
+			ApplicationID: 7,
+			Name:          "Status page",
+			FolderName:    "status-page",
+			Stage:         "routing",
+			State:         "failed",
+		},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("durable deletion page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	for _, expected := range []string{"Application deletion stopped", "Refresh application routing", "The deletion checkpoint was retained"} {
+		if !strings.Contains(recorder.Body.String(), expected) {
+			t.Fatalf("durable deletion page did not render %q: %s", expected, recorder.Body.String())
+		}
 	}
 }
 
@@ -4765,6 +4938,7 @@ func TestLogoutExpiresSessionCookieAndRedirectsToLogin(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "signed-session"})
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -4907,6 +5081,7 @@ func TestSetupAcceptsSelectedCoreServices(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -4937,6 +5112,7 @@ func TestSetupStatusReportsFailureStageAndDetails(t *testing.T) {
 	form := url.Values{"csrf_token": {web.csrfToken}, "proxy": {"on"}}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	postRecorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(postRecorder, request)
 	if postRecorder.Code != http.StatusSeeOther {
@@ -5028,6 +5204,7 @@ func TestSetupRendersFreshFormForExpiredCSRFToken(t *testing.T) {
 	form := url.Values{"csrf_token": {"expired-token"}, "proxy": {"on"}}
 	request := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
@@ -5079,6 +5256,71 @@ func TestSetupAcceptsCSRFTokenFromCookieAfterHandlerRestart(t *testing.T) {
 	case <-secondManager.done:
 	case <-time.After(time.Second):
 		t.Fatal("setup job did not finish")
+	}
+}
+
+func TestManagedHTTPSUsesSecureCSRFCookieBehindConfiguredTLSProxy(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager, SecurityConfig{AccessMode: accessModeManagedHTTPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://manager.example/", nil)
+	web.Routes().ServeHTTP(recorder, request)
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil || !csrfCookie.Secure || csrfCookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("managed HTTPS CSRF cookie = %#v, want Secure and SameSite=Strict", csrfCookie)
+	}
+}
+
+func TestStateChangingRequestRejectsCrossOriginRequest(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://manager.example/setup", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://evil.example")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("cross-origin POST setup calls = %d, want 0", manager.setupCalls)
+	}
+}
+
+func TestStateChangingRequestRejectsMalformedReferer(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://manager.example/setup", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Referer", "not-an-origin")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("malformed Referer POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("malformed Referer setup calls = %d, want 0", manager.setupCalls)
 	}
 }
 

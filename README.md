@@ -66,7 +66,7 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 - Import an existing Compose project.
 - Start, stop, restart, and remove managed services.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
-- Show container status, ports, logs, and host resource usage.
+- Show container status, ports, logs, and explicitly scoped resource usage.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
@@ -100,6 +100,36 @@ projects/
 Each application has its own Compose file and environment files. Secret values
 are stored outside SQLite and are masked in the web interface.
 
+Dashboard log views use a bounded byte tail. Full log downloads are streamed
+with a 64 MiB safety limit and at most two active downloads per Redlaunch
+process.
+
+PostgreSQL and Redis services also load service-specific
+environment files (for example, `db.vars.env` and `db.secrets.env`) after the
+project-wide files. This keeps multiple database services from overwriting one
+another's credentials. Legacy projects with ambiguous shared database
+credentials are refused for operator review.
+
+Backup and restore actions run as tracked operations rather than being tied to
+the browser request. One SQLite lease coordinates web, scheduled, and CLI
+operations for each database service; leases expire after a crashed process.
+Every lease-holding operation is capped at 25 minutes, below the 30-minute
+lease, and scheduled units stop overruns at the same boundary. Service
+deletion records its own durable tombstone, disables the service timer, holds
+the backup lease, and removes service routing with a Caddy reload; backup
+files are retained as operator-managed artifacts.
+Completed backup status updates do not overwrite later schedule edits, and
+completed dumps are published with collision-safe filenames. If a process is
+interrupted, a later backup conservatively removes only old Redlaunch temporary
+dump files. Application deletion records a durable tombstone and can resume
+from its last completed stage; the application page shows that retained
+checkpoint after a manager restart. Keep the SQLite database and project
+directory available until the deletion progress reaches completion. Folder
+names stay reserved until the tombstone completes, and a retry never removes
+a replacement folder. Application deletion
+retains backup files under the configured `BACKUP_ROOT` as separate operator
+artifacts; backup history records are removed with the application metadata.
+
 Redlaunch stores its SQLite database in the external Docker volume
 `redlaunch_app-data`. The setup script creates this volume, and it is kept
 outside the Compose project lifecycle so rebuilding or recreating the
@@ -107,7 +137,9 @@ Redlaunch container does not remove the database.
 
 ## Local development
 
-Local development requires Go 1.25 or newer and a running user systemd manager.
+Local development uses the pinned Go 1.26.8 toolchain and requires a running
+user systemd manager. With Go toolchain auto-downloads enabled, the Make targets
+select that patch release through <code>GOTOOLCHAIN</code>.
 
 ```sh
 cp .env.example .env
@@ -124,13 +156,36 @@ The main configuration values are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HTTP_ADDR` | `:8080` | Address used by the HTTP server |
+| `HTTP_ADDR` | `127.0.0.1:8080` | Address used by the standalone HTTP server; the bundled Compose deployment aligns its listener with `APP_PORT` |
 | `DB_PATH` | `./data/redlaunch.db` | SQLite database path |
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
-| `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies with HTTPS |
+| `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies when TLS terminates in front of Redlaunch |
+| `MANAGEMENT_ACCESS_MODE` | `ssh-only` | `ssh-only` keeps the host listener private; `managed-https` requires a configured TLS proxy |
+| `METRICS_SCOPE` | `manager` | Dashboard visibility scope: `manager` reads the manager process environment; `vps` is for explicitly mounted host paths |
+| `METRICS_PROC_ROOT` | empty (`/proc`) | Procfs path used by the dashboard metrics collector; set this to a read-only host procfs mount for VPS scope in Docker |
+| `METRICS_FILESYSTEM_ROOT` | empty (`/`) | Filesystem path used for dashboard disk metrics; set this to a read-only host-root mount for VPS scope in Docker |
+| `APP_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the Docker deployment; use `0.0.0.0` only with managed HTTPS and firewalling |
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
+
+The default deployment is SSH-only: Docker binds port 8080 to loopback, so use
+an SSH tunnel. If `APP_PORT` is changed, the bundled container listener and
+managed Caddy endpoint follow that port. To publish the management UI through
+the bundled Caddy proxy,
+set `MANAGEMENT_ACCESS_MODE=managed-https` and `APP_BIND_ADDRESS=0.0.0.0`,
+configure the public hostname in Redlaunch, and restrict the host firewall to
+the intended HTTP/HTTPS entry points. Managed HTTPS forces secure session and
+CSRF cookies; SSH-only keeps the local HTTP callback usable through the SSH
+tunnel. Do not rely on arbitrary forwarded headers to select a mode.
+
+The Dashboard reports the resource scope shown above and does not claim that a
+container-scoped sample represents the whole VPS. The bundled Compose file
+defaults to `METRICS_SCOPE=manager`; selecting `vps` in Docker is meaningful
+only after deliberately adding read-only host mounts and setting
+`METRICS_PROC_ROOT` and `METRICS_FILESYSTEM_ROOT` to their in-container paths.
+Running the binary directly on a VPS can use `METRICS_SCOPE=vps` with the
+default `/proc` and `/` paths.
 
 See [.env.example](.env.example) for the authentication settings. Environment
 variables override values loaded from `.env`.
@@ -144,6 +199,19 @@ make compose-config
 make docker-build
 ```
 
+For a release candidate, run the complete release gate:
+
+```sh
+make release-check
+```
+
+It runs the race-enabled test suite (including migration coverage), vet, a
+gofmt check, a tracked-secret scan, then builds and scans the Linux artifact
+separately from the local host binary, validates Compose, builds the
+production image, and records binary/image identity under `bin/`. The
+vulnerability database and container base images require network access;
+generated release identity files remain excluded from Git.
+
 ## Security
 
 Redlaunch has access to the Docker socket, and its Compose deployment can also
@@ -152,6 +220,17 @@ effectively host-level access. Run Redlaunch only on a trusted management host,
 restrict access to its web interface, and authorize only trusted accounts.
 
 Never commit `.env`, `vars.env`, `secrets.env`, databases, or backup files.
+
+Managed projects live under `projects/applications/<name>/` and
+`projects/core/<component>/`, each with its own `compose.yml`, `vars.env`,
+and `secrets.env`. New projects always write `compose.yml`; `compose.yaml`
+is only accepted when reading older installations. A managed bind mount must
+name a file or subdirectory below its project directory: mounting the project
+directory itself is rejected because it would expose sibling managed files
+such as `secrets.env` to the workload. Symlinked ancestors or files inside
+the managed trees are rejected for the same reason. The bundled manager
+service follows the same rule: it carries the `redlaunch.managed=true` label
+and loads both `vars.env` and `secrets.env`.
 
 ## License
 

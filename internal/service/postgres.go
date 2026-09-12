@@ -50,30 +50,32 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		return application.Service{}, errors.New("application service repository is not configured")
 	}
 
+	serviceName, postgresVersion, databaseName, databaseUser, databasePassword, err := validatePostgreSQLServiceInput(input)
+	if err != nil {
+		return application.Service{}, err
+	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return application.Service{}, err
+	}
+	defer lease.release()
+
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
 		return application.Service{}, err
 	}
 
-	serviceName, postgresVersion, databaseName, databaseUser, databasePassword, err := validatePostgreSQLServiceInput(input)
-	if err != nil {
-		return application.Service{}, err
-	}
-	if databasePassword == "" {
-		databasePassword, err = generateDatabasePassword()
-		if err != nil {
-			return application.Service{}, fmt.Errorf("generate PostgreSQL password: %w", err)
-		}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return application.Service{}, err
 	}
-	composePath := filepath.Join(directory, "compose.yml")
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return application.Service{}, errors.New("application Compose file does not exist")
+	}
 	varsPath := filepath.Join(directory, varsEnvFile)
 	secretsPath := filepath.Join(directory, secretsEnvFile)
 	composeSnapshot, err := snapshotManagedFile(composePath)
@@ -96,17 +98,46 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 	containerName := postgresContainerNamePrefix + strconv.FormatInt(item.ID, 10) + "-" + serviceName
 	volumeName := postgresContainerNamePrefix + strconv.FormatInt(item.ID, 10) + "-" + serviceName + "-data"
 	reportPostgreSQLProgress(progress, "files", "Writing the PostgreSQL Compose and environment files")
-	composeContents, err := addPostgreSQLService(string(composeSnapshot.contents), serviceName, postgresVersion, containerName, volumeKey, volumeName)
+	sameTypeServices, err := s.listDatabaseServices(ctx, applicationID, application.ServiceTypePostgreSQL)
+	if err != nil {
+		return application.Service{}, err
+	}
+	varsFile, secretsFile := scopedEnvironmentFileNames(serviceName)
+	if databasePassword == "" {
+		if _, statErr := os.Lstat(filepath.Join(directory, secretsFile)); errors.Is(statErr, os.ErrNotExist) {
+			databasePassword, err = generateDatabasePassword()
+			if err != nil {
+				return application.Service{}, fmt.Errorf("generate PostgreSQL password: %w", err)
+			}
+		} else if statErr != nil {
+			return application.Service{}, fmt.Errorf("inspect PostgreSQL scoped secrets file: %w", statErr)
+		}
+	}
+	scopedFiles, effectiveDatabaseName, effectiveDatabaseUser, effectiveDatabasePassword, err := preparePostgreSQLScopedFiles(directory, serviceName, databaseName, databaseUser, databasePassword)
+	if err != nil {
+		return application.Service{}, err
+	}
+	databaseName, databaseUser, databasePassword = effectiveDatabaseName, effectiveDatabaseUser, effectiveDatabasePassword
+	composeContents, err := addPostgreSQLService(string(composeSnapshot.contents), serviceName, postgresVersion, containerName, volumeKey, volumeName, varsFile, secretsFile)
 	if err != nil {
 		return application.Service{}, fmt.Errorf("add PostgreSQL service to Compose file: %w", err)
 	}
-	varsContents := upsertEnvironment(string(varsSnapshot.contents), map[string]string{
-		postgresEnvironmentDatabase: databaseName,
-		postgresEnvironmentUser:     databaseUser,
-	})
-	secretsContents := upsertEnvironment(string(secretsSnapshot.contents), map[string]string{
-		postgresEnvironmentPassword: databasePassword,
-	})
+	composeContents, legacyFiles, err := prepareLegacyDatabaseEnvironment(composeContents, directory, sameTypeServices, application.ServiceTypePostgreSQL, string(varsSnapshot.contents), string(secretsSnapshot.contents))
+	if err != nil {
+		return application.Service{}, err
+	}
+	scopedFiles = append(scopedFiles, legacyFiles...)
+	varsContents := string(varsSnapshot.contents)
+	secretsContents := string(secretsSnapshot.contents)
+	if len(sameTypeServices) == 0 {
+		varsContents = upsertEnvironment(varsContents, map[string]string{
+			postgresEnvironmentDatabase: databaseName,
+			postgresEnvironmentUser:     databaseUser,
+		})
+		secretsContents = upsertEnvironment(secretsContents, map[string]string{
+			postgresEnvironmentPassword: databasePassword,
+		})
+	}
 
 	if err := writeManagedFile(composePath, composeContents, 0o644); err != nil {
 		return application.Service{}, fmt.Errorf("write application Compose file: %w", err)
@@ -120,6 +151,12 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		_ = restoreManagedFile(varsSnapshot)
 		_ = restoreManagedFile(secretsSnapshot)
 		return application.Service{}, fmt.Errorf("write application secrets file: %w", err)
+	}
+	if err := writeScopedEnvironmentFiles(scopedFiles); err != nil {
+		return application.Service{}, errors.Join(fmt.Errorf("write PostgreSQL scoped environment files: %w", err), restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot), restoreScopedEnvironmentFiles(scopedFiles))
+	}
+	if err := s.validateStagedCompose(ctx, directory); err != nil {
+		return application.Service{}, errors.Join(err, restoreManagedFile(composeSnapshot), restoreManagedFile(varsSnapshot), restoreManagedFile(secretsSnapshot), restoreScopedEnvironmentFiles(scopedFiles))
 	}
 
 	reportPostgreSQLProgress(progress, "metadata", "Saving PostgreSQL service metadata")
@@ -137,8 +174,9 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		composeRestoreErr := restoreManagedFile(composeSnapshot)
 		varsRestoreErr := restoreManagedFile(varsSnapshot)
 		secretsRestoreErr := restoreManagedFile(secretsSnapshot)
-		if composeRestoreErr != nil || varsRestoreErr != nil || secretsRestoreErr != nil {
-			return application.Service{}, fmt.Errorf("persist PostgreSQL service metadata: %w (restore files: compose=%v, vars=%v, secrets=%v)", err, composeRestoreErr, varsRestoreErr, secretsRestoreErr)
+		scopedRestoreErr := restoreScopedEnvironmentFiles(scopedFiles)
+		if composeRestoreErr != nil || varsRestoreErr != nil || secretsRestoreErr != nil || scopedRestoreErr != nil {
+			return application.Service{}, fmt.Errorf("persist PostgreSQL service metadata: %w (restore files: compose=%v, vars=%v, secrets=%v, scoped=%v)", err, composeRestoreErr, varsRestoreErr, secretsRestoreErr, scopedRestoreErr)
 		}
 		return application.Service{}, fmt.Errorf("persist PostgreSQL service metadata: %w", err)
 	}
@@ -150,6 +188,20 @@ func (s *Applications) CreatePostgreSQLServiceWithProgress(ctx context.Context, 
 		return created, fmt.Errorf("start PostgreSQL service: %w", err)
 	}
 	return created, nil
+}
+
+func (s *Applications) listDatabaseServices(ctx context.Context, applicationID int64, serviceType string) ([]application.Service, error) {
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		return nil, fmt.Errorf("list application services: %w", err)
+	}
+	var matches []application.Service
+	for _, existing := range services {
+		if existing.Type == serviceType {
+			matches = append(matches, existing)
+		}
+	}
+	return matches, nil
 }
 
 func reportPostgreSQLProgress(progress func(stage, message string), stage, message string) {
@@ -192,6 +244,15 @@ func (s *Applications) managedApplicationDirectory(item application.Application)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("application directory is outside the managed applications directory")
 	}
+	if err := checkManagedAncestors(s.applicationsDir, directory); err != nil {
+		return "", err
+	}
+	// The applications root itself must remain a real directory: replacing it
+	// with a symlink after setup would redirect every managed path outside
+	// the projects tree while each individual Lstat still looks normal.
+	if parentInfo, err := os.Lstat(s.applicationsDir); err == nil && parentInfo.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("managed applications directory must not be a symlink")
+	}
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", application.ErrNotFound
@@ -204,6 +265,9 @@ func (s *Applications) managedApplicationDirectory(item application.Application)
 	}
 	if !info.IsDir() {
 		return "", errors.New("application path is not a directory")
+	}
+	if err := checkResolvedDirectoryContainment(s.applicationsDir, directory); err != nil {
+		return "", err
 	}
 	return directory, nil
 }
@@ -265,7 +329,7 @@ func generateDatabasePassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(secret), nil
 }
 
-func addPostgreSQLService(contents, serviceName, version, containerName, volumeKey, volumeName string) (string, error) {
+func addPostgreSQLService(contents, serviceName, version, containerName, volumeKey, volumeName, scopedVarsFile, scopedSecretsFile string) (string, error) {
 	lines := strings.Split(contents, "\n")
 	servicesIndex, servicesValue, ok := findTopLevelYAMLKey(lines, "services")
 	if !ok {
@@ -284,6 +348,8 @@ func addPostgreSQLService(contents, serviceName, version, containerName, volumeK
 		"    env_file:",
 		"      - vars.env",
 		"      - secrets.env",
+		"      - " + scopedVarsFile,
+		"      - " + scopedSecretsFile,
 		"    healthcheck:",
 		"      test: [\"CMD-SHELL\", \"pg_isready -U \\\"$$POSTGRES_USER\\\" -d \\\"$$POSTGRES_DB\\\"\"]",
 		"      interval: 10s",

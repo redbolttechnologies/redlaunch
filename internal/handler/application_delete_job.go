@@ -66,9 +66,14 @@ func newApplicationDeleteJobStore() *applicationDeleteJobStore {
 }
 
 func (s *applicationDeleteJobStore) create(applicationID int64, applicationName string) (*applicationDeleteJob, error) {
+	job, _, err := s.createUnique(applicationID, applicationName)
+	return job, err
+}
+
+func (s *applicationDeleteJobStore) createUnique(applicationID int64, applicationName string) (*applicationDeleteJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	job := &applicationDeleteJob{
 		id:              id,
@@ -83,14 +88,19 @@ func (s *applicationDeleteJobStore) create(applicationID int64, applicationName 
 	now := time.Now()
 	for jobID, existing := range s.jobs {
 		existing.mu.RLock()
+		existingApplicationID := existing.applicationID
+		state := existing.state
 		finishedAt := existing.finishedAt
 		existing.mu.RUnlock()
+		if existingApplicationID == applicationID && state == applicationDeleteJobStateRunning {
+			return existing, false, nil
+		}
 		if !finishedAt.IsZero() && now.Sub(finishedAt) > applicationDeleteJobRetention {
 			delete(s.jobs, jobID)
 		}
 	}
 	s.jobs[id] = job
-	return job, nil
+	return job, true, nil
 }
 
 func (s *applicationDeleteJobStore) get(applicationID int64, id string) *applicationDeleteJob {
@@ -107,6 +117,19 @@ func (s *applicationDeleteJobStore) get(applicationID int64, id string) *applica
 		return nil
 	}
 	return job
+}
+
+func (s *applicationDeleteJobStore) expire(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for jobID, job := range s.jobs {
+		job.mu.RLock()
+		finishedAt := job.finishedAt
+		job.mu.RUnlock()
+		if !finishedAt.IsZero() && now.Sub(finishedAt) > applicationDeleteJobRetention {
+			delete(s.jobs, jobID)
+		}
+	}
 }
 
 func (j *applicationDeleteJob) update(stage, _ string) {
@@ -194,22 +217,80 @@ func (j *applicationDeleteJob) snapshot() applicationDeleteProgressData {
 
 func applicationDeleteJobSteps() []applicationDeleteJobStep {
 	return []applicationDeleteJobStep{
+		{Stage: "schedules", Label: "Disable scheduled backups", State: applicationDeleteJobStepRemaining},
 		{Stage: "resources", Label: "Remove application Docker resources", State: applicationDeleteJobStepRemaining},
 		{Stage: "metadata", Label: "Delete application metadata", State: applicationDeleteJobStepRemaining},
+		{Stage: "routing", Label: "Refresh application routing", State: applicationDeleteJobStepRemaining},
+		{Stage: "keys", Label: "Revoke deployment keys", State: applicationDeleteJobStepRemaining},
 		{Stage: "folder", Label: "Delete application folder", State: applicationDeleteJobStepRemaining},
 	}
 }
 
-func (h *Handler) runApplicationDeleteJob(job *applicationDeleteJob) {
-	var err error
-	job.update("resources", "Removing application containers and Docker resources")
-	if manager, ok := h.applicationDeletion.(applicationDeletionProgressService); ok {
-		err = manager.DeleteApplicationWithProgress(context.Background(), job.applicationID, job.update)
-	} else {
-		err = h.applicationDeletion.DeleteApplication(context.Background(), job.applicationID)
+func applicationDeleteProgressFromIntent(intent application.ApplicationDeletionIntent) *applicationDeleteProgressData {
+	steps := applicationDeleteJobSteps()
+	stage := strings.TrimSpace(intent.Stage)
+	if stage == "" {
+		stage = "schedules"
 	}
-	if h.githubActions != nil {
-		if cleanupErr := h.githubActions.CleanupApplicationKey(context.Background(), job.applicationID); cleanupErr != nil && !errors.Is(cleanupErr, application.ErrGitHubActionsNotConfigured) {
+
+	progress := &applicationDeleteProgressData{
+		ApplicationID:   intent.ApplicationID,
+		ApplicationName: intent.Name,
+		State:           applicationDeleteJobStateRunning,
+		Steps:           steps,
+	}
+	if intent.State == "complete" || stage == "complete" {
+		progress.State = applicationDeleteJobStateComplete
+		progress.CurrentStage = "Complete"
+		for index := range progress.Steps {
+			progress.Steps[index].State = applicationDeleteJobStepComplete
+		}
+		return progress
+	}
+
+	stageIndex := -1
+	for index := range progress.Steps {
+		if progress.Steps[index].Stage == stage {
+			stageIndex = index
+			break
+		}
+	}
+	if stageIndex < 0 {
+		stageIndex = 0
+	}
+	for index := range progress.Steps {
+		switch {
+		case index < stageIndex:
+			progress.Steps[index].State = applicationDeleteJobStepComplete
+		case index == stageIndex:
+			progress.CurrentStage = progress.Steps[index].Label
+			if intent.State == "failed" {
+				progress.State = applicationDeleteJobStateFailed
+				progress.Steps[index].State = applicationDeleteJobStepFailed
+				progress.ErrorStage = progress.Steps[index].Label
+				progress.ErrorDetail = "The deletion checkpoint was retained. Retry the deletion to continue from this stage."
+			} else {
+				progress.Steps[index].State = applicationDeleteJobStepActive
+			}
+		}
+	}
+	return progress
+}
+
+func (h *Handler) runApplicationDeleteJob(ctx context.Context, job *applicationDeleteJob) {
+	var err error
+	job.update("schedules", "Disabling scheduled backups")
+	keyCleanupHandled := false
+	if owner, ok := h.applicationDeletion.(interface{ ApplicationDeletionHandlesKeyCleanup() bool }); ok {
+		keyCleanupHandled = owner.ApplicationDeletionHandlesKeyCleanup()
+	}
+	if manager, ok := h.applicationDeletion.(applicationDeletionProgressService); ok {
+		err = manager.DeleteApplicationWithProgress(ctx, job.applicationID, job.update)
+	} else {
+		err = h.applicationDeletion.DeleteApplication(ctx, job.applicationID)
+	}
+	if h.githubActions != nil && !keyCleanupHandled {
+		if cleanupErr := h.githubActions.CleanupApplicationKey(ctx, job.applicationID); cleanupErr != nil && !errors.Is(cleanupErr, application.ErrGitHubActionsNotConfigured) {
 			if err == nil {
 				err = cleanupErr
 			} else {

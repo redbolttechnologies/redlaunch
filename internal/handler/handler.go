@@ -4,11 +4,7 @@ package handler
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
 	"embed"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"html/template"
@@ -22,7 +18,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"redlaunch/internal/application"
@@ -33,18 +28,6 @@ import (
 //go:embed templates/*.html static/*
 var embeddedFiles embed.FS
 
-const csrfCookieName = "redlaunch_csrf"
-
-const (
-	oauthStateCookieName    = "redlaunch_oauth_state"
-	oauthRedirectCookieName = "redlaunch_oauth_redirect"
-	sessionCookieName       = "redlaunch_session"
-	oauthCallbackPath       = "/auth/google/callback"
-)
-
-type authenticatedUserContextKey struct{}
-
-// Handler serves the application pages.
 type Handler struct {
 	templates                      *template.Template
 	logger                         *slog.Logger
@@ -69,9 +52,6 @@ type Handler struct {
 	applicationContainerManager    applicationContainerService
 	githubActions                  githubActionsService
 	githubActionsJobs              *githubActionsJobStore
-	githubActionsJobContext        context.Context
-	githubActionsJobCancel         context.CancelFunc
-	githubActionsJobWorkers        sync.WaitGroup
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	dashboardMetrics               dashboardMetricsService
@@ -82,8 +62,26 @@ type Handler struct {
 	applicationContainerJobs       *applicationContainerJobStore
 	serviceDeleteJobs              *serviceDeleteJobStore
 	applicationDeleteJobs          *applicationDeleteJobStore
+	backupJobs                     *backupJobStore
+	jobs                           *trackedJobRuntime
+	logDownloads                   chan struct{}
 	csrfToken                      string
+	accessMode                     string
+	cookieSecure                   bool
 }
+
+// SecurityConfig describes how the management HTTP endpoint is deployed.
+// SSH-only is the default; managed-https is intended for an explicitly
+// configured TLS-terminating proxy such as the bundled Caddy component.
+type SecurityConfig struct {
+	AccessMode   string
+	CookieSecure bool
+}
+
+const (
+	accessModeSSHOnly      = "ssh-only"
+	accessModeManagedHTTPS = "managed-https"
+)
 
 type setupManager interface {
 	NeedsSetup() (bool, error)
@@ -164,12 +162,20 @@ type applicationEnvironmentEditor interface {
 	UpdateEnvironmentSecret(context.Context, int64, string, string, string) error
 }
 
+type applicationEnvironmentSecretValueEditor interface {
+	UpdateEnvironmentSecretValue(context.Context, int64, string, string, string, bool) error
+}
+
 type serviceDetailsService interface {
 	GetServiceDetails(context.Context, int64, string) (application.ServiceDetails, error)
 }
 
 type serviceFullLogsService interface {
 	GetServiceFullLogs(context.Context, int64, string) (string, error)
+}
+
+type serviceLogStreamService interface {
+	OpenServiceLogs(context.Context, int64, string) (io.ReadCloser, error)
 }
 
 type serviceActionService interface {
@@ -229,6 +235,10 @@ type proxyFullLogsService interface {
 	GetProxyFullLogs(context.Context) (string, error)
 }
 
+type proxyLogStreamService interface {
+	OpenProxyLogs(context.Context) (io.ReadCloser, error)
+}
+
 type applicationContainerInputValidator interface {
 	ValidateApplicationServiceInput(application.ApplicationServiceInput) error
 }
@@ -247,44 +257,50 @@ type ServerInfo struct {
 	IPAddress string
 }
 
-// New constructs the HTTP handler. Additional dependencies may provide the
+// New constructs the HTTP handler for tests. Additional dependencies may provide the
 // setup manager and application service used by the corresponding pages.
+//
+// Production code must use NewWithDependencies with an explicit Dependencies
+// struct so required services (including authentication) fail fast.
 func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	templates, err := template.New("redlaunch").Funcs(template.FuncMap{
-		"serviceTypeClass":      serviceTypeClass,
-		"serviceTypeLabel":      serviceTypeLabel,
-		"serviceStatusClass":    serviceStatusClass,
-		"serviceIsRunning":      serviceIsRunning,
-		"serviceIsStopped":      serviceIsStopped,
-		"serviceCreatedAt":      serviceCreatedAtText,
-		"serviceCreatedAtISO":   serviceCreatedAtISO,
-		"serviceCreatedAtTitle": serviceCreatedAtTitle,
-		"proxyCreatedAt":        proxyCreatedAtText,
-		"proxyCreatedAtISO":     proxyCreatedAtISO,
-		"proxyCreatedAtTitle":   proxyCreatedAtTitle,
-		"serviceDetailsPath":    serviceDetailsPath,
-		"backupDownloadPath":    backupDownloadPath,
-		"backupTime":            backupTimeText,
-		"backupTimeISO":         backupTimeISO,
-		"backupAt":              backupAtText,
-		"backupAtISO":           backupAtISO,
-		"backupSize":            backupSizeText,
-		"backupStatusClass":     backupStatusClass,
-		"backupStatusIcon":      backupStatusIcon,
-		"backupStatusText":      backupStatusText,
-		"backupScheduleType":    backupScheduleTypeText,
-		"backupWeekday":         backupWeekdayText,
-		"serviceLogLines":       serviceLogLines,
-		"proxyLogLines":         proxyLogLines,
-		"routingHost":           routingHost,
-		"environmentSensitive":  environmentSensitive,
-		"dashboardPercent":      dashboardPercent,
-		"dashboardSize":         dashboardSize,
-		"dashboardTime":         dashboardTime,
-		"dashboardTimeISO":      dashboardTimeISO,
+		"serviceTypeClass":            serviceTypeClass,
+		"serviceTypeLabel":            serviceTypeLabel,
+		"serviceStatusClass":          serviceStatusClass,
+		"serviceIsRunning":            serviceIsRunning,
+		"serviceIsStopped":            serviceIsStopped,
+		"serviceCreatedAt":            serviceCreatedAtText,
+		"serviceCreatedAtISO":         serviceCreatedAtISO,
+		"serviceCreatedAtTitle":       serviceCreatedAtTitle,
+		"proxyCreatedAt":              proxyCreatedAtText,
+		"proxyCreatedAtISO":           proxyCreatedAtISO,
+		"proxyCreatedAtTitle":         proxyCreatedAtTitle,
+		"serviceDetailsPath":          serviceDetailsPath,
+		"backupDownloadPath":          backupDownloadPath,
+		"backupTime":                  backupTimeText,
+		"backupTimeISO":               backupTimeISO,
+		"backupAt":                    backupAtText,
+		"backupAtISO":                 backupAtISO,
+		"backupSize":                  backupSizeText,
+		"backupStatusClass":           backupStatusClass,
+		"backupStatusIcon":            backupStatusIcon,
+		"backupStatusText":            backupStatusText,
+		"backupScheduleType":          backupScheduleTypeText,
+		"backupWeekday":               backupWeekdayText,
+		"serviceLogLines":             serviceLogLines,
+		"proxyLogLines":               proxyLogLines,
+		"routingHost":                 routingHost,
+		"environmentSensitive":        environmentSensitive,
+		"dashboardPercent":            dashboardPercent,
+		"dashboardSize":               dashboardSize,
+		"dashboardTime":               dashboardTime,
+		"dashboardTimeISO":            dashboardTimeISO,
+		"dashboardMetricsScope":       dashboardMetricsScope,
+		"dashboardMetricsScopeDetail": dashboardMetricsScopeDetail,
+		"dashboardMetricAge":          dashboardMetricAge,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -316,6 +332,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	proxyActions := proxyActionService(noProxyService{})
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
 	var authentication authenticationService
+	security := SecurityConfig{AccessMode: accessModeSSHOnly}
 	for _, dependency := range dependencies {
 		switch dependency := dependency.(type) {
 		case nil:
@@ -517,11 +534,36 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				authentication = dependency
 			}
+		case SecurityConfig:
+			security = dependency
 		default:
 			return nil, fmt.Errorf("unsupported handler dependency %T", dependency)
 		}
 	}
-	githubActionsJobContext, githubActionsJobCancel := context.WithCancel(context.Background())
+	security.AccessMode = strings.ToLower(strings.TrimSpace(security.AccessMode))
+	if security.AccessMode == "" {
+		security.AccessMode = accessModeSSHOnly
+	}
+	if security.AccessMode != accessModeSSHOnly && security.AccessMode != accessModeManagedHTTPS {
+		return nil, fmt.Errorf("unsupported management access mode %q", security.AccessMode)
+	}
+	setupJobs := newSetupJobStore()
+	postgresJobs := newPostgresJobStore()
+	redisJobs := newRedisServiceJobStore()
+	applicationContainerJobs := newApplicationContainerJobStore()
+	serviceDeleteJobs := newServiceDeleteJobStore()
+	applicationDeleteJobs := newApplicationDeleteJobStore()
+	backupJobs := newBackupJobStore()
+	githubActionsJobs := newGitHubActionsJobStore()
+	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
+	jobs.registerCleanup(setupJobs.expire)
+	jobs.registerCleanup(postgresJobs.expire)
+	jobs.registerCleanup(redisJobs.expire)
+	jobs.registerCleanup(applicationContainerJobs.expire)
+	jobs.registerCleanup(serviceDeleteJobs.expire)
+	jobs.registerCleanup(applicationDeleteJobs.expire)
+	jobs.registerCleanup(backupJobs.expire)
+	jobs.registerCleanup(githubActionsJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -549,16 +591,19 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		proxyActions:                   proxyActions,
 		dashboardMetrics:               dashboardMetrics,
 		authentication:                 authentication,
-		setupJobs:                      newSetupJobStore(),
-		postgresJobs:                   newPostgresJobStore(),
-		redisJobs:                      newRedisServiceJobStore(),
-		applicationContainerJobs:       newApplicationContainerJobStore(),
-		serviceDeleteJobs:              newServiceDeleteJobStore(),
-		applicationDeleteJobs:          newApplicationDeleteJobStore(),
-		githubActionsJobs:              newGitHubActionsJobStore(),
-		githubActionsJobContext:        githubActionsJobContext,
-		githubActionsJobCancel:         githubActionsJobCancel,
+		setupJobs:                      setupJobs,
+		postgresJobs:                   postgresJobs,
+		redisJobs:                      redisJobs,
+		applicationContainerJobs:       applicationContainerJobs,
+		serviceDeleteJobs:              serviceDeleteJobs,
+		applicationDeleteJobs:          applicationDeleteJobs,
+		backupJobs:                     backupJobs,
+		githubActionsJobs:              githubActionsJobs,
+		jobs:                           jobs,
+		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
 		csrfToken:                      csrfToken,
+		accessMode:                     security.AccessMode,
+		cookieSecure:                   security.CookieSecure,
 	}, nil
 }
 
@@ -613,6 +658,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/run", h.runBackupNow)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/restore", h.restoreBackup)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/delete", h.deleteBackup)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/backups/status", h.backupStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/backups/download", h.downloadBackup)
 	mux.HandleFunc("GET /applications/{id}/services/postgresql/new", h.postgreSQLServicePage)
 	mux.HandleFunc("GET /applications/{id}/services/postgresql/status", h.postgreSQLServiceStatus)
@@ -631,50 +677,7 @@ func (h *Handler) Routes() http.Handler {
 	} else {
 		h.logger.Error("mount static files", "error", err)
 	}
-	return h.withSecurityHeaders(h.withAuthentication(mux))
-}
-
-func (h *Handler) withAuthentication(next http.Handler) http.Handler {
-	if !h.authenticationEnabled() {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPublicAuthenticationPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		cookie, err := r.Cookie(sessionCookieName)
-		if err != nil {
-			h.redirectToLogin(w, r, r.URL.RequestURI())
-			return
-		}
-		user, valid, err := h.authentication.ValidateSession(r.Context(), cookie.Value)
-		if err != nil {
-			h.logger.Error("validate authentication session", "error", err)
-			http.Error(w, "The authentication state could not be checked.", http.StatusInternalServerError)
-			return
-		}
-		if !valid {
-			h.expireSessionCookie(w, r)
-			h.redirectToLogin(w, r, r.URL.RequestURI())
-			return
-		}
-		requestContext := context.WithValue(r.Context(), authenticatedUserContextKey{}, user)
-		next.ServeHTTP(w, r.WithContext(requestContext))
-	})
-}
-
-func isPublicAuthenticationPath(path string) bool {
-	return path == "/login" ||
-		path == "/auth/google" ||
-		path == "/auth/google/callback" ||
-		path == "/healthz" ||
-		strings.HasPrefix(path, "/static/")
-}
-
-func (h *Handler) authenticationEnabled() bool {
-	return h.authentication != nil && h.authentication.Enabled()
+	return h.withSecurityHeaders(h.withOriginCheck(h.withCSRFProtection(h.withAuthentication(mux))))
 }
 
 func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
@@ -698,299 +701,6 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	h.writeTemplate(w, "index.html", page)
 }
 
-func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	if _, valid, err := h.currentSessionUser(r); err != nil {
-		h.logger.Error("check existing authentication session", "error", err)
-		http.Error(w, "The authentication state could not be checked.", http.StatusInternalServerError)
-		return
-	} else if valid {
-		http.Redirect(w, r, safeRedirectTarget(r.URL.Query().Get("next")), http.StatusSeeOther)
-		return
-	}
-
-	errorMessage := loginErrorMessage(r.URL.Query().Get("error"))
-	target := safeRedirectTarget(r.URL.Query().Get("next"))
-	h.writeLoginPage(w, http.StatusOK, loginPageData{
-		Error:          errorMessage,
-		GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-	})
-}
-
-func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	redirectURL, err := h.oauthRedirectURL(r)
-	if err != nil {
-		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
-		http.Error(w, "Google sign-in could not be started.", http.StatusInternalServerError)
-		return
-	}
-	state, err := newCSRFToken()
-	if err != nil {
-		h.logger.Error("create Google OAuth state", "error", err)
-		http.Error(w, "Google sign-in could not be started.", http.StatusInternalServerError)
-		return
-	}
-	target := safeRedirectTarget(r.URL.Query().Get("next"))
-	secure := h.secureCookie(r)
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName,
-		Value:    state,
-		Path:     "/",
-		MaxAge:   10 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   secure,
-	})
-	http.SetCookie(w, &http.Cookie{
-		Name:     oauthRedirectCookieName,
-		Value:    base64.RawURLEncoding.EncodeToString([]byte(target)),
-		Path:     "/",
-		MaxAge:   10 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   secure,
-	})
-	http.Redirect(w, r, h.authorizationURL(state, redirectURL), http.StatusFound)
-}
-
-func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	target := "/"
-	if cookie, err := r.Cookie(oauthRedirectCookieName); err == nil {
-		if decoded, decodeErr := base64.RawURLEncoding.DecodeString(cookie.Value); decodeErr == nil {
-			target = safeRedirectTarget(string(decoded))
-		}
-	}
-	h.expireOAuthCookies(w, r)
-
-	stateCookie, err := r.Cookie(oauthStateCookieName)
-	if err != nil || !validCSRFToken(r.URL.Query().Get("state"), stateCookie.Value) {
-		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
-			Error:          "The Google sign-in session expired. Start again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	if r.URL.Query().Get("error") != "" {
-		h.redirectToLoginWithError(w, r, target, "cancelled")
-		return
-	}
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
-			Error:          "Google did not return an authorization code. Start again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-
-	redirectURL, err := h.oauthRedirectURL(r)
-	if err != nil {
-		h.logger.Error("resolve Google OAuth redirect URL", "error", err)
-		http.Error(w, "Google sign-in could not be completed.", http.StatusInternalServerError)
-		return
-	}
-	user, err := h.completeLogin(r.Context(), code, redirectURL)
-	if errors.Is(err, redlaunchauth.ErrNotAuthorized) || errors.Is(err, redlaunchauth.ErrEmailNotVerified) || errors.Is(err, application.ErrEmailInvalid) {
-		h.redirectToLoginWithError(w, r, target, "unauthorized")
-		return
-	}
-	if err != nil {
-		h.logger.Error("complete Google login", "error", err)
-		h.writeLoginPage(w, http.StatusBadGateway, loginPageData{
-			Error:          "Google sign-in could not be completed. Try again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	session, err := h.authentication.NewSession(user)
-	if err != nil {
-		h.logger.Error("create authentication session", "error", err)
-		h.writeLoginPage(w, http.StatusInternalServerError, loginPageData{
-			Error:          "Your sign-in could not be saved. Try again.",
-			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
-		})
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    session,
-		Path:     "/",
-		MaxAge:   int(h.authentication.SessionDuration().Seconds()),
-		Expires:  time.Now().Add(h.authentication.SessionDuration()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.secureCookie(r),
-	})
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (h *Handler) currentSessionUser(r *http.Request) (redlaunchauth.User, bool, error) {
-	cookie, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return redlaunchauth.User{}, false, nil
-	}
-	return h.authentication.ValidateSession(r.Context(), cookie.Value)
-}
-
-func (h *Handler) authorizationURL(state, redirectURL string) string {
-	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
-		return authentication.AuthorizationURLForRedirect(state, redirectURL)
-	}
-	return h.authentication.AuthorizationURL(state)
-}
-
-func (h *Handler) completeLogin(ctx context.Context, code, redirectURL string) (redlaunchauth.User, error) {
-	if authentication, ok := h.authentication.(authenticationRedirectService); ok {
-		return authentication.CompleteLoginForRedirect(ctx, code, redirectURL)
-	}
-	return h.authentication.CompleteLogin(ctx, code)
-}
-
-func (h *Handler) oauthRedirectURL(r *http.Request) (string, error) {
-	if _, ok := h.authentication.(authenticationRedirectService); !ok {
-		return "", nil
-	}
-	publicAccess, err := h.redlaunchPublicAccess.GetRedlaunchPublicAccess(r.Context())
-	if err != nil {
-		return "", fmt.Errorf("read Redlaunch public access settings: %w", err)
-	}
-	if !publicAccess.Enabled {
-		return "", nil
-	}
-	domain, err := application.ValidateDomainName(publicAccess.Domain)
-	if err != nil {
-		return "", fmt.Errorf("validate Redlaunch public access domain: %w", err)
-	}
-	if !requestUsesPublicHost(r, domain) {
-		return "", nil
-	}
-	return (&url.URL{Scheme: "https", Host: domain, Path: oauthCallbackPath}).String(), nil
-}
-
-func requestUsesPublicHost(r *http.Request, expectedDomain string) bool {
-	host := strings.TrimSpace(r.Host)
-	if host == "" && r.URL != nil {
-		host = strings.TrimSpace(r.URL.Host)
-	}
-	if host == "" {
-		return false
-	}
-	parsed, err := url.Parse("//" + host)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	if port := parsed.Port(); port != "" && port != "443" {
-		return false
-	}
-	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	expectedDomain = strings.TrimSuffix(strings.ToLower(expectedDomain), ".")
-	return hostname != "" && hostname == expectedDomain
-}
-
-func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "The logout request was invalid.", http.StatusBadRequest)
-		return
-	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
-		http.Error(w, "This logout request expired. Refresh the page and try again.", http.StatusForbidden)
-		return
-	}
-
-	h.expireSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
-func (h *Handler) redirectToLogin(w http.ResponseWriter, r *http.Request, target string) {
-	h.redirectToLoginWithError(w, r, target, "")
-}
-
-func (h *Handler) redirectToLoginWithError(w http.ResponseWriter, r *http.Request, target, errorCode string) {
-	values := url.Values{"next": {safeRedirectTarget(target)}}
-	if errorCode != "" {
-		values.Set("error", errorCode)
-	}
-	http.Redirect(w, r, "/login?"+values.Encode(), http.StatusSeeOther)
-}
-
-func loginErrorMessage(code string) string {
-	switch code {
-	case "cancelled":
-		return "Google sign-in was cancelled."
-	case "unauthorized":
-		return "This Google account is not authorized to use Redlaunch."
-	case "oauth":
-		return "Google sign-in could not be completed. Try again."
-	default:
-		return ""
-	}
-}
-
-func safeRedirectTarget(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "/"
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.User != nil || parsed.Path == "" || !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") || strings.Contains(parsed.Path, "\\") {
-		return "/"
-	}
-	return parsed.RequestURI()
-}
-
-func (h *Handler) secureCookie(r *http.Request) bool {
-	return r.TLS != nil || h.authentication.CookieSecure()
-}
-
-func (h *Handler) expireOAuthCookies(w http.ResponseWriter, r *http.Request) {
-	secure := h.secureCookie(r)
-	for _, name := range []string{oauthStateCookieName, oauthRedirectCookieName} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			Expires:  time.Unix(1, 0),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			Secure:   secure,
-		})
-	}
-}
-
-func (h *Handler) expireSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		Expires:  time.Unix(1, 0),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.secureCookie(r),
-	})
-}
-
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	needsSetup, err := h.setupManager.NeedsSetup()
 	if err != nil {
@@ -1006,11 +716,7 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The setup request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		h.writeSetupPage(w, r, http.StatusForbidden, setupPageData{
 			Error:           "This setup page expired. Submit the refreshed form to continue.",
 			InstallProxy:    r.Form.Get("proxy") == "on",
@@ -1023,13 +729,22 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		InstallProxy:    r.Form.Get("proxy") == "on",
 		InstallRegistry: r.Form.Get("registry") == "on",
 	}
-	job, err := h.setupJobs.create(setupData.InstallProxy, setupData.InstallRegistry)
+	job, created, err := h.setupJobs.createUnique(setupData.InstallProxy, setupData.InstallRegistry)
 	if err != nil {
 		h.logger.Error("create setup job", "error", err)
 		http.Error(w, "The setup job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runSetupJob(job, setupData.InstallProxy, setupData.InstallRegistry)
+	if created {
+		if err := h.startTrackedJob("setup", func(ctx context.Context) {
+			h.runSetupJob(ctx, job, setupData.InstallProxy, setupData.InstallRegistry)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit setup job", "error", err)
+			http.Error(w, "The setup system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 
 	location := "/?setup_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
@@ -1108,7 +823,7 @@ func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 		return
 	}
-	applicationDeleteProgress, ok := h.applicationDeleteProgress(id, r.URL.Query().Get("application_delete_job"))
+	applicationDeleteProgress, ok := h.applicationDeleteProgress(r.Context(), id, r.URL.Query().Get("application_delete_job"))
 	if !ok {
 		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 		return
@@ -1168,11 +883,7 @@ func (h *Handler) importDockerComposeProject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This application page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1240,11 +951,7 @@ func (h *Handler) importApplicationEnvironmentFiles(w http.ResponseWriter, r *ht
 		return
 	}
 
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This application page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1350,7 +1057,7 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 			Title:           "Variables",
 			Description:     "Non-secret values from vars.env.",
 			ApplicationName: item.Name,
-			Entries:         environmentFiles.Variables,
+			Entries:         environmentEntriesForPage(environmentFiles.Variables, false),
 			Available:       environmentFiles.VariablesAvailable,
 			Editable:        true,
 		},
@@ -1360,7 +1067,7 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 			Title:           "Secrets",
 			Description:     "Sensitive values from secrets.env are masked.",
 			ApplicationName: item.Name,
-			Entries:         environmentFiles.Secrets,
+			Entries:         environmentEntriesForPage(environmentFiles.Secrets, true),
 			Available:       environmentFiles.SecretsAvailable,
 			Editable:        true,
 			MaskValues:      true,
@@ -1393,16 +1100,11 @@ func (h *Handler) updateRedlaunchPublicAccess(w http.ResponseWriter, r *http.Req
 		http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The public access request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This settings page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1478,16 +1180,11 @@ func (h *Handler) updateApplicationVariable(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The variable save request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This variables page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1542,16 +1239,11 @@ func (h *Handler) deleteApplicationVariable(w http.ResponseWriter, r *http.Reque
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The variable delete request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This variables page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1603,16 +1295,11 @@ func (h *Handler) moveApplicationVariableToSecrets(w http.ResponseWriter, r *htt
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The move variable request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This variables page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1652,16 +1339,11 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The secret save request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This secrets page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1671,8 +1353,10 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 		Add:          r.Form.Get("operation") == "add",
 		OriginalName: r.Form.Get("original_name"),
 		Name:         r.Form.Get("name"),
-		Value:        r.Form.Get("value"),
+		ClearValue:   r.Form.Get("clear_value") == "on",
 	}
+	submittedValue := r.Form.Get("value")
+	edit.ReplaceValue = edit.Add || submittedValue != "" || edit.ClearValue
 	if h.applicationEditor == nil {
 		h.logger.Error("update application secret without an editor", "application_id", id)
 		edit.Error = "The secret could not be saved right now."
@@ -1681,9 +1365,15 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 	}
 	var updateErr error
 	if edit.Add {
-		updateErr = h.applicationEditor.AddEnvironmentSecret(r.Context(), id, edit.Name, edit.Value)
+		updateErr = h.applicationEditor.AddEnvironmentSecret(r.Context(), id, edit.Name, submittedValue)
 	} else {
-		updateErr = h.applicationEditor.UpdateEnvironmentSecret(r.Context(), id, edit.OriginalName, edit.Name, edit.Value)
+		if editor, ok := h.applicationEditor.(applicationEnvironmentSecretValueEditor); ok {
+			updateErr = editor.UpdateEnvironmentSecretValue(r.Context(), id, edit.OriginalName, edit.Name, submittedValue, edit.ReplaceValue)
+		} else if edit.ReplaceValue {
+			updateErr = h.applicationEditor.UpdateEnvironmentSecret(r.Context(), id, edit.OriginalName, edit.Name, submittedValue)
+		} else {
+			updateErr = errors.New("secret editor does not support unchanged values")
+		}
 	}
 	if updateErr != nil {
 		if environmentVariableUpdateUserError(updateErr) {
@@ -1716,16 +1406,11 @@ func (h *Handler) deleteApplicationSecret(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The secret delete request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This secrets page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1777,16 +1462,11 @@ func (h *Handler) moveApplicationSecretToVariables(w http.ResponseWriter, r *htt
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The move secret request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This secrets page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1826,16 +1506,11 @@ func (h *Handler) createApplicationDomain(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The domain save request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This domains page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -1881,16 +1556,11 @@ func (h *Handler) deleteApplicationDomain(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The domain delete request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This domains page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -2044,6 +1714,8 @@ func (h *Handler) renderApplicationVariableEditError(w http.ResponseWriter, r *h
 }
 
 func (h *Handler) renderApplicationSecretEditError(w http.ResponseWriter, r *http.Request, id int64, edit *secretEditPageData, status int) {
+	// A submitted secret must not be reflected into the response. The name and
+	// validation state are retained, while the replacement value is re-entered.
 	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
 		http.NotFound(w, r)
@@ -2301,6 +1973,11 @@ func (h *Handler) serviceDetailsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The service details could not be read.", http.StatusInternalServerError)
 		return
 	}
+	backupProgress, backupProgressOK := h.backupProgress(id, serviceName, r.URL.Query().Get("backup_job"))
+	if !backupProgressOK {
+		http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+		return
+	}
 	if h.backupManager != nil && application.IsDatabaseServiceType(details.Service.Type) {
 		backupDetails, backupErr := h.backupManager.GetBackupDetails(r.Context(), id, serviceName)
 		if backupErr != nil {
@@ -2311,8 +1988,9 @@ func (h *Handler) serviceDetailsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeServiceDetailsPage(w, r, http.StatusOK, serviceDetailsPageData{
-		Application: item,
-		Details:     details,
+		Application:    item,
+		Details:        details,
+		BackupProgress: backupProgress,
 	})
 }
 
@@ -2328,8 +2006,9 @@ func (h *Handler) downloadServiceLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logsService, ok := h.serviceDetails.(serviceFullLogsService)
-	if !ok {
+	logsService, hasLegacyLogs := h.serviceDetails.(serviceFullLogsService)
+	streamer, hasStream := h.serviceDetails.(serviceLogStreamService)
+	if !hasLegacyLogs && !hasStream {
 		http.Error(w, "Service log downloads are not configured.", http.StatusInternalServerError)
 		return
 	}
@@ -2342,6 +2021,27 @@ func (h *Handler) downloadServiceLogs(w http.ResponseWriter, r *http.Request) {
 	validatedServiceName, err := application.ValidateServiceName(serviceName)
 	if err != nil || validatedServiceName != serviceName {
 		http.NotFound(w, r)
+		return
+	}
+	release, err := h.acquireLogDownload(r.Context())
+	if err != nil {
+		http.Error(w, "Too many log downloads are active. Try again shortly.", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
+
+	if hasStream {
+		stream, err := streamer.OpenServiceLogs(r.Context(), id, serviceName)
+		if err != nil {
+			if errors.Is(err, application.ErrNotFound) || errors.Is(err, application.ErrServiceNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error("open full service log stream", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The service logs could not be read.", http.StatusInternalServerError)
+			return
+		}
+		h.writeLogDownload(w, stream, "service-logs.txt", "service")
 		return
 	}
 
@@ -2416,11 +2116,32 @@ func (h *Handler) runBackupNow(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := h.backupManager.RunBackupNow(r.Context(), id, serviceName); err != nil {
-		h.writeBackupError(w, r, "run backup", err)
+	job, created, err := h.backupJobs.createUnique(id, serviceName, backupJobOperationRun)
+	if err != nil {
+		h.logger.Error("create backup job", "application_id", id, "service", serviceName, "error", err)
+		http.Error(w, "The backup job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+	if created {
+		if err := h.startTrackedJob("backup:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runBackupJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit backup job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+		if finished, operationErr := job.wait(25 * time.Millisecond); finished {
+			if operationErr != nil {
+				h.writeBackupError(w, r, "run backup", operationErr)
+				return
+			}
+			http.Redirect(w, r, serviceDetailsPath(id, serviceName)+"?tab=backups", http.StatusSeeOther)
+			return
+		}
+	}
+	location := serviceDetailsPath(id, serviceName) + "?tab=backups&backup_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 func (h *Handler) restoreBackup(w http.ResponseWriter, r *http.Request) {
@@ -2432,11 +2153,64 @@ func (h *Handler) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.backupManager.RestoreBackup(r.Context(), id, serviceName, r.Form.Get("backup_file")); err != nil {
+	fileName, err := application.ValidateBackupFileName(r.Form.Get("backup_file"))
+	if err != nil {
 		h.writeBackupError(w, r, "restore backup", err)
 		return
 	}
-	http.Redirect(w, r, serviceDetailsPath(id, serviceName), http.StatusSeeOther)
+	job, created, err := h.backupJobs.createUnique(id, serviceName, backupJobOperationRestore)
+	if err != nil {
+		h.logger.Error("create restore job", "application_id", id, "service", serviceName, "error", err)
+		http.Error(w, "The restore job could not be created.", http.StatusInternalServerError)
+		return
+	}
+	if created {
+		job.setRestoreFile(fileName)
+		if err := h.startTrackedJob("backup:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runBackupJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit restore job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+		if finished, operationErr := job.wait(25 * time.Millisecond); finished {
+			if operationErr != nil {
+				h.writeBackupError(w, r, "restore backup", operationErr)
+				return
+			}
+			http.Redirect(w, r, serviceDetailsPath(id, serviceName), http.StatusSeeOther)
+			return
+		}
+	}
+	location := serviceDetailsPath(id, serviceName) + "?tab=backups&backup_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func (h *Handler) backupStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := r.URL.Query().Get("id")
+	if jobID == "" {
+		http.Error(w, "The backup job ID is required.", http.StatusBadRequest)
+		return
+	}
+	progress, ok := h.backupProgress(id, serviceName, jobID)
+	if !ok {
+		http.Error(w, "The backup job was not found.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeTemplateStatus(w, "backup-progress.html", pageData{BackupProgress: progress}, http.StatusOK)
 }
 
 func (h *Handler) deleteBackup(w http.ResponseWriter, r *http.Request) {
@@ -2470,10 +2244,14 @@ func (h *Handler) downloadBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer reader.Close()
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/sql")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+backup.FileName+`"`)
 	w.Header().Set("Content-Length", strconv.FormatInt(backup.SizeBytes, 10))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(backupDownloadWriteTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		h.logger.Error("set backup download deadline", "application_id", id, "service", serviceName, "error", err)
+	}
 	if _, err := io.Copy(w, reader); err != nil {
 		h.logger.Error("download backup", "application_id", id, "service", serviceName, "backup_file", backup.FileName, "error", err)
 	}
@@ -2503,16 +2281,11 @@ func (h *Handler) prepareBackupRequest(w http.ResponseWriter, r *http.Request) (
 		return 0, "", false
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The backup request was invalid.", http.StatusBadRequest)
 		return 0, "", false
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This backup page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return 0, "", false
 	}
@@ -2551,8 +2324,13 @@ func (h *Handler) writeBackupError(w http.ResponseWriter, r *http.Request, opera
 		http.NotFound(w, r)
 	case errors.Is(err, application.ErrBackupServiceNotRunning):
 		http.Error(w, "The database service must be running before a manual backup can be created.", http.StatusConflict)
+	case errors.Is(err, application.ErrBackupOperationInProgress), errors.Is(err, application.ErrApplicationDeletionInProgress):
+		http.Error(w, "Another operation is already using this database service. Try again shortly.", http.StatusConflict)
 	case errors.Is(err, application.ErrBackupScheduleTypeInvalid), errors.Is(err, application.ErrBackupHourInvalid), errors.Is(err, application.ErrBackupMinuteInvalid), errors.Is(err, application.ErrBackupWeekdayInvalid), errors.Is(err, application.ErrBackupRetentionInvalid), errors.Is(err, application.ErrBackupFileNameInvalid):
 		http.Error(w, backupValidationMessage(err), http.StatusBadRequest)
+	case errors.Is(err, application.ErrBackupSchedulerUnavailable):
+		h.logger.Error(operation, "application_id", r.PathValue("id"), "service", r.PathValue("service"), "error", err)
+		http.Error(w, "Scheduled backups are unavailable right now. Check the systemd controller configuration and host mounts, then try again.", http.StatusServiceUnavailable)
 	default:
 		h.logger.Error(operation, "application_id", r.PathValue("id"), "service", r.PathValue("service"), "error", err)
 		http.Error(w, "The "+operation+" could not be completed.", http.StatusInternalServerError)
@@ -2606,24 +2384,31 @@ func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application deletion request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This application deletion page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
 
 	item, err := h.applicationDetails.Get(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
-		http.NotFound(w, r)
-		return
+		recovery, ok := h.applicationDeletion.(interface {
+			GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error)
+		})
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		intent, intentErr := recovery.GetApplicationDeletion(r.Context(), id)
+		if intentErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		item = application.Application{ID: intent.ApplicationID, Name: intent.Name, FolderName: intent.FolderName}
+		err = nil
 	}
 	if err != nil {
 		h.logger.Error("get application for deletion", "application_id", id, "error", err)
@@ -2635,13 +2420,22 @@ func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.applicationDeleteJobs.create(id, item.Name)
+	job, created, err := h.applicationDeleteJobs.createUnique(id, item.Name)
 	if err != nil {
 		h.logger.Error("create application deletion job", "application_id", id, "error", err)
 		http.Error(w, "The application deletion job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runApplicationDeleteJob(job)
+	if created {
+		if err := h.startTrackedJob("application-delete:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runApplicationDeleteJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit application deletion job", "application_id", id, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?application_delete_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -2670,16 +2464,11 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The service deletion request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This service deletion page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -2688,13 +2477,22 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.serviceDeleteJobs.create(id, serviceName)
+	job, created, err := h.serviceDeleteJobs.createUnique(id, serviceName)
 	if err != nil {
 		h.logger.Error("create service deletion job", "application_id", id, "service", serviceName, "error", err)
 		http.Error(w, "The service deletion job could not be created.", http.StatusInternalServerError)
 		return
 	}
-	go h.runServiceDeleteJob(job)
+	if created {
+		if err := h.startTrackedJob("service-delete:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runServiceDeleteJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit service deletion job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?service_delete_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -2717,16 +2515,11 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 		return
 	}
 	serviceName := r.PathValue("service")
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The service action request was invalid.", http.StatusBadRequest)
 		return
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		http.Error(w, "This service action page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
@@ -2873,7 +2666,7 @@ func (h *Handler) applicationDeleteStatus(w http.ResponseWriter, r *http.Request
 		http.Error(w, "The application deletion job ID is required.", http.StatusBadRequest)
 		return
 	}
-	progress, ok := h.applicationDeleteProgress(id, jobID)
+	progress, ok := h.applicationDeleteProgress(r.Context(), id, jobID)
 	if !ok {
 		http.Error(w, "The application deletion job was not found.", http.StatusNotFound)
 		return
@@ -2938,18 +2731,38 @@ func (h *Handler) serviceDeleteProgress(applicationID int64, jobID string) (*ser
 	return &progress, true
 }
 
-func (h *Handler) applicationDeleteProgress(applicationID int64, jobID string) (*applicationDeleteProgressData, bool) {
-	if jobID == "" {
-		return nil, true
+func (h *Handler) applicationDeleteProgress(ctx context.Context, applicationID int64, jobID string) (*applicationDeleteProgressData, bool) {
+	if jobID != "" {
+		if job := h.applicationDeleteJobs.get(applicationID, jobID); job != nil {
+			progress := job.snapshot()
+			progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=" + url.QueryEscape(jobID)
+			progress.CloseURL = "/applications"
+			return &progress, true
+		}
 	}
-	job := h.applicationDeleteJobs.get(applicationID, jobID)
-	if job == nil {
+
+	recovery, ok := h.applicationDeletion.(interface {
+		GetApplicationDeletion(context.Context, int64) (application.ApplicationDeletionIntent, error)
+	})
+	if !ok {
+		return nil, jobID == ""
+	}
+	intent, err := recovery.GetApplicationDeletion(ctx, applicationID)
+	if errors.Is(err, application.ErrNotFound) {
+		return nil, jobID == ""
+	}
+	if err != nil {
+		h.logger.Error("get application deletion recovery state", "application_id", applicationID, "error", err)
 		return nil, false
 	}
-	progress := job.snapshot()
-	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=" + url.QueryEscape(jobID)
+	if jobID == "" && intent.State == "complete" {
+		return nil, true
+	}
+	progress := applicationDeleteProgressFromIntent(intent)
+	progress.JobID = "recovery"
+	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=recovery"
 	progress.CloseURL = "/applications"
-	return &progress, true
+	return progress, true
 }
 
 func (h *Handler) postgreSQLServicePage(w http.ResponseWriter, r *http.Request) {
@@ -3045,8 +2858,7 @@ func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The PostgreSQL service request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3057,11 +2869,7 @@ func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request
 		DatabaseName:    firstFormValue(r.Form, "database_name", "db_name"),
 		DatabaseUser:    firstFormValue(r.Form, "database_user", "username", "user"),
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		data.Error = "This database page expired. Submit the refreshed form to continue."
 		h.writePostgreSQLServicePage(w, r, http.StatusForbidden, data)
 		return
@@ -3083,13 +2891,23 @@ func (h *Handler) createPostgreSQLService(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	job, err := h.postgresJobs.create(id)
+	job, created, err := h.postgresJobs.createUnique(id)
 	if err != nil {
 		h.logger.Error("create PostgreSQL service job", "application_id", id, "error", err)
 		h.writePostgreSQLServicePage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runPostgresJob(job, input)
+	if created {
+		if err := h.startTrackedJob("postgres-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runPostgresJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			input.DatabasePassword = ""
+			h.logger.Error("admit PostgreSQL service job", "application_id", id, "error", err)
+			h.writePostgreSQLServicePage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?postgres_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -3122,8 +2940,7 @@ func (h *Handler) createRedisService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The Redis service request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3134,11 +2951,7 @@ func (h *Handler) createRedisService(w http.ResponseWriter, r *http.Request) {
 		Port:          firstFormValue(r.Form, "port"),
 		PersistToDisk: r.Form.Get("persist_to_disk") == "on",
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		data.Error = "This Redis page expired. Submit the refreshed form to continue."
 		h.writeRedisServicePage(w, r, http.StatusForbidden, data)
 		return
@@ -3160,13 +2973,23 @@ func (h *Handler) createRedisService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	job, err := h.redisJobs.create(id)
+	job, created, err := h.redisJobs.createUnique(id)
 	if err != nil {
 		h.logger.Error("create Redis service job", "application_id", id, "error", err)
 		h.writeRedisServicePage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runRedisJob(job, input)
+	if created {
+		if err := h.startTrackedJob("redis-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runRedisJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			input.Password = ""
+			h.logger.Error("admit Redis service job", "application_id", id, "error", err)
+			h.writeRedisServicePage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?redis_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -3199,8 +3022,7 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application container request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3239,11 +3061,7 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 	if strings.TrimSpace(data.RestartPolicy) == "" {
 		data.RestartPolicy = application.ApplicationRestartPolicyUnlessStopped
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		data.Error = "This application container page expired. Submit the refreshed form to continue."
 		h.writeApplicationContainerPage(w, r, http.StatusForbidden, data)
 		return
@@ -3269,13 +3087,22 @@ func (h *Handler) createApplicationContainer(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	job, err := h.applicationContainerJobs.create(id, input.AutoStart)
+	job, created, err := h.applicationContainerJobs.createUnique(id, input.AutoStart)
 	if err != nil {
 		h.logger.Error("create application container job", "application_id", id, "error", err)
 		h.writeApplicationContainerPage(w, r, http.StatusInternalServerError, data)
 		return
 	}
-	go h.runApplicationContainerJob(job, input)
+	if created {
+		if err := h.startTrackedJob("application-create:"+strconv.FormatInt(id, 10), func(ctx context.Context) {
+			h.runApplicationContainerJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit application container job", "application_id", id, "error", err)
+			h.writeApplicationContainerPage(w, r, http.StatusServiceUnavailable, data)
+			return
+		}
+	}
 	location := "/applications/" + strconv.FormatInt(id, 10) + "?application_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
@@ -3321,8 +3148,7 @@ func (h *Handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
-	if err := r.ParseForm(); err != nil {
+	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The application request was invalid.", http.StatusBadRequest)
 		return
 	}
@@ -3331,11 +3157,7 @@ func (h *Handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		FolderName: firstFormValue(r.Form, "folder_name", "folder"),
 		ModalOpen:  true,
 	}
-	expectedCSRFToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		expectedCSRFToken = cookie.Value
-	}
-	if !validCSRFToken(r.Form.Get("csrf_token"), expectedCSRFToken) {
+	if !h.validRequestCSRF(r) {
 		data.Error = "This applications page expired. Submit the refreshed form to continue."
 		data.Applications = h.currentApplications(r.Context())
 		h.writeApplicationPage(w, r, http.StatusForbidden, data)
@@ -3396,16 +3218,6 @@ func (h *Handler) writeLoginPage(w http.ResponseWriter, status int, data loginPa
 	_, _ = w.Write(body.Bytes())
 }
 
-func (h *Handler) withSecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://googleusercontent.com https://*.googleusercontent.com; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
-}
-
 func userMessage(err error) string {
 	switch {
 	case errors.Is(err, application.ErrNameRequired):
@@ -3422,6 +3234,8 @@ func userMessage(err error) string {
 		return "Folder names must be a single, valid directory name."
 	case errors.Is(err, application.ErrAlreadyExists):
 		return "An application with that name or folder already exists."
+	case errors.Is(err, application.ErrApplicationDeletionInProgress):
+		return "An application deletion is still in progress for that folder. Retry after deletion finishes."
 	default:
 		return "The application could not be created."
 	}
@@ -4287,6 +4101,7 @@ type pageData struct {
 	ApplicationContainerProgress *applicationContainerProgressData
 	ServiceDeleteProgress        *serviceDeleteProgressData
 	ApplicationDeleteProgress    *applicationDeleteProgressData
+	BackupProgress               *backupProgressData
 	GitHubActionsProgress        *githubActionsProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
@@ -4310,10 +4125,7 @@ type sidebarUserData struct {
 func (h *Handler) shellPageData(r *http.Request) pageData {
 	data := pageData{
 		Server:    h.server,
-		CSRFToken: h.csrfToken,
-	}
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		data.CSRFToken = cookie.Value
+		CSRFToken: h.csrfTokenForRequest(r),
 	}
 	if user, ok := r.Context().Value(authenticatedUserContextKey{}).(redlaunchauth.User); ok && user.Email != "" {
 		name := strings.TrimSpace(user.Name)
@@ -4374,7 +4186,10 @@ type setupPageData struct {
 	InstallRegistry bool
 }
 
-const maxFormBody = 1 << 20
+const (
+	maxFormBody                = 1 << 20
+	backupDownloadWriteTimeout = 30 * time.Second
+)
 
 type applicationPageData struct {
 	Applications []application.Application
@@ -4423,12 +4238,30 @@ type environmentFilePageData struct {
 	Title           string
 	Description     string
 	ApplicationName string
-	Entries         []application.EnvironmentVariable
+	Entries         []environmentEntryPageData
 	Available       bool
 	Editable        bool
 	MaskValues      bool
 	Error           string
 	CSRFToken       string
+}
+
+type environmentEntryPageData struct {
+	Key      string
+	Value    string
+	HasValue bool
+}
+
+func environmentEntriesForPage(entries []application.EnvironmentVariable, secret bool) []environmentEntryPageData {
+	result := make([]environmentEntryPageData, 0, len(entries))
+	for _, entry := range entries {
+		pageEntry := environmentEntryPageData{Key: entry.Key, HasValue: entry.Value != ""}
+		if !secret {
+			pageEntry.Value = entry.Value
+		}
+		result = append(result, pageEntry)
+	}
+	return result
 }
 
 type variableEditPageData struct {
@@ -4460,6 +4293,7 @@ type routingEditPageData struct {
 	Subdomain   string
 	Path        string
 	ServiceName string
+	ServicePort int
 	ServicePath string
 }
 
@@ -4482,7 +4316,8 @@ type secretEditPageData struct {
 	Error        string
 	OriginalName string
 	Name         string
-	Value        string
+	ClearValue   bool
+	ReplaceValue bool
 }
 
 type secretDeletePageData struct {
@@ -4492,9 +4327,10 @@ type secretDeletePageData struct {
 }
 
 type serviceDetailsPageData struct {
-	Application application.Application
-	Details     application.ServiceDetails
-	CSRFToken   string
+	Application    application.Application
+	Details        application.ServiceDetails
+	CSRFToken      string
+	BackupProgress *backupProgressData
 }
 
 type proxyPageData struct {
@@ -4736,18 +4572,7 @@ func (noApplicationService) ValidateApplicationServiceInput(application.Applicat
 }
 
 func (h *Handler) writeSetupPage(w http.ResponseWriter, r *http.Request, status int, data setupPageData, progress ...*setupProgressData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
@@ -4759,18 +4584,7 @@ func (h *Handler) writeSetupPage(w http.ResponseWriter, r *http.Request, status 
 }
 
 func (h *Handler) writeApplicationPage(w http.ResponseWriter, r *http.Request, status int, data applicationPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
@@ -4780,18 +4594,7 @@ func (h *Handler) writeApplicationPage(w http.ResponseWriter, r *http.Request, s
 }
 
 func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Request, status int, data applicationDetailsPageData, postgresProgress *postgresProgressData, redisProgress *redisProgressData, applicationProgress ...*applicationContainerProgressData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	data.Variables.CSRFToken = csrfToken
@@ -4810,18 +4613,7 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) writeApplicationDeleteProgressPage(w http.ResponseWriter, r *http.Request, status int, progress *applicationDeleteProgressData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	page := h.shellPageData(r)
 	page.ApplicationDeleteProgress = progress
@@ -4829,39 +4621,18 @@ func (h *Handler) writeApplicationDeleteProgressPage(w http.ResponseWriter, r *h
 }
 
 func (h *Handler) writeServiceDetailsPage(w http.ResponseWriter, r *http.Request, status int, data serviceDetailsPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
 	page.ActivePage = "applications"
 	page.ServiceDetailsPage = &data
+	page.BackupProgress = data.BackupProgress
 	h.writeTemplateStatus(w, "service-details.html", page, status)
 }
 
 func (h *Handler) writePostgreSQLServicePage(w http.ResponseWriter, r *http.Request, status int, data postgresqlServicePageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
@@ -4871,18 +4642,7 @@ func (h *Handler) writePostgreSQLServicePage(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) writeRedisServicePage(w http.ResponseWriter, r *http.Request, status int, data redisServicePageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
@@ -4892,18 +4652,7 @@ func (h *Handler) writeRedisServicePage(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *Handler) writeApplicationContainerPage(w http.ResponseWriter, r *http.Request, status int, data applicationContainerPageData) {
-	csrfToken := h.csrfToken
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && validCSRFTokenFormat(cookie.Value) {
-		csrfToken = cookie.Value
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     csrfCookieName,
-		Value:    csrfToken,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		Secure:   r.TLS != nil,
-	})
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	ensureApplicationContainerFormRows(&data)
 	data.CSRFToken = csrfToken
@@ -4970,29 +4719,6 @@ func (h *Handler) setupProgress(r *http.Request) (*setupProgressData, bool) {
 	}
 	progress := job.snapshot()
 	return &progress, true
-}
-
-func newCSRFToken() (string, error) {
-	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(token), nil
-}
-
-func validCSRFToken(got, want string) bool {
-	if !validCSRFTokenFormat(got) || !validCSRFTokenFormat(want) || len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-}
-
-func validCSRFTokenFormat(token string) bool {
-	if token == "" || len(token) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(token)
-	return err == nil
 }
 
 func discoverServerInfo() ServerInfo {

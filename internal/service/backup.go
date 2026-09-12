@@ -1,11 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,6 +32,35 @@ type BackupRepository interface {
 	ListBackups(context.Context, int64) ([]application.Backup, error)
 	DeleteBackup(context.Context, int64, string) error
 }
+
+type backupLeaseRepository interface {
+	AcquireBackupLease(context.Context, int64, string, string, time.Time, time.Time) error
+	ReleaseBackupLease(context.Context, int64, string) error
+}
+
+type backupStatusRepository interface {
+	UpdateBackupStatus(context.Context, int64, time.Time, string, int64) error
+}
+
+type backupDeletionStateRepository interface {
+	IsApplicationDeletionActive(context.Context, int64) (bool, error)
+}
+
+const backupLeaseDuration = 30 * time.Minute
+const backupTemporaryRetention = 24 * time.Hour
+
+// backupOperationTimeout bounds every lease-holding backup operation below the
+// lease window so a live owner can never still be running when its lease
+// expires. Web jobs carry a shorter 15-minute tracked-job deadline; this cap
+// exists for direct service callers and the backup-run CLI, which otherwise
+// pass an unbounded signal context. The generated systemd unit kills overruns
+// at the same boundary. Lease expiry then only handles true process death,
+// never a still-running owner.
+const backupOperationTimeout = 25 * time.Minute
+
+// backup systemd execution timeout, kept equal to the operation cap so the
+// manager and systemd agree on the overrun boundary.
+const backupSystemdTimeout = "1500"
 
 // PostgreSQLBackupRunner performs a database dump or restore without exposing
 // credentials to the host command line and can inspect the service runtime
@@ -93,6 +126,14 @@ func NewBackupService(repository BackupRepository, config BackupConfig) (*Backup
 	backupRoot, err = absoluteManagedPath(backupRoot, "backup root")
 	if err != nil {
 		return nil, err
+	}
+	applicationsRoot := filepath.Join(projectsRoot, applicationsDir)
+	relativeBackupRoot, err := filepath.Rel(applicationsRoot, backupRoot)
+	if err != nil {
+		return nil, fmt.Errorf("check backup root: %w", err)
+	}
+	if relativeBackupRoot == "." || (relativeBackupRoot != ".." && !strings.HasPrefix(relativeBackupRoot, ".."+string(filepath.Separator))) {
+		return nil, errors.New("backup root must remain outside managed application directories")
 	}
 	databasePath := ""
 	if strings.TrimSpace(config.DatabasePath) != "" {
@@ -164,6 +205,15 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	if err != nil {
 		return err
 	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return err
+	}
+
+	release, err := s.acquireLease(ctx, service.ID, "schedule")
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -176,7 +226,7 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	if !input.Enabled {
 		if current.Enabled {
 			if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, service.ID), backupTimerUnitName(applicationID, service.ID)); err != nil {
-				return fmt.Errorf("disable scheduled backups: %w", err)
+				return mapBackupSchedulerError("disable scheduled backups", err)
 			}
 		}
 		current.Enabled = false
@@ -201,7 +251,7 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	timerUnitName := backupTimerUnitName(applicationID, service.ID)
 	serviceContents, timerContents := s.renderUnits(applicationID, service.ID, candidate)
 	if err := s.scheduler.Install(ctx, serviceUnitName, serviceContents, timerUnitName, timerContents); err != nil {
-		return fmt.Errorf("enable scheduled backups: %w", err)
+		return mapBackupSchedulerError("enable scheduled backups", err)
 	}
 	if err := s.repository.SaveBackupSchedule(ctx, candidate); err != nil {
 		_ = s.scheduler.Disable(ctx, serviceUnitName, timerUnitName)
@@ -210,15 +260,100 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	return nil
 }
 
+// DisableApplicationSchedules stops all database timers owned by an
+// application and persists the disabled state. It is used by the durable
+// deletion workflow before Docker resources or metadata are removed.
+func (s *BackupService) DisableApplicationSchedules(ctx context.Context, applicationID int64) error {
+	if applicationID < 1 {
+		return application.ErrNotFound
+	}
+	services, err := s.repository.ListServices(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("list services for backup schedule cleanup: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, service := range services {
+		if !application.IsDatabaseServiceType(service.Type) {
+			continue
+		}
+		schedule, err := s.repository.GetBackupSchedule(ctx, service.ID)
+		if errors.Is(err, application.ErrBackupScheduleNotFound) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read backup schedule for cleanup: %w", err)
+		}
+		if !schedule.Enabled {
+			continue
+		}
+		if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, service.ID), backupTimerUnitName(applicationID, service.ID)); err != nil {
+			return mapBackupSchedulerError("disable scheduled backups for service "+service.Name, err)
+		}
+		schedule.Enabled = false
+		if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
+			return fmt.Errorf("save disabled backup schedule for service %s: %w", service.Name, err)
+		}
+	}
+	return nil
+}
+
+// DisableServiceBackupSchedule stops one database service's timer and persists
+// the disabled state. Service deletion uses this before removing metadata so
+// the external systemd timer cannot outlive its schedule row.
+func (s *BackupService) DisableServiceBackupSchedule(ctx context.Context, applicationID, serviceID int64) error {
+	if applicationID < 1 || serviceID < 1 {
+		return application.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	schedule, err := s.repository.GetBackupSchedule(ctx, serviceID)
+	if errors.Is(err, application.ErrBackupScheduleNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read backup schedule for cleanup: %w", err)
+	}
+	if !schedule.Enabled {
+		return nil
+	}
+	if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, serviceID), backupTimerUnitName(applicationID, serviceID)); err != nil {
+		return mapBackupSchedulerError("disable scheduled backups", err)
+	}
+	schedule.Enabled = false
+	if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
+		return fmt.Errorf("save disabled backup schedule: %w", err)
+	}
+	return nil
+}
+
+// mapBackupSchedulerError marks a missing systemd controller binary as an
+// unavailable scheduler so HTTP callers can report an actionable 503 instead
+// of a generic 500. Other scheduler failures keep their original wrapping.
+func mapBackupSchedulerError(prefix string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%s: %w", prefix, errors.Join(err, application.ErrBackupSchedulerUnavailable))
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
+}
+
 // RunBackupNow creates a backup immediately when the database service is
 // running, whether or not a schedule is enabled.
 func (s *BackupService) RunBackupNow(ctx context.Context, applicationID int64, serviceName string) (application.Backup, error) {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
 		return application.Backup{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return application.Backup{}, err
+	}
+	release, err := s.acquireLease(ctx, service.ID, "backup")
+	if err != nil {
+		return application.Backup{}, err
+	}
+	defer release()
 	if err := s.ensureServiceRunning(ctx, item, service); err != nil {
 		return application.Backup{}, err
 	}
@@ -229,19 +364,32 @@ func (s *BackupService) RunBackupNow(ctx context.Context, applicationID int64, s
 // is checked again so a queued one-shot invocation cannot run after a user has
 // disabled the timer.
 func (s *BackupService) RunScheduledBackup(ctx context.Context, applicationID, serviceID int64) (application.Backup, error) {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseServiceByID(ctx, applicationID, serviceID)
 	if err != nil {
 		return application.Backup{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
+		return application.Backup{}, err
+	}
+	release, err := s.acquireLease(ctx, service.ID, "backup")
+	if err != nil {
+		return application.Backup{}, err
+	}
+	defer release()
 	return s.runBackup(ctx, item, service, true)
 }
 
 // RestoreBackup restores a recorded backup file into its own database service.
 func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
 		return err
 	}
 	fileName, err = application.ValidateBackupFileName(fileName)
@@ -249,8 +397,11 @@ func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, 
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release, err := s.acquireLease(ctx, service.ID, "restore")
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	backups, err := s.repository.ListBackups(ctx, service.ID)
 	if err != nil {
@@ -281,6 +432,9 @@ func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, 
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("backup file must be a regular file")
 	}
+	if err := validatePlainSQLDump(path); err != nil {
+		return err
+	}
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
 		return fmt.Errorf("resolve application directory for restore: %w", err)
@@ -295,8 +449,13 @@ func (s *BackupService) RestoreBackup(ctx context.Context, applicationID int64, 
 // file is removed first so a failed filesystem operation never loses the
 // record of a backup that still exists.
 func (s *BackupService) DeleteBackup(ctx context.Context, applicationID int64, serviceName, fileName string) error {
+	ctx, cancel := withBackupOperationDeadline(ctx)
+	defer cancel()
 	item, service, err := s.findDatabaseService(ctx, applicationID, serviceName)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureApplicationNotDeleting(ctx, applicationID); err != nil {
 		return err
 	}
 	fileName, err = application.ValidateBackupFileName(fileName)
@@ -304,8 +463,11 @@ func (s *BackupService) DeleteBackup(ctx context.Context, applicationID int64, s
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	release, err := s.acquireLease(ctx, service.ID, "delete")
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	backups, err := s.repository.ListBackups(ctx, service.ID)
 	if err != nil {
@@ -345,6 +507,9 @@ func (s *BackupService) DeleteBackup(ctx context.Context, applicationID int64, s
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("delete backup file: %w", err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("sync backup directory after delete: %w", err)
 	}
 	return s.deleteBackupRecord(ctx, service.ID, fileName)
 }
@@ -453,6 +618,9 @@ func (s *BackupService) runBackup(ctx context.Context, item application.Applicat
 	}
 
 	now := s.clock().UTC()
+	if err := recoverAbandonedTemporaryBackups(location, now); err != nil {
+		return application.Backup{}, fmt.Errorf("recover temporary backup files: %w", err)
+	}
 	temporary, err := os.CreateTemp(location, ".redlaunch-backup-*.sql")
 	if err != nil {
 		return application.Backup{}, fmt.Errorf("create temporary backup file: %w", err)
@@ -491,18 +659,13 @@ func (s *BackupService) runBackup(ctx context.Context, item application.Applicat
 		s.recordBackupFailure(ctx, schedule, location, now)
 		return application.Backup{}, fmt.Errorf("protect completed backup: %w", err)
 	}
+	if err := syncRegularFile(temporaryPath); err != nil {
+		s.recordBackupFailure(ctx, schedule, location, now)
+		return application.Backup{}, fmt.Errorf("sync completed backup: %w", err)
+	}
 
-	fileName, err := nextBackupFileName(location, now)
+	fileName, path, err := commitBackupFile(temporaryPath, location, now)
 	if err != nil {
-		s.recordBackupFailure(ctx, schedule, location, now)
-		return application.Backup{}, err
-	}
-	path, err := safeBackupPath(location, fileName)
-	if err != nil {
-		s.recordBackupFailure(ctx, schedule, location, now)
-		return application.Backup{}, err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
 		s.recordBackupFailure(ctx, schedule, location, now)
 		return application.Backup{}, fmt.Errorf("save completed backup: %w", err)
 	}
@@ -515,16 +678,19 @@ func (s *BackupService) runBackup(ctx context.Context, item application.Applicat
 		SizeBytes: info.Size(),
 	})
 	if err != nil {
-		_ = os.Remove(path)
+		removeErr := os.Remove(path)
+		if removeErr == nil {
+			removeErr = syncDirectory(location)
+		}
 		s.recordBackupFailure(ctx, schedule, location, now)
+		if removeErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove unrecorded backup file: %w", removeErr))
+		}
 		return application.Backup{}, fmt.Errorf("record completed backup: %w", err)
 	}
 	schedule.ServiceID = service.ID
 	schedule.BackupLocation = location
-	schedule.LastBackupAt = now
-	schedule.LastBackupStatus = "successful"
-	schedule.LastBackupSize = backup.SizeBytes
-	if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
+	if err := s.updateBackupStatus(ctx, schedule, now, "successful", backup.SizeBytes); err != nil {
 		return application.Backup{}, fmt.Errorf("save backup status: %w", err)
 	}
 	if err := s.applyRetention(ctx, service.ID, location, schedule.RetentionDays, now); err != nil {
@@ -566,6 +732,9 @@ func (s *BackupService) applyRetention(ctx context.Context, serviceID int64, loc
 			if err := os.Remove(path); err != nil {
 				return err
 			}
+			if err := syncDirectory(location); err != nil {
+				return fmt.Errorf("sync backup directory after retention cleanup: %w", err)
+			}
 		}
 		if err := s.repository.DeleteBackup(ctx, serviceID, fileName); err != nil && !errors.Is(err, application.ErrBackupNotFound) {
 			return err
@@ -576,10 +745,37 @@ func (s *BackupService) applyRetention(ctx context.Context, serviceID int64, loc
 
 func (s *BackupService) recordBackupFailure(ctx context.Context, schedule application.BackupSchedule, location string, at time.Time) {
 	schedule.BackupLocation = location
+	recoveryContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.updateBackupStatus(recoveryContext, schedule, at, "failed", 0)
+}
+
+func (s *BackupService) updateBackupStatus(ctx context.Context, schedule application.BackupSchedule, at time.Time, status string, sizeBytes int64) error {
+	if updater, ok := s.repository.(backupStatusRepository); ok {
+		if _, err := s.repository.GetBackupSchedule(ctx, schedule.ServiceID); errors.Is(err, application.ErrBackupScheduleNotFound) {
+			// The first backup may be the operation that creates the default
+			// schedule row. Persist only the default settings before applying
+			// status fields through the narrow update method.
+			if err := s.repository.SaveBackupSchedule(ctx, application.BackupSchedule{
+				ServiceID:      schedule.ServiceID,
+				ScheduleType:   schedule.ScheduleType,
+				Hour:           schedule.Hour,
+				Minute:         schedule.Minute,
+				Weekday:        schedule.Weekday,
+				RetentionDays:  schedule.RetentionDays,
+				BackupLocation: schedule.BackupLocation,
+			}); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		return updater.UpdateBackupStatus(ctx, schedule.ServiceID, at, status, sizeBytes)
+	}
 	schedule.LastBackupAt = at
-	schedule.LastBackupStatus = "failed"
-	schedule.LastBackupSize = 0
-	_ = s.repository.SaveBackupSchedule(ctx, schedule)
+	schedule.LastBackupStatus = status
+	schedule.LastBackupSize = sizeBytes
+	return s.repository.SaveBackupSchedule(ctx, schedule)
 }
 
 func (s *BackupService) scheduleForService(ctx context.Context, serviceID int64, location string) (application.BackupSchedule, error) {
@@ -678,9 +874,19 @@ func (s *BackupService) managedApplicationDirectory(item application.Application
 		return "", fmt.Errorf("validate stored application folder: %w", err)
 	}
 	directory := filepath.Join(s.projectsRoot, applicationsDir, folderName)
-	relative, err := filepath.Rel(filepath.Join(s.projectsRoot, applicationsDir), directory)
+	applicationsRoot := filepath.Join(s.projectsRoot, applicationsDir)
+	relative, err := filepath.Rel(applicationsRoot, directory)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("application directory is outside the managed applications directory")
+	}
+	if err := checkManagedAncestors(applicationsRoot, directory); err != nil {
+		return "", err
+	}
+	// The applications root itself must remain a real directory: replacing it
+	// with a symlink after setup would redirect every managed path outside
+	// the projects tree while each individual Lstat still looks normal.
+	if parentInfo, err := os.Lstat(applicationsRoot); err == nil && parentInfo.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("managed applications directory must not be a symlink")
 	}
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
@@ -691,6 +897,9 @@ func (s *BackupService) managedApplicationDirectory(item application.Application
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", errors.New("application path is not a directory")
+	}
+	if err := checkResolvedDirectoryContainment(applicationsRoot, directory); err != nil {
+		return "", err
 	}
 	return directory, nil
 }
@@ -716,6 +925,10 @@ func (s *BackupService) renderUnits(applicationID, serviceID int64, schedule app
 		"After=docker.service\n\n" +
 		"[Service]\n" +
 		"Type=oneshot\n" +
+		// Bound the dump below the 30-minute backup lease so a live owner can
+		// never still be running when its lease expires. Lease expiry then
+		// only handles true process death.
+		"TimeoutStartSec=" + backupSystemdTimeout + "\n" +
 		"ExecStart=" + strings.Join(execStart, " ") + "\n" +
 		"PrivateTmp=true\n" +
 		"NoNewPrivileges=true\n"
@@ -880,6 +1093,31 @@ func safeBackupPath(directory, fileName string) (string, error) {
 	return path, nil
 }
 
+// validatePlainSQLDump establishes the supported restore format contract:
+// only plain-text SQL dumps produced by pg_dump may be restored through the
+// single-transaction psql path. Custom/tar/directory archives start with the
+// PGDMP magic or binary framing and are rejected before any database work.
+func validatePlainSQLDump(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	defer file.Close()
+	header := make([]byte, 512)
+	n, err := file.Read(header)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	header = header[:n]
+	if bytes.HasPrefix(header, []byte("PGDMP")) {
+		return application.ErrBackupFormatUnsupported
+	}
+	if bytes.IndexByte(header, 0) >= 0 {
+		return application.ErrBackupFormatUnsupported
+	}
+	return nil
+}
+
 func nextBackupFileName(directory string, at time.Time) (string, error) {
 	base := "backup-" + at.UTC().Format("20060102-150405.000000000Z")
 	for index := 0; index < 1000; index++ {
@@ -902,6 +1140,119 @@ func nextBackupFileName(directory string, at time.Time) (string, error) {
 	return "", errors.New("could not allocate a unique backup file name")
 }
 
+func safeTemporaryBackupPath(directory, fileName string) (string, error) {
+	if fileName == "" || filepath.Base(fileName) != fileName || strings.ContainsAny(fileName, `/\\`) {
+		return "", errors.New("temporary backup file is outside the backup directory")
+	}
+	path := filepath.Join(directory, fileName)
+	relative, err := filepath.Rel(directory, path)
+	if err != nil || relative != fileName || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("temporary backup file is outside the backup directory")
+	}
+	return path, nil
+}
+
+func commitBackupFile(temporaryPath, directory string, at time.Time) (string, string, error) {
+	base := "backup-" + at.UTC().Format("20060102-150405.000000000Z")
+	for index := 0; index < 1000; index++ {
+		fileName := base + ".sql"
+		if index > 0 {
+			fileName = base + "-" + strconv.Itoa(index) + ".sql"
+		}
+		path, err := safeBackupPath(directory, fileName)
+		if err != nil {
+			return "", "", err
+		}
+		// Hard-linking the completed temporary file reserves the final name
+		// atomically and never overwrites a concurrent backup.
+		if err := os.Link(temporaryPath, path); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", "", err
+		}
+		if err := os.Remove(temporaryPath); err != nil {
+			_ = os.Remove(path)
+			return "", "", err
+		}
+		if err := syncDirectory(directory); err != nil {
+			cleanupErr := os.Remove(path)
+			if cleanupErr == nil {
+				cleanupErr = syncDirectory(directory)
+			}
+			if cleanupErr != nil {
+				return "", "", errors.Join(err, fmt.Errorf("remove unpublished backup file: %w", cleanupErr))
+			}
+			return "", "", err
+		}
+		return fileName, path, nil
+	}
+	return "", "", errors.New("could not allocate a unique backup file name")
+}
+
+func recoverAbandonedTemporaryBackups(directory string, now time.Time) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".redlaunch-backup-") || !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		path, err := safeTemporaryBackupPath(directory, name)
+		if err != nil {
+			continue
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		if now.Sub(info.ModTime()) <= backupTemporaryRetention {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		removed = true
+	}
+	if removed {
+		return syncDirectory(directory)
+	}
+	return nil
+}
+
+func syncRegularFile(path string) error {
+	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
+}
+
 func validBackupsForService(backups []application.Backup, serviceID int64) []application.Backup {
 	valid := make([]application.Backup, 0, len(backups))
 	for _, backup := range backups {
@@ -919,6 +1270,64 @@ func validBackupsForService(backups []application.Backup, serviceID int64) []app
 }
 
 type noBackupScheduler struct{}
+
+func newBackupLeaseToken() (string, error) {
+	token := make([]byte, 24)
+	if _, err := rand.Read(token); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(token), nil
+}
+
+func (s *BackupService) acquireLease(ctx context.Context, serviceID int64, operation string) (func(), error) {
+	leaseRepository, ok := s.repository.(backupLeaseRepository)
+	if !ok {
+		return func() {}, nil
+	}
+	token, err := newBackupLeaseToken()
+	if err != nil {
+		return nil, fmt.Errorf("create backup lease token: %w", err)
+	}
+	now := s.clock().UTC()
+	if err := leaseRepository.AcquireBackupLease(ctx, serviceID, operation, token, now, now.Add(backupLeaseDuration)); err != nil {
+		return nil, err
+	}
+	return func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = leaseRepository.ReleaseBackupLease(cleanupContext, serviceID, token)
+	}, nil
+}
+
+func (s *BackupService) ensureApplicationNotDeleting(ctx context.Context, applicationID int64) error {
+	stateRepository, ok := s.repository.(backupDeletionStateRepository)
+	if !ok {
+		return nil
+	}
+	active, err := stateRepository.IsApplicationDeletionActive(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("check application deletion state: %w", err)
+	}
+	if active {
+		return application.ErrApplicationDeletionInProgress
+	}
+	return nil
+}
+
+// withBackupOperationDeadline caps a lease-holding operation below the lease
+// window. Callers with an earlier deadline (such as the 15-minute web tracked
+// jobs) keep their own shorter bound; unbounded callers such as backup-run
+// and direct service uses gain the 25-minute cap. The returned cancel must be
+// deferred by the caller.
+func withBackupOperationDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= backupOperationTimeout {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, backupOperationTimeout)
+}
 
 func (noBackupScheduler) Install(context.Context, string, string, string, string) error {
 	return nil

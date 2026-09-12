@@ -99,9 +99,13 @@ var (
 	ErrRoutingPathRequired              = errors.New("routing path is required")
 	ErrRoutingPathTooLong               = errors.New("routing path is too long")
 	ErrRoutingPathInvalid               = errors.New("routing path is invalid")
+	ErrRoutingPortInvalid               = errors.New("routing service port is invalid")
 	ErrRoutingAlreadyExists             = errors.New("routing already exists")
 	ErrRoutingNotFound                  = errors.New("routing not found")
 	ErrServiceAlreadyExists             = errors.New("service already exists")
+	ErrDatabaseServiceTypeAlreadyExists = errors.New("application already has a database service of this type")
+	ErrDatabaseCredentialsAmbiguous     = errors.New("database service credentials are ambiguous")
+	ErrDatabaseCredentialsConflict      = errors.New("database service credentials conflict with existing data")
 	ErrServiceNotFound                  = errors.New("service not found")
 	ErrEnvironmentVariableNameRequired  = errors.New("environment variable name is required")
 	ErrEnvironmentVariableNameInvalid   = errors.New("environment variable name is invalid")
@@ -127,6 +131,10 @@ var (
 	ErrBackupScheduleDisabled           = errors.New("backup schedule is disabled")
 	ErrBackupServiceNotRunning          = errors.New("database service is not running")
 	ErrBackupUnsupported                = errors.New("scheduled backups are not supported for this service")
+	ErrBackupFormatUnsupported          = errors.New("backup file format is not supported")
+	ErrBackupOperationInProgress        = errors.New("another backup operation is in progress")
+	ErrBackupSchedulerUnavailable       = errors.New("backup scheduler is unavailable")
+	ErrApplicationDeletionInProgress    = errors.New("application deletion is in progress")
 	ErrEmailRequired                    = errors.New("email address is required")
 	ErrEmailTooLong                     = errors.New("email address is too long")
 	ErrEmailInvalid                     = errors.New("email address is invalid")
@@ -437,6 +445,7 @@ type Routing struct {
 	Subdomain     string
 	Path          string
 	ServiceName   string
+	ServicePort   int
 	ServicePath   string
 }
 
@@ -446,6 +455,7 @@ type RoutingInput struct {
 	Subdomain   string
 	Path        string
 	ServiceName string
+	ServicePort int
 	ServicePath string
 }
 
@@ -579,6 +589,35 @@ type Backup struct {
 type BackupDetails struct {
 	Schedule BackupSchedule
 	Backups  []Backup
+}
+
+// ApplicationDeletionIntent is the durable checkpoint for an application
+// deletion. Name and FolderName remain available after application metadata is
+// removed so an interrupted cleanup can be resumed safely.
+type ApplicationDeletionIntent struct {
+	ApplicationID int64
+	Name          string
+	FolderName    string
+	Stage         string
+	State         string
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ServiceDeletionIntent is the durable checkpoint for a service deletion. The
+// service name remains available after service metadata is removed so an
+// interrupted cleanup can be resumed safely. Backup files are retained as
+// operator-managed artifacts; only the schedule, timer, routing, container,
+// Compose, and metadata state are coordinated here.
+type ServiceDeletionIntent struct {
+	ApplicationID int64
+	ServiceName   string
+	Stage         string
+	State         string
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // IsDatabaseServiceType reports whether a service type supports database
@@ -1021,6 +1060,19 @@ func ValidateRoutingPath(value string) (string, error) {
 		return "", ErrRoutingPathInvalid
 	}
 	return path, nil
+}
+
+// ValidateRoutingPort validates the container port used by the reverse proxy.
+// A zero value preserves the behavior of routing records created before the
+// explicit port field was introduced.
+func ValidateRoutingPort(value int) (int, error) {
+	if value == 0 {
+		return 80, nil
+	}
+	if value < 1 || value > 65535 {
+		return 0, ErrRoutingPortInvalid
+	}
+	return value, nil
 }
 
 // ValidateEnvironmentVariableName validates a POSIX-style environment
