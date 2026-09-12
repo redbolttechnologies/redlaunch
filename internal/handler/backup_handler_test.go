@@ -316,6 +316,31 @@ func TestBackupHandlerReportsStoppedServiceForManualBackup(t *testing.T) {
 	}
 }
 
+func TestBackupHandlerReportsSchedulerUnavailable(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:   []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		serviceDetails: application.ServiceDetails{Service: application.Service{ID: 11, ApplicationID: 7, Name: "db", Type: application.ServiceTypePostgreSQL}},
+	}
+	backup := &backupHandlerFake{updateErr: errors.Join(errors.New(`exec: "systemctl": executable file not found in $PATH`), application.ErrBackupSchedulerUnavailable)}
+	web, err := New(nil, &fakeSetupManager{}, applications, backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"csrf_token": {web.csrfToken}, "enabled": {"on"}, "schedule_type": {"daily"}, "hour": {"3"}, "minute": {"5"}, "retention_days": {"14"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/services/db/backups/schedule", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("scheduler unavailable status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(recorder.Body.String(), "Scheduled backups are unavailable") {
+		t.Fatalf("scheduler unavailable response = %q, want actionable message", recorder.Body.String())
+	}
+}
+
 func TestBackupHandlerTracksBackupBeyondRequestLifetime(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications:   []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},

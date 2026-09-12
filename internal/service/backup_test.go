@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,6 +97,8 @@ type backupSchedulerFake struct {
 	timerContents   string
 	disabledService string
 	disabledTimer   string
+	installErr      error
+	disableErr      error
 }
 
 func (s *backupSchedulerFake) Install(_ context.Context, serviceUnitName, serviceContents, timerUnitName, timerContents string) error {
@@ -102,13 +106,13 @@ func (s *backupSchedulerFake) Install(_ context.Context, serviceUnitName, servic
 	s.serviceContents = serviceContents
 	s.timerUnitName = timerUnitName
 	s.timerContents = timerContents
-	return nil
+	return s.installErr
 }
 
 func (s *backupSchedulerFake) Disable(_ context.Context, serviceUnitName, timerUnitName string) error {
 	s.disabledService = serviceUnitName
 	s.disabledTimer = timerUnitName
-	return nil
+	return s.disableErr
 }
 
 func newBackupServiceTest(t *testing.T, repository *backupRepositoryFake, runner *backupRunnerFake, scheduler *backupSchedulerFake) *BackupService {
@@ -544,5 +548,41 @@ func TestRestoreBackupAcceptsPlainSQLDumps(t *testing.T) {
 	}
 	if runner.restoreSource == "" {
 		t.Fatal("plain SQL restore did not reach the database runner")
+	}
+}
+
+func TestBackupServiceMapsMissingControllerToSchedulerUnavailable(t *testing.T) {
+	missing := fmt.Errorf("systemd controller %q: %w", "systemctl", exec.ErrNotFound)
+	repository := &backupRepositoryFake{
+		item:     application.Application{ID: 7, Name: "Status page", FolderName: "status-page"},
+		services: []application.Service{{ID: 11, ApplicationID: 7, Name: "db", Type: application.ServiceTypePostgreSQL}},
+	}
+	runner := &backupRunnerFake{}
+	scheduler := &backupSchedulerFake{installErr: missing}
+	backups := newBackupServiceTest(t, repository, runner, scheduler)
+
+	err := backups.UpdateBackupSchedule(t.Context(), 7, "db", application.BackupScheduleInput{
+		Enabled:       true,
+		ScheduleType:  application.BackupScheduleDaily,
+		Hour:          3,
+		Minute:        5,
+		RetentionDays: 14,
+	})
+	if !errors.Is(err, application.ErrBackupSchedulerUnavailable) {
+		t.Fatalf("UpdateBackupSchedule(missing controller) error = %v, want %v", err, application.ErrBackupSchedulerUnavailable)
+	}
+	if repository.hasSchedule && repository.schedule.Enabled {
+		t.Fatal("schedule was persisted despite missing systemd controller")
+	}
+
+	repository.hasSchedule = true
+	repository.schedule = application.BackupSchedule{ServiceID: 11, Enabled: true, ScheduleType: application.BackupScheduleDaily, Hour: 3, Minute: 5, RetentionDays: 14}
+	scheduler.installErr = nil
+	scheduler.disableErr = missing
+	if err := backups.UpdateBackupSchedule(t.Context(), 7, "db", application.BackupScheduleInput{}); !errors.Is(err, application.ErrBackupSchedulerUnavailable) {
+		t.Fatalf("UpdateBackupSchedule(disable, missing controller) error = %v, want %v", err, application.ErrBackupSchedulerUnavailable)
+	}
+	if !repository.schedule.Enabled {
+		t.Fatal("disabled state was persisted despite missing systemd controller")
 	}
 }

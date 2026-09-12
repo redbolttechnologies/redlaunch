@@ -2,7 +2,9 @@ package systemd
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -158,5 +160,29 @@ func TestManagerUsesUserSessionBus(t *testing.T) {
 	}
 	if !strings.Contains(string(calls), "--session") {
 		t.Fatalf("D-Bus calls = %q, want --session", calls)
+	}
+}
+
+func TestManagerFailsWithoutWritingUnitsWhenControllerIsMissing(t *testing.T) {
+	root := t.TempDir()
+	unitDirectory := filepath.Join(root, "units")
+	missing := filepath.Join(root, "missing-systemctl")
+	manager, err := NewManager(unitDirectory, missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceName := "redlaunch-backup-a7-s11.service"
+	timerName := "redlaunch-backup-a7-s11.timer"
+	err = manager.Install(context.Background(), serviceName, "[Service]\n", timerName, "[Timer]\n")
+	if err == nil || !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("Install(missing controller) error = %v, want %v", err, exec.ErrNotFound)
+	}
+	for _, name := range []string{serviceName, timerName} {
+		if _, statErr := os.Stat(filepath.Join(unitDirectory, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("unit %s stat error = %v, want not exist after missing controller", name, statErr)
+		}
+	}
+	if err := manager.Disable(context.Background(), serviceName, timerName); err == nil || !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("Disable(missing controller) error = %v, want %v", err, exec.ErrNotFound)
 	}
 }

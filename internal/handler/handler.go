@@ -2328,6 +2328,9 @@ func (h *Handler) writeBackupError(w http.ResponseWriter, r *http.Request, opera
 		http.Error(w, "Another operation is already using this database service. Try again shortly.", http.StatusConflict)
 	case errors.Is(err, application.ErrBackupScheduleTypeInvalid), errors.Is(err, application.ErrBackupHourInvalid), errors.Is(err, application.ErrBackupMinuteInvalid), errors.Is(err, application.ErrBackupWeekdayInvalid), errors.Is(err, application.ErrBackupRetentionInvalid), errors.Is(err, application.ErrBackupFileNameInvalid):
 		http.Error(w, backupValidationMessage(err), http.StatusBadRequest)
+	case errors.Is(err, application.ErrBackupSchedulerUnavailable):
+		h.logger.Error(operation, "application_id", r.PathValue("id"), "service", r.PathValue("service"), "error", err)
+		http.Error(w, "Scheduled backups are unavailable right now. Check the systemd controller configuration and host mounts, then try again.", http.StatusServiceUnavailable)
 	default:
 		h.logger.Error(operation, "application_id", r.PathValue("id"), "service", r.PathValue("service"), "error", err)
 		http.Error(w, "The "+operation+" could not be completed.", http.StatusInternalServerError)

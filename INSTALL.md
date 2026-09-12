@@ -723,3 +723,25 @@ projects-root path stable: it is part of the installation-scoped identity.
 - **<code>make setup</code> cannot run Docker**: reconnect after adding the SSH
   user to the <code>docker</code> group, or verify the Docker daemon with
   <code>docker info</code>.
+- **Scheduled backups report “unavailable” or `systemctl: executable file not
+  found in $PATH`**: the bundled container must control host systemd through
+  <code>/usr/bin/dbus-send</code>, not the host <code>systemctl</code> binary.
+  Confirm <code>docker-compose.yml</code> sets
+  <code>SYSTEMD_BINARY: "/usr/bin/dbus-send"</code> with the host mounts for
+  <code>/etc/systemd/system</code>, <code>/run/systemd/system</code>, and
+  <code>/run/dbus/system_bus_socket</code>, then recreate the manager so the
+  corrected environment applies:
+
+  ~~~sh
+  cd ~/redlaunch
+  git pull
+  docker compose up -d --build
+  docker compose logs --tail=50 app | grep -i systemd
+  ~~~
+
+  Replace <code>~/redlaunch</code> with the installation directory when needed.
+  Do not set <code>SYSTEMD_BINARY=systemctl</code> inside the Alpine manager
+  container; that binary only exists on the host. When running outside Docker,
+  ensure the configured <code>SYSTEMD_BINARY</code> exists in
+  <code>$PATH</code> (or as an absolute path) for the selected
+  <code>SYSTEMD_SCOPE</code>.

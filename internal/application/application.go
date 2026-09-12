@@ -133,6 +133,7 @@ var (
 	ErrBackupUnsupported                = errors.New("scheduled backups are not supported for this service")
 	ErrBackupFormatUnsupported          = errors.New("backup file format is not supported")
 	ErrBackupOperationInProgress        = errors.New("another backup operation is in progress")
+	ErrBackupSchedulerUnavailable       = errors.New("backup scheduler is unavailable")
 	ErrApplicationDeletionInProgress    = errors.New("application deletion is in progress")
 	ErrEmailRequired                    = errors.New("email address is required")
 	ErrEmailTooLong                     = errors.New("email address is too long")

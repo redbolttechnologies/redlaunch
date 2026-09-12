@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -225,7 +226,7 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	if !input.Enabled {
 		if current.Enabled {
 			if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, service.ID), backupTimerUnitName(applicationID, service.ID)); err != nil {
-				return fmt.Errorf("disable scheduled backups: %w", err)
+				return mapBackupSchedulerError("disable scheduled backups", err)
 			}
 		}
 		current.Enabled = false
@@ -250,7 +251,7 @@ func (s *BackupService) UpdateBackupSchedule(ctx context.Context, applicationID 
 	timerUnitName := backupTimerUnitName(applicationID, service.ID)
 	serviceContents, timerContents := s.renderUnits(applicationID, service.ID, candidate)
 	if err := s.scheduler.Install(ctx, serviceUnitName, serviceContents, timerUnitName, timerContents); err != nil {
-		return fmt.Errorf("enable scheduled backups: %w", err)
+		return mapBackupSchedulerError("enable scheduled backups", err)
 	}
 	if err := s.repository.SaveBackupSchedule(ctx, candidate); err != nil {
 		_ = s.scheduler.Disable(ctx, serviceUnitName, timerUnitName)
@@ -287,7 +288,7 @@ func (s *BackupService) DisableApplicationSchedules(ctx context.Context, applica
 			continue
 		}
 		if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, service.ID), backupTimerUnitName(applicationID, service.ID)); err != nil {
-			return fmt.Errorf("disable scheduled backups for service %s: %w", service.Name, err)
+			return mapBackupSchedulerError("disable scheduled backups for service "+service.Name, err)
 		}
 		schedule.Enabled = false
 		if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
@@ -317,13 +318,23 @@ func (s *BackupService) DisableServiceBackupSchedule(ctx context.Context, applic
 		return nil
 	}
 	if err := s.scheduler.Disable(ctx, backupServiceUnitName(applicationID, serviceID), backupTimerUnitName(applicationID, serviceID)); err != nil {
-		return fmt.Errorf("disable scheduled backups: %w", err)
+		return mapBackupSchedulerError("disable scheduled backups", err)
 	}
 	schedule.Enabled = false
 	if err := s.repository.SaveBackupSchedule(ctx, schedule); err != nil {
 		return fmt.Errorf("save disabled backup schedule: %w", err)
 	}
 	return nil
+}
+
+// mapBackupSchedulerError marks a missing systemd controller binary as an
+// unavailable scheduler so HTTP callers can report an actionable 503 instead
+// of a generic 500. Other scheduler failures keep their original wrapping.
+func mapBackupSchedulerError(prefix string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%s: %w", prefix, errors.Join(err, application.ErrBackupSchedulerUnavailable))
+	}
+	return fmt.Errorf("%s: %w", prefix, err)
 }
 
 // RunBackupNow creates a backup immediately when the database service is

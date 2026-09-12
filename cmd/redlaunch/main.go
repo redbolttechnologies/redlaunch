@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -120,6 +121,9 @@ func run(ctx context.Context) error {
 	systemdManager, err := systemd.NewManagerWithScope(cfg.SystemdUnitDirectory, cfg.SystemdBinary, cfg.SystemdScope)
 	if err != nil {
 		return fmt.Errorf("create systemd manager: %w", err)
+	}
+	if _, err := exec.LookPath(cfg.SystemdBinary); err != nil {
+		logger.Warn("systemd controller not found; scheduled backups will be unavailable until SYSTEMD_BINARY and the host systemd mounts are configured", "systemd_binary", cfg.SystemdBinary, "error", err)
 	}
 	executable, err := os.Executable()
 	if err != nil {
