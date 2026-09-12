@@ -147,6 +147,11 @@ func run(ctx context.Context) error {
 	}
 	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
 
+	selfUpdater, err := service.NewSelfUpdateService(cfg.RedlaunchDir, "", "")
+	if err != nil {
+		return fmt.Errorf("create self-update service: %w", err)
+	}
+
 	googleAuth, err := redlaunchauth.New(redlaunchauth.Config{
 		ClientID:      cfg.GoogleClientID,
 		ClientSecret:  cfg.GoogleClientSecret,
@@ -163,6 +168,7 @@ func run(ctx context.Context) error {
 		Applications:  applications,
 		Backups:       backupManager,
 		GitHubActions: githubActions,
+		SelfUpdate:    selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,
 			ProcRoot:       cfg.MetricsProcRoot,

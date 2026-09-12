@@ -21,6 +21,7 @@ type Config struct {
 	DatabasePath          string
 	ProjectsRoot          string
 	BackupRoot            string
+	RedlaunchDir          string
 	SystemdUnitDirectory  string
 	SystemdBinary         string
 	SystemdScope          string
@@ -51,6 +52,7 @@ func Load() (Config, error) {
 		DatabasePath:          valueOrDefault(environment, "DB_PATH", "./data/redlaunch.db"),
 		ProjectsRoot:          valueOrDefault(environment, "PROJECTS_ROOT", "./projects"),
 		BackupRoot:            valueOrDefault(environment, "BACKUP_ROOT", "/var/backups/redlaunch"),
+		RedlaunchDir:          valueOrDefault(environment, "REDLAUNCH_DIR", "."),
 		SystemdUnitDirectory:  valueOrDefault(environment, "SYSTEMD_UNIT_DIR", "/etc/systemd/system"),
 		SystemdBinary:         valueOrDefault(environment, "SYSTEMD_BINARY", "systemctl"),
 		SystemdScope:          valueOrDefault(environment, "SYSTEMD_SCOPE", "system"),
@@ -76,6 +78,9 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.BackupRoot) == "" {
 		return Config{}, errors.New("BACKUP_ROOT must not be empty")
+	}
+	if strings.TrimSpace(cfg.RedlaunchDir) == "" {
+		return Config{}, errors.New("REDLAUNCH_DIR must not be empty")
 	}
 	if strings.TrimSpace(cfg.SystemdUnitDirectory) == "" {
 		return Config{}, errors.New("SYSTEMD_UNIT_DIR must not be empty")
@@ -123,6 +128,9 @@ func Load() (Config, error) {
 	}
 	if filepath.Clean(cfg.ProjectsRoot) == string(filepath.Separator) {
 		return Config{}, errors.New("PROJECTS_ROOT must not be the filesystem root")
+	}
+	if filepath.Clean(strings.TrimSpace(cfg.RedlaunchDir)) == string(filepath.Separator) {
+		return Config{}, errors.New("REDLAUNCH_DIR must not be the filesystem root")
 	}
 	return cfg, nil
 }

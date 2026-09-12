@@ -33,6 +33,11 @@ services:
       BACKUP_CONTAINER_NAME: "redbolt-redlaunch"
       BACKUP_DOCKER_BINARY: "/usr/bin/docker"
       SYSTEMD_BINARY: "/usr/bin/dbus-send"
+      # Directory containing the Redlaunch checkout on the host. The Settings
+      # update action runs `git pull` and `docker compose up -d --build` there.
+      # It is mounted at the identical host path so Compose bind mounts and the
+      # build context resolve the same way inside the container and on the host.
+      REDLAUNCH_DIR: "${REDLAUNCH_DIR:-${PWD}}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URL: "${GOOGLE_REDIRECT_URL:-http://localhost:8080/auth/google/callback}"
@@ -59,6 +64,7 @@ services:
       - "/run/systemd/system:/run/systemd/system:ro"
       - "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket"
       - "/var/run/docker.sock:/var/run/docker.sock"
+      - "${REDLAUNCH_DIR:-${PWD}}:${REDLAUNCH_DIR:-${PWD}}"
 
 volumes:
   app-data:

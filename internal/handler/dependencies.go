@@ -20,6 +20,7 @@ type Dependencies struct {
 	GitHubActions  githubActionsService
 	Metrics        dashboardMetricsService
 	Authentication authenticationService
+	SelfUpdate     selfUpdateService
 	Security       SecurityConfig
 
 	// AllowUnauthenticatedForTests permits construction without an enabled
@@ -61,6 +62,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	}
 	if deps.Metrics != nil {
 		assembled = append(assembled, deps.Metrics)
+	}
+	if deps.SelfUpdate != nil {
+		assembled = append(assembled, deps.SelfUpdate)
 	}
 	if deps.Authentication != nil {
 		assembled = append(assembled, deps.Authentication)

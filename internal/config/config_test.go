@@ -13,6 +13,7 @@ func setBackupConfigTestEnvironment(t *testing.T) {
 	t.Setenv("DB_PATH", t.TempDir()+"/redlaunch.db")
 	t.Setenv("PROJECTS_ROOT", t.TempDir())
 	t.Setenv("BACKUP_ROOT", t.TempDir())
+	t.Setenv("REDLAUNCH_DIR", t.TempDir())
 	t.Setenv("SYSTEMD_UNIT_DIR", t.TempDir())
 	t.Setenv("SYSTEMD_BINARY", "systemctl")
 	t.Setenv("SYSTEMD_SCOPE", "system")

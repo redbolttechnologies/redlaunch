@@ -19,6 +19,11 @@ func (h *Handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		h.writeSetupPage(w, r, http.StatusOK, setupPageData{})
 		return
 	}
+	progress, ok := h.selfUpdateProgress(r)
+	if !ok {
+		http.Redirect(w, r, "/settings", http.StatusSeeOther)
+		return
+	}
 
 	data, err := h.loadSettingsPageData(r.Context())
 	if err != nil {
@@ -26,7 +31,7 @@ func (h *Handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The settings could not be read.", http.StatusInternalServerError)
 		return
 	}
-	h.writeSettingsPage(w, r, http.StatusOK, data)
+	h.writeSettingsPage(w, r, http.StatusOK, data, progress)
 }
 
 func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, error) {
@@ -200,12 +205,15 @@ func redlaunchDomainDeleteMessage(err error) string {
 	}
 }
 
-func (h *Handler) writeSettingsPage(w http.ResponseWriter, r *http.Request, status int, data settingsPageData) {
+func (h *Handler) writeSettingsPage(w http.ResponseWriter, r *http.Request, status int, data settingsPageData, progress ...*selfUpdateProgressData) {
 	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken
 	page := h.shellPageData(r)
 	page.ActivePage = "settings"
 	page.SettingsPage = &data
+	if len(progress) > 0 && progress[0] != nil {
+		page.SelfUpdateProgress = progress[0]
+	}
 	h.writeTemplateStatus(w, "settings.html", page, status)
 }

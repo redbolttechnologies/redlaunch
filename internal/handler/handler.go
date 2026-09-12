@@ -56,6 +56,7 @@ type Handler struct {
 	proxyActions                   proxyActionService
 	dashboardMetrics               dashboardMetricsService
 	authentication                 authenticationService
+	selfUpdater                    selfUpdateService
 	setupJobs                      *setupJobStore
 	postgresJobs                   *postgresJobStore
 	redisJobs                      *redisServiceJobStore
@@ -63,6 +64,7 @@ type Handler struct {
 	serviceDeleteJobs              *serviceDeleteJobStore
 	applicationDeleteJobs          *applicationDeleteJobStore
 	backupJobs                     *backupJobStore
+	selfUpdateJobs                 *selfUpdateJobStore
 	jobs                           *trackedJobRuntime
 	logDownloads                   chan struct{}
 	csrfToken                      string
@@ -252,6 +254,10 @@ type githubActionsService interface {
 	CleanupApplicationKey(context.Context, int64) error
 }
 
+type selfUpdateService interface {
+	UpdateWithProgress(context.Context, func(stage, message string)) error
+}
+
 // ServerInfo contains the local machine identity shown in the application shell.
 type ServerInfo struct {
 	Hostname  string
@@ -333,6 +339,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	proxyActions := proxyActionService(noProxyService{})
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
 	var authentication authenticationService
+	var selfUpdater selfUpdateService
 	security := SecurityConfig{AccessMode: accessModeSSHOnly}
 	for _, dependency := range dependencies {
 		switch dependency := dependency.(type) {
@@ -531,6 +538,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				dashboardMetrics = dependency
 			}
+		case selfUpdateService:
+			if dependency != nil {
+				selfUpdater = dependency
+			}
 		case authenticationService:
 			if dependency != nil {
 				authentication = dependency
@@ -556,6 +567,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	applicationDeleteJobs := newApplicationDeleteJobStore()
 	backupJobs := newBackupJobStore()
 	githubActionsJobs := newGitHubActionsJobStore()
+	selfUpdateJobs := newSelfUpdateJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
 	jobs.registerCleanup(setupJobs.expire)
 	jobs.registerCleanup(postgresJobs.expire)
@@ -565,6 +577,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(applicationDeleteJobs.expire)
 	jobs.registerCleanup(backupJobs.expire)
 	jobs.registerCleanup(githubActionsJobs.expire)
+	jobs.registerCleanup(selfUpdateJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -592,6 +605,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		proxyActions:                   proxyActions,
 		dashboardMetrics:               dashboardMetrics,
 		authentication:                 authentication,
+		selfUpdater:                    selfUpdater,
 		setupJobs:                      setupJobs,
 		postgresJobs:                   postgresJobs,
 		redisJobs:                      redisJobs,
@@ -600,6 +614,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationDeleteJobs:          applicationDeleteJobs,
 		backupJobs:                     backupJobs,
 		githubActionsJobs:              githubActionsJobs,
+		selfUpdateJobs:                 selfUpdateJobs,
 		jobs:                           jobs,
 		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
 		csrfToken:                      csrfToken,
@@ -645,6 +660,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /settings", h.settingsPage)
 	mux.HandleFunc("POST /settings/domains", h.createRedlaunchDomain)
 	mux.HandleFunc("POST /settings/domains/delete", h.deleteRedlaunchDomain)
+	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
+	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
 	mux.HandleFunc("POST /applications/{id}/deployments/github-actions", h.configureGitHubActions)
 	mux.HandleFunc("POST /applications/{id}/deployments/github-actions/revoke", h.revokeGitHubActions)
@@ -4013,6 +4030,7 @@ type pageData struct {
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
 	GitHubActionsProgress        *githubActionsProgressData
+	SelfUpdateProgress           *selfUpdateProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData

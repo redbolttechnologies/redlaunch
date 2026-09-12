@@ -25,7 +25,7 @@ ARG GO_VERSION
 
 LABEL io.redlaunch.build.go-version="${GO_VERSION}"
 
-RUN apk add --no-cache docker-cli docker-cli-compose dbus openssh-keygen
+RUN apk add --no-cache docker-cli docker-cli-compose dbus git openssh-keygen
 
 COPY --from=build /out/redlaunch /usr/local/bin/redlaunch
 COPY --from=build /out/redlaunch.buildinfo /usr/local/share/redlaunch/buildinfo.txt
