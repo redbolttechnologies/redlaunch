@@ -191,6 +191,54 @@ func TestApplicationDeletionRetryDoesNotRemoveReplacementFolder(t *testing.T) {
 	}
 }
 
+// TestApplicationDeletionTreatsMissingContainerAsDeleted covers the reported
+// failure: when the container was already removed manually, the resources
+// stage must treat Docker's "No such container" as already deleted instead of
+// checkpointing the stage as failed.
+func TestApplicationDeletionTreatsMissingContainerAsDeleted(t *testing.T) {
+	ctx := r06TestContext(t)
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "redlaunch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	item, err := database.Create(ctx, application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectsRoot := filepath.Join(t.TempDir(), "projects")
+	runner := &serviceRuntimeRunner{downErr: errors.New("remove Compose project: exit status 1: Error: No such container: redbolt-1-web")}
+	applications, err := NewApplications(database, projectsRoot, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(projectsRoot, applicationsDir, item.FolderName)
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteApplicationWithProgress(ctx, item.ID, nil); err != nil {
+		t.Fatalf("deletion with missing container: %v", err)
+	}
+	intent, err := database.GetApplicationDeletion(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.State != "complete" || intent.Stage != applicationDeletionStageComplete {
+		t.Fatalf("intent after missing-container deletion = %#v, want complete", intent)
+	}
+	if _, err := database.Get(ctx, item.ID); !errors.Is(err, application.ErrNotFound) {
+		t.Fatalf("application after missing-container deletion = %v, want not found", err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("application folder after missing-container deletion = %v, want not found", err)
+	}
+}
+
 // TestApplicationMutationRejectsActiveDeletionIntent ensures service-level
 // mutations fail while a deletion intent is active.
 func TestApplicationMutationRejectsActiveDeletionIntent(t *testing.T) {

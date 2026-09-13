@@ -3381,6 +3381,100 @@ func readServiceFile(t *testing.T, path string) string {
 	return string(contents)
 }
 
+func TestIsMissingDockerResourceError(t *testing.T) {
+	for _, message := range []string{
+		"remove Compose project: exit status 1: Error: No such container: redbolt-7-web",
+		"Error: No such object: stale-container-id",
+		`run compose stop for service "db": exit status 1: no such service: db`,
+		`remove service container: exit status 1: service "db" not found`,
+		`stop service: container "redbolt-7-db" not found`,
+	} {
+		if !isMissingDockerResourceError(errors.New(message)) {
+			t.Fatalf("isMissingDockerResourceError(%q) = false, want true", message)
+		}
+	}
+	for _, message := range []string{
+		"remove Compose project: exit status 1: Docker unavailable",
+		"application not found",
+		"refusing to modify Compose project: existing container is not a Redlaunch-managed resource",
+		"",
+	} {
+		if isMissingDockerResourceError(errors.New(message)) {
+			t.Fatalf("isMissingDockerResourceError(%q) = true, want false", message)
+		}
+	}
+	if isMissingDockerResourceError(nil) {
+		t.Fatal("isMissingDockerResourceError(nil) = true, want false")
+	}
+}
+
+func TestApplicationsTreatsMissingContainerAsDeletedDuringApplicationDeletion(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	runner := &serviceRuntimeRunner{downErr: errors.New("remove Compose project: exit status 1: Error: No such container: redbolt-7-web")}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteApplicationWithProgress(context.Background(), 7, nil); err != nil {
+		t.Fatalf("DeleteApplicationWithProgress() with missing container = %v, want nil", err)
+	}
+	if repository.deletedApplicationID != 7 || len(repository.applications) != 0 {
+		t.Fatalf("deleted application = %d, remaining = %#v; want application 7 and none", repository.deletedApplicationID, repository.applications)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("application directory stat error = %v, want not exist", err)
+	}
+}
+
+func TestApplicationsTreatsMissingServiceAsDeletedDuringServiceDeletion(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		stopErr   error
+		removeErr error
+	}{
+		{name: "stop", stopErr: errors.New(`run compose stop for service "db": exit status 1: service "db" not found`)},
+		{name: "remove", removeErr: errors.New("remove service container: exit status 1: Error: No such container: redbolt-7-db")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "projects")
+			repository := &applicationRepositoryStub{
+				applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+				services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
+			}
+			runner := &serviceRuntimeRunner{stopErr: testCase.stopErr, removeErr: testCase.removeErr}
+			applications, err := NewApplications(repository, root, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(root, applicationsDir, "status-page")
+			if err := os.Mkdir(directory, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte("services:\n  db:\n    image: postgres:17\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := applications.DeleteService(context.Background(), 7, "db"); err != nil {
+				t.Fatalf("DeleteService() with missing container = %v, want nil", err)
+			}
+			if repository.deletedName != "db" || len(repository.services) != 0 {
+				t.Fatalf("deleted service = %q, remaining = %#v; want db and none", repository.deletedName, repository.services)
+			}
+		})
+	}
+}
+
 func serviceFilePermissions(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(path)

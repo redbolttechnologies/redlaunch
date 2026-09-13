@@ -1252,12 +1252,12 @@ func (s *Applications) deleteServiceWithoutIntent(ctx context.Context, item appl
 	}
 
 	reportServiceDeletionProgress(progress, "stop", "Stopping the service container with Docker Compose")
-	if err := controller.Stop(ctx, directory, serviceName); err != nil {
+	if err := controller.Stop(ctx, directory, serviceName); err != nil && !isMissingDockerResourceError(err) {
 		return fmt.Errorf("stop service: %w", err)
 	}
 
 	reportServiceDeletionProgress(progress, "remove", "Removing the service container with Docker Compose")
-	if err := remover.Remove(ctx, directory, serviceName); err != nil {
+	if err := remover.Remove(ctx, directory, serviceName); err != nil && !isMissingDockerResourceError(err) {
 		return fmt.Errorf("remove service container: %w", err)
 	}
 
@@ -1369,7 +1369,7 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageStop, serviceDeletionStateRunning, ""); err != nil {
 			return err
 		}
-		if err := controller.Stop(ctx, directory, serviceName); err != nil {
+		if err := controller.Stop(ctx, directory, serviceName); err != nil && !isMissingDockerResourceError(err) {
 			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageStop, fmt.Errorf("stop service: %w", err))
 		}
 		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageRemove, serviceDeletionStateRunning, ""); err != nil {
@@ -1380,7 +1380,7 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 
 	if stage == serviceDeletionStageRemove {
 		reportServiceDeletionProgress(progress, serviceDeletionStageRemove, "Removing the service container with Docker Compose")
-		if err := remover.Remove(ctx, directory, serviceName); err != nil {
+		if err := remover.Remove(ctx, directory, serviceName); err != nil && !isMissingDockerResourceError(err) {
 			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageRemove, fmt.Errorf("remove service container: %w", err))
 		}
 		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageCompose, serviceDeletionStateRunning, ""); err != nil {
@@ -1631,7 +1631,7 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, applicationID int64, folderName, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
 
 	reportApplicationDeletionProgress(progress, "resources", "Removing application containers and Docker resources")
-	if err := remover.Down(ctx, directory); err != nil {
+	if err := remover.Down(ctx, directory); err != nil && !isMissingDockerResourceError(err) {
 		return fmt.Errorf("remove application resources: %w", err)
 	}
 
@@ -1707,7 +1707,7 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 			}
 		}
 		if !directoryMissing {
-			if err := remover.Down(ctx, directory); err != nil {
+			if err := remover.Down(ctx, directory); err != nil && !isMissingDockerResourceError(err) {
 				return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
 			}
 		}
@@ -1823,6 +1823,26 @@ func applicationDeletionFailureDetail(stage string) string {
 	default:
 		return "Application deletion failed. Retry the deletion to continue."
 	}
+}
+
+// isMissingDockerResourceError reports whether a Docker/Compose operation
+// failed only because the target container or service is already gone. Docker
+// reports this as "No such container" or "No such object" (docker CLI) and
+// Compose reports a removed service definition as "no such service" or
+// `service "name" not found`. Deletion must treat those outcomes as already
+// deleted so a manually removed container does not block the workflow.
+func isMissingDockerResourceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	details := strings.ToLower(err.Error())
+	if strings.Contains(details, "no such ") {
+		return true
+	}
+	if strings.Contains(details, "not found") && (strings.Contains(details, "service") || strings.Contains(details, "container")) {
+		return true
+	}
+	return false
 }
 
 // ensureFolderNotReserved rejects folder reuse while an incomplete deletion
