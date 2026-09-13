@@ -174,6 +174,60 @@ func TestDeleteServiceRefusesConflictingBackupLease(t *testing.T) {
 	}
 }
 
+// TestDeleteServiceRepairsDanglingDependsOn covers the stuck deletion where a
+// dependency was removed first, leaving the dependent with a dangling
+// depends_on. Docker rejects the project as invalid, so deletion must prune
+// the dangling reference before stopping the container.
+func TestDeleteServiceRepairsDanglingDependsOn(t *testing.T) {
+	ctx := t.Context()
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "redlaunch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	projectsRoot := filepath.Join(t.TempDir(), "projects")
+	runner := &validatingComposeRunner{runner: &serviceRuntimeRunner{}}
+	applications, err := NewApplications(database, projectsRoot, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &serviceDeletionSchedulerFake{}
+	applications.SetApplicationDeletionDependencies(scheduler, nil)
+	prepareRoutingProxy(t, projectsRoot)
+
+	item, err := applications.Create(ctx, "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateService(ctx, application.Service{
+		ApplicationID: item.ID, Name: "migrate", Type: application.ServiceTypeApplication,
+		ImageName: "example/migrate:latest", CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(projectsRoot, applicationsDir, item.FolderName)
+	brokenCompose := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n"
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte(brokenCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteServiceWithProgress(ctx, item.ID, "migrate", nil); err != nil {
+		t.Fatalf("DeleteServiceWithProgress(dependent with dangling dependency) = %v, want nil", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, "compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "depends_on") || strings.Contains(string(contents), "db:") {
+		t.Fatalf("Compose file still references deleted dependency:\n%s", contents)
+	}
+	intent, err := database.GetServiceDeletion(ctx, item.ID, "migrate")
+	if err != nil || intent.State != "complete" {
+		t.Fatalf("service deletion intent = %#v, %v; want complete", intent, err)
+	}
+}
+
 // TestDeleteServiceResumesAfterMetadataRemoval covers the crash window where
 // metadata is gone but routing and Compose state remain: a retry must finish
 // without requiring the service to be registered.

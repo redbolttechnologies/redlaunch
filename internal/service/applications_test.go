@@ -2560,6 +2560,124 @@ func TestApplicationsDoesNotDeleteServiceWhenStagedComposeValidationFails(t *tes
 	}
 }
 
+func TestApplicationsDeletesDependentAfterDependencyRemoval(t *testing.T) {
+	// Reproduces the reported stuck deletion: db was deleted first, leaving
+	// migrate with a dangling depends_on. Deleting migrate must repair the
+	// Compose file first so Docker validation (simulated here) succeeds.
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 2, ApplicationID: 7, Name: "migrate"}},
+	}
+	runner := &validatingComposeRunner{runner: &serviceRuntimeRunner{}}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	brokenCompose := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n"
+	composePath := filepath.Join(directory, "compose.yml")
+	if err := os.WriteFile(composePath, []byte(brokenCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteService(t.Context(), 7, "migrate"); err != nil {
+		t.Fatalf("DeleteService(dependent with dangling dependency) = %v, want nil", err)
+	}
+	got := readServiceFile(t, composePath)
+	if strings.Contains(got, "depends_on") || strings.Contains(got, "db:") {
+		t.Fatalf("Compose file still references deleted dependency:\n%s", got)
+	}
+	if len(repository.services) != 0 {
+		t.Fatalf("services after dependent deletion = %#v, want none", repository.services)
+	}
+	if strings.Join(runner.runner.actions, "\x00") != "stop\x00remove" {
+		t.Fatalf("Docker actions = %v, want stop and remove", runner.runner.actions)
+	}
+}
+
+// validatingComposeRunner simulates Docker Compose validation: every
+// operation fails while the Compose file contains a dangling depends_on,
+// mirroring "service X depends on undefined service Y: invalid compose
+// project" and the "resolve Compose volume ownership" ownership check that
+// runs config under the hood.
+type validatingComposeRunner struct {
+	runner *serviceRuntimeRunner
+}
+
+func (r *validatingComposeRunner) Up(ctx context.Context, projectDir string) error {
+	if r.runner == nil {
+		r.runner = &serviceRuntimeRunner{}
+	}
+	return r.runner.Up(ctx, projectDir)
+}
+
+func (r *validatingComposeRunner) ConfigServices(ctx context.Context, projectDir string) ([]compose.ConfiguredService, error) {
+	if err := validateComposeDependsOnForTest(projectDir); err != nil {
+		return nil, err
+	}
+	return r.runner.ConfigServices(ctx, projectDir)
+}
+
+func (r *validatingComposeRunner) Stop(ctx context.Context, projectDir, serviceName string) error {
+	if err := validateComposeDependsOnForTest(projectDir); err != nil {
+		return fmt.Errorf("resolve Compose volume ownership: %w", err)
+	}
+	return r.runner.Stop(ctx, projectDir, serviceName)
+}
+
+func (r *validatingComposeRunner) Remove(ctx context.Context, projectDir, serviceName string) error {
+	if err := validateComposeDependsOnForTest(projectDir); err != nil {
+		return fmt.Errorf("resolve Compose volume ownership: %w", err)
+	}
+	return r.runner.Remove(ctx, projectDir, serviceName)
+}
+
+func (r *validatingComposeRunner) Start(ctx context.Context, projectDir, serviceName string) error {
+	return r.runner.Start(ctx, projectDir, serviceName)
+}
+
+func (r *validatingComposeRunner) Restart(ctx context.Context, projectDir, serviceName string) error {
+	return r.runner.Restart(ctx, projectDir, serviceName)
+}
+
+func (r *validatingComposeRunner) Down(ctx context.Context, projectDir string) error {
+	return r.runner.Down(ctx, projectDir)
+}
+
+func (r *validatingComposeRunner) ListServices(ctx context.Context, projectDir string) ([]compose.ServiceRuntime, error) {
+	return r.runner.ListServices(ctx, projectDir)
+}
+
+func (r *validatingComposeRunner) ReloadProxy(ctx context.Context, projectDir string) error {
+	return r.runner.ReloadProxy(ctx, projectDir)
+}
+
+func validateComposeDependsOnForTest(projectDir string) error {
+	composePath := filepath.Join(projectDir, "compose.yml")
+	contents, err := os.ReadFile(composePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			composePath = filepath.Join(projectDir, "docker-compose.yml")
+			contents, err = os.ReadFile(composePath)
+		}
+		if err != nil {
+			return nil
+		}
+	}
+	pruned, err := pruneDanglingComposeDependsOn(string(contents))
+	if err != nil {
+		return err
+	}
+	if pruned != string(contents) {
+		return errors.New(`service "migrate" depends on undefined service "db": invalid compose project`)
+	}
+	return nil
+}
+
 func TestApplicationsStopsDeletionWhenAStageFails(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
@@ -2788,6 +2906,96 @@ func TestRemoveServiceFromComposeLeavesEmptyServicesMapping(t *testing.T) {
 	}
 	if got != "services: {}\n\nnetworks:\n  default:\n    external: true\n" {
 		t.Fatalf("Compose file after removing last service and volume = %q, want cleaned Compose file", got)
+	}
+}
+
+func TestRemoveServiceFromComposeCleansDependsOnMapping(t *testing.T) {
+	contents := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n      cache:\n        condition: service_healthy\n  db:\n    image: postgres:17\n  cache:\n    image: redis:7\n"
+
+	got, err := removeServiceFromCompose(contents, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "\n  db:\n") || strings.Contains(got, "image: postgres:17") {
+		t.Fatalf("removed service remains in Compose file:\n%s", got)
+	}
+	if strings.Contains(got, "db:") {
+		t.Fatalf("dangling depends_on reference remains in Compose file:\n%s", got)
+	}
+	for _, expected := range []string{"\n  migrate:\n", "depends_on:", "cache:\n        condition: service_healthy", "\n  cache:\n"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("Compose file after service removal does not contain %q:\n%s", expected, got)
+		}
+	}
+}
+
+func TestRemoveServiceFromComposeRemovesEmptyDependsOn(t *testing.T) {
+	contents := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n  db:\n    image: postgres:17\n"
+
+	got, err := removeServiceFromCompose(contents, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "depends_on") || strings.Contains(got, "db:") {
+		t.Fatalf("emptied depends_on block remains in Compose file:\n%s", got)
+	}
+	if !strings.Contains(got, "\n  migrate:\n") || !strings.Contains(got, "image: example/migrate:latest") {
+		t.Fatalf("dependent service was damaged by depends_on cleanup:\n%s", got)
+	}
+}
+
+func TestRemoveServiceFromComposeCleansDependsOnList(t *testing.T) {
+	contents := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      - db\n      - cache\n  db:\n    image: postgres:17\n  cache:\n    image: redis:7\n"
+
+	got, err := removeServiceFromCompose(contents, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "- db") {
+		t.Fatalf("dangling list depends_on reference remains:\n%s", got)
+	}
+	if !strings.Contains(got, "- cache") {
+		t.Fatalf("surviving list depends_on reference was removed:\n%s", got)
+	}
+}
+
+func TestPruneDanglingComposeDependsOnRepairsBrokenProject(t *testing.T) {
+	contents := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n  web:\n    image: nginx:1.27\n"
+
+	got, err := pruneDanglingComposeDependsOn(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "depends_on") || strings.Contains(got, "db:") {
+		t.Fatalf("dangling depends_on was not pruned:\n%s", got)
+	}
+	for _, expected := range []string{"\n  migrate:\n", "image: example/migrate:latest", "\n  web:\n"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("pruned Compose file does not contain %q:\n%s", expected, got)
+		}
+	}
+}
+
+func TestPruneDanglingComposeDependsOnHandlesInlineForms(t *testing.T) {
+	for _, contents := range []string{
+		"services:\n  migrate:\n    image: example/migrate:latest\n    depends_on: [db, cache]\n  cache:\n    image: redis:7\n",
+		"services:\n  migrate:\n    image: example/migrate:latest\n    depends_on: db\n  web:\n    image: nginx:1.27\n",
+	} {
+		got, err := pruneDanglingComposeDependsOn(contents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, "depends_on") && strings.Contains(got, "db") {
+			t.Fatalf("inline dangling depends_on was not pruned:\n%s", got)
+		}
+	}
+	inlineKept := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on: [db, cache]\n  db:\n    image: postgres:17\n  cache:\n    image: redis:7\n"
+	got, err := pruneDanglingComposeDependsOn(inlineKept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != inlineKept {
+		t.Fatalf("valid inline depends_on was modified:\n%s", got)
 	}
 }
 

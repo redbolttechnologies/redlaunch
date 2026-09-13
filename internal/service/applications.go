@@ -1253,6 +1253,9 @@ func (s *Applications) deleteServiceWithoutIntent(ctx context.Context, item appl
 	if err != nil {
 		return fmt.Errorf("resolve application directory for service deletion: %w", err)
 	}
+	if err := s.repairDanglingDependsOn(directory); err != nil {
+		return err
+	}
 	composePath, composeSnapshot, composeContents, composeChanged, err := s.stageServiceRemoval(directory, serviceName)
 	if err != nil {
 		return err
@@ -1298,6 +1301,40 @@ func (s *Applications) deleteServiceWithoutIntent(ctx context.Context, item appl
 			}
 		}
 		return fmt.Errorf("delete service metadata: %w", err)
+	}
+	return nil
+}
+
+// repairDanglingDependsOn removes depends_on entries that point at services
+// no longer defined in the Compose file. A previous deletion that left a
+// dependent behind would otherwise keep every later Compose invocation from
+// parsing the project ("depends on undefined service"), blocking deletion of
+// the dependent itself. The repair is a no-op when the file is missing or
+// already valid.
+func (s *Applications) repairDanglingDependsOn(directory string) error {
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return nil
+	}
+	snapshot, err := snapshotManagedFile(composePath)
+	if err != nil {
+		return fmt.Errorf("read application Compose file: %w", err)
+	}
+	if !snapshot.exists {
+		return nil
+	}
+	pruned, err := pruneDanglingComposeDependsOn(string(snapshot.contents))
+	if err != nil {
+		return fmt.Errorf("repair Compose service dependencies: %w", err)
+	}
+	if pruned == string(snapshot.contents) {
+		return nil
+	}
+	if err := writeManagedFile(composePath, pruned, snapshot.mode); err != nil {
+		return fmt.Errorf("repair Compose service dependencies: %w", err)
 	}
 	return nil
 }
@@ -1353,6 +1390,12 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 			return err
 		}
 		stage = serviceDeletionStageStop
+	}
+
+	if stage == serviceDeletionStageStop || stage == serviceDeletionStageRemove || stage == serviceDeletionStageCompose {
+		if err := s.repairDanglingDependsOn(directory); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, stage, err)
+		}
 	}
 
 	composePath, composeSnapshot, composeContents, composeChanged, err := s.stageServiceRemoval(directory, serviceName)
