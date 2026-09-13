@@ -33,6 +33,13 @@
     </div>
 
     <div class="setup-progress-actions">
+      {{if eq .ApplicationDeleteProgress.State "failed"}}
+      <form method="post" action="{{.ApplicationDeleteProgress.DeleteURL}}">
+        <input type="hidden" name="csrf_token" value="{{.ApplicationDeleteProgress.CSRFToken}}">
+        <input type="hidden" name="confirmation" value="{{.ApplicationDeleteProgress.ApplicationName}}">
+        <button class="button button-destructive" type="submit" data-application-delete-retry>Retry deletion</button>
+      </form>
+      {{end}}
       <button class="button button-secondary" type="button" data-progress-close>Close</button>
     </div>
   </section>

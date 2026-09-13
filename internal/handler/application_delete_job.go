@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,8 @@ type applicationDeleteProgressData struct {
 	ErrorDetail     string
 	StatusURL       string
 	CloseURL        string
+	DeleteURL       string
+	CSRFToken       string
 	Steps           []applicationDeleteJobStep
 }
 
@@ -239,6 +242,7 @@ func applicationDeleteProgressFromIntent(intent application.ApplicationDeletionI
 		State:           applicationDeleteJobStateRunning,
 		Steps:           steps,
 	}
+	progress.DeleteURL = "/applications/" + strconv.FormatInt(intent.ApplicationID, 10) + "/delete"
 	if intent.State == "complete" || stage == "complete" {
 		progress.State = applicationDeleteJobStateComplete
 		progress.CurrentStage = "Complete"

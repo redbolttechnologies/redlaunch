@@ -2658,8 +2658,13 @@ func (h *Handler) applicationDeleteStatus(w http.ResponseWriter, r *http.Request
 		http.Error(w, "The application deletion job was not found.", http.StatusNotFound)
 		return
 	}
+	csrfToken := h.setCSRFCookie(w, r)
+	if progress.DeleteURL == "" {
+		progress.DeleteURL = "/applications/" + strconv.FormatInt(id, 10) + "/delete"
+	}
+	progress.CSRFToken = csrfToken
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeTemplateStatus(w, "application-delete-progress.html", pageData{ApplicationDeleteProgress: progress}, http.StatusOK)
+	h.writeTemplateStatus(w, "application-delete-progress.html", pageData{CSRFToken: csrfToken, ApplicationDeleteProgress: progress}, http.StatusOK)
 }
 
 func (h *Handler) postgreSQLProgress(applicationID int64, jobID string) (*postgresProgressData, bool) {
@@ -2724,6 +2729,7 @@ func (h *Handler) applicationDeleteProgress(ctx context.Context, applicationID i
 			progress := job.snapshot()
 			progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=" + url.QueryEscape(jobID)
 			progress.CloseURL = "/applications"
+			progress.DeleteURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete"
 			return &progress, true
 		}
 	}
@@ -2749,6 +2755,9 @@ func (h *Handler) applicationDeleteProgress(ctx context.Context, applicationID i
 	progress.JobID = "recovery"
 	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete/status?id=recovery"
 	progress.CloseURL = "/applications"
+	if progress.DeleteURL == "" {
+		progress.DeleteURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/delete"
+	}
 	return progress, true
 }
 
@@ -4601,6 +4610,12 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	data.CSRFToken = csrfToken
 	data.Variables.CSRFToken = csrfToken
 	data.Secrets.CSRFToken = csrfToken
+	if data.ApplicationDeleteProgress != nil {
+		if data.ApplicationDeleteProgress.DeleteURL == "" {
+			data.ApplicationDeleteProgress.DeleteURL = "/applications/" + strconv.FormatInt(data.ApplicationDeleteProgress.ApplicationID, 10) + "/delete"
+		}
+		data.ApplicationDeleteProgress.CSRFToken = csrfToken
+	}
 	page := h.shellPageData(r)
 	page.ActivePage = "applications"
 	page.ApplicationDetailsPage = &data
@@ -4615,9 +4630,16 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) writeApplicationDeleteProgressPage(w http.ResponseWriter, r *http.Request, status int, progress *applicationDeleteProgressData) {
-	h.setCSRFCookie(w, r)
+	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
+	if progress != nil {
+		if progress.DeleteURL == "" {
+			progress.DeleteURL = "/applications/" + strconv.FormatInt(progress.ApplicationID, 10) + "/delete"
+		}
+		progress.CSRFToken = csrfToken
+	}
 	page := h.shellPageData(r)
+	page.CSRFToken = csrfToken
 	page.ApplicationDeleteProgress = progress
 	h.writeTemplateStatus(w, "application-details.html", page, status)
 }
