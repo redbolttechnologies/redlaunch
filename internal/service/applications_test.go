@@ -181,6 +181,14 @@ func (r *serviceRuntimeRunner) Start(_ context.Context, projectDir, serviceName 
 	return r.actionErr
 }
 
+func (r *serviceRuntimeRunner) UpService(_ context.Context, projectDir, serviceName string) error {
+	r.action = "up"
+	r.actions = append(r.actions, "up")
+	r.projectDir = projectDir
+	r.service = serviceName
+	return r.actionErr
+}
+
 func (r *serviceRuntimeRunner) Stop(_ context.Context, projectDir, serviceName string) error {
 	r.action = "stop"
 	r.actions = append(r.actions, "stop")
@@ -480,6 +488,47 @@ func TestApplicationsImportDockerComposeProjectRegistersManagedServices(t *testi
 		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
 			t.Fatalf("%s was not created: %v", name, err)
 		}
+	}
+}
+
+func TestApplicationsImportDockerComposeProjectCreatesMissingReferencedEnvFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{
+		configured: []compose.ConfiguredService{
+			{Name: "api", Image: "example/api:latest"},
+			{Name: "db", Image: "postgres:16-alpine"},
+		},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdApplication, err := applications.Create(t.Context(), "Status", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("services:\n  api:\n    image: example/api:latest\n    env_file:\n      - .env\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n")
+	if _, err := applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, contents); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status")
+	for _, name := range []string{varsEnvFile, secretsEnvFile, ".env"} {
+		path := filepath.Join(directory, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("%s was not created: %v", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Fatalf("%s is not a regular file", name)
+		}
+	}
+	composeContents := readServiceFile(t, filepath.Join(directory, "compose.yml"))
+	if !strings.Contains(composeContents, "- .env") {
+		t.Fatalf("imported Compose lost original .env reference:\n%s", composeContents)
+	}
+	if strings.Count(composeContents, "- vars.env") != 2 || strings.Count(composeContents, "- secrets.env") != 2 {
+		t.Fatalf("imported Compose env_file entries = %q, want managed files for each service", composeContents)
 	}
 }
 
@@ -2417,7 +2466,7 @@ func TestApplicationsControlsRegisteredServices(t *testing.T) {
 		action string
 		run    func(*Applications) error
 	}{
-		{name: "start", action: "start", run: func(applications *Applications) error {
+		{name: "start", action: "up", run: func(applications *Applications) error {
 			return applications.StartService(context.Background(), 7, "db")
 		}},
 		{name: "stop", action: "stop", run: func(applications *Applications) error {
@@ -2451,6 +2500,74 @@ func TestApplicationsControlsRegisteredServices(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplicationsStartFallsBackToStartWithoutUpService(t *testing.T) {
+	// Runners that predate UpService only implement Start; StartService must
+	// still work through the legacy controller path.
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
+	}
+	inner := &serviceRuntimeRunner{}
+	// Hide UpService by wrapping a runner that only exposes Start/Stop/etc.
+	// via an interface that lacks UpService: use a controller-only adapter.
+	runner := struct {
+		composeServiceControllerAdapter
+	}{
+		composeServiceControllerAdapter{runner: inner},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := applications.StartService(context.Background(), 7, "db"); err != nil {
+		t.Fatal(err)
+	}
+	if inner.action != "start" || inner.service != "db" {
+		t.Fatalf("fallback start action = (%q, %q), want (start, db)", inner.action, inner.service)
+	}
+}
+
+type composeServiceControllerAdapter struct {
+	runner *serviceRuntimeRunner
+}
+
+func (a composeServiceControllerAdapter) Up(ctx context.Context, projectDir string) error {
+	return a.runner.Up(ctx, projectDir)
+}
+
+func (a composeServiceControllerAdapter) ConfigServices(ctx context.Context, projectDir string) ([]compose.ConfiguredService, error) {
+	return a.runner.ConfigServices(ctx, projectDir)
+}
+
+func (a composeServiceControllerAdapter) ListServices(ctx context.Context, projectDir string) ([]compose.ServiceRuntime, error) {
+	return a.runner.ListServices(ctx, projectDir)
+}
+
+func (a composeServiceControllerAdapter) Start(ctx context.Context, projectDir, service string) error {
+	return a.runner.Start(ctx, projectDir, service)
+}
+
+func (a composeServiceControllerAdapter) Stop(ctx context.Context, projectDir, service string) error {
+	return a.runner.Stop(ctx, projectDir, service)
+}
+
+func (a composeServiceControllerAdapter) Restart(ctx context.Context, projectDir, service string) error {
+	return a.runner.Restart(ctx, projectDir, service)
+}
+
+func (a composeServiceControllerAdapter) Remove(ctx context.Context, projectDir, service string) error {
+	return a.runner.Remove(ctx, projectDir, service)
+}
+
+func (a composeServiceControllerAdapter) Down(ctx context.Context, projectDir string) error {
+	return a.runner.Down(ctx, projectDir)
 }
 
 func TestApplicationsRejectsUnregisteredServiceActions(t *testing.T) {
@@ -2638,6 +2755,13 @@ func (r *validatingComposeRunner) Remove(ctx context.Context, projectDir, servic
 
 func (r *validatingComposeRunner) Start(ctx context.Context, projectDir, serviceName string) error {
 	return r.runner.Start(ctx, projectDir, serviceName)
+}
+
+func (r *validatingComposeRunner) UpService(ctx context.Context, projectDir, serviceName string) error {
+	if err := validateComposeDependsOnForTest(projectDir); err != nil {
+		return fmt.Errorf("resolve Compose volume ownership: %w", err)
+	}
+	return r.runner.UpService(ctx, projectDir, serviceName)
 }
 
 func (r *validatingComposeRunner) Restart(ctx context.Context, projectDir, serviceName string) error {

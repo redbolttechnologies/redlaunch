@@ -105,12 +105,17 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 	if composeSnapshot.exists {
 		composeMode = composeSnapshot.mode
 	}
+	var referencedEnvSnapshots []managedFileSnapshot
 	rollbackFiles := func() error {
-		return errors.Join(
+		rollbackErrs := []error{
 			restoreManagedFile(composeSnapshot),
 			restoreManagedFile(varsSnapshot),
 			restoreManagedFile(secretsSnapshot),
-		)
+		}
+		for _, snapshot := range referencedEnvSnapshots {
+			rollbackErrs = append(rollbackErrs, restoreManagedFile(snapshot))
+		}
+		return errors.Join(rollbackErrs...)
 	}
 
 	processedContents, err := addManagedFieldsToImportedCompose(string(contents), parsedServices, item.ID)
@@ -129,6 +134,10 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 		if err := writeManagedFile(secretsPath, "", envFileMode); err != nil {
 			return nil, errors.Join(fmt.Errorf("create application secrets file: %w", err), rollbackFiles())
 		}
+	}
+	referencedEnvSnapshots, err = ensureImportedReferencedEnvFiles(directory, processedContents)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("create referenced environment files: %w", err), rollbackFiles())
 	}
 
 	configuredServices, err := s.runner.(composeProjectConfigReader).ConfigServices(ctx, directory)
@@ -679,4 +688,65 @@ func replaceImportedYAMLLines(lines []string, start, end int, replacement []stri
 	result = append(result, replacement...)
 	result = append(result, lines[end:]...)
 	return result
+}
+
+// ensureImportedReferencedEnvFiles creates empty files for local env_file
+// references in the staged Compose contents that do not yet exist. Docker
+// Compose fails the project-wide `config` validation (used for ownership
+// checks before every mutating operation) when a referenced env_file is
+// missing, which would leave an otherwise valid import permanently
+// unstartable. Only paths already validated as local to the application
+// directory are touched; anything else is left for policy validation.
+func ensureImportedReferencedEnvFiles(directory, processedContents string) ([]managedFileSnapshot, error) {
+	lines := strings.Split(processedContents, "\n")
+	seen := make(map[string]struct{})
+	var created []managedFileSnapshot
+	for index, line := range lines {
+		indent, key, value, ok := importedPolicyYAMLKey(line)
+		if !ok || key != "env_file" {
+			continue
+		}
+		for _, entry := range importedPolicyFieldEntries(lines, index, indent, value) {
+			raw := strings.TrimSpace(importedPolicyPathEntry(entry))
+			if raw == "" {
+				continue
+			}
+			// Skip flow-mapping fragments that policy rejects elsewhere;
+			// they must not become filesystem paths.
+			if strings.Contains(raw, "{") || strings.Contains(raw, "}") {
+				continue
+			}
+			trimmed := strings.TrimSpace(strings.Trim(raw, "\"'"))
+			if trimmed == "" {
+				continue
+			}
+			if err := validateImportedLocalPath(directory, trimmed, "env_file"); err != nil {
+				continue
+			}
+			cleaned := filepath.Clean(strings.TrimSpace(strings.Trim(trimmed, "\"'")))
+			candidate := filepath.Join(directory, cleaned)
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			snapshot, err := snapshotManagedFile(candidate)
+			if err != nil {
+				return created, err
+			}
+			if snapshot.exists {
+				continue
+			}
+			parent := filepath.Dir(candidate)
+			if parent != filepath.Clean(directory) {
+				if err := ensureDirectory(parent); err != nil {
+					return created, err
+				}
+			}
+			if err := writeManagedFile(candidate, "", envFileMode); err != nil {
+				return created, err
+			}
+			created = append(created, snapshot)
+		}
+	}
+	return created, nil
 }

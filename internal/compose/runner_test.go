@@ -863,3 +863,18 @@ func TestPostgresRestoreRunsInsideASingleTransaction(t *testing.T) {
 		t.Fatalf("postgres dump script = %q, want --clean --if-exists preserved", postgresDumpScript)
 	}
 }
+
+func TestComposeEnvFileArgsLoadsManagedFilesForInterpolation(t *testing.T) {
+	projectDir := t.TempDir()
+	if got := composeEnvFileArgs(projectDir); len(got) != 1 || got[0] != "/dev/null" {
+		t.Fatalf("composeEnvFileArgs(empty) = %#v, want [/dev/null]", got)
+	}
+	for _, name := range []string{".env", "vars.env", "secrets.env"} {
+		if err := os.WriteFile(filepath.Join(projectDir, name), []byte("FOO=bar\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := composeEnvFileArgs(projectDir); len(got) != 3 || got[0] != ".env" || got[1] != "vars.env" || got[2] != "secrets.env" {
+		t.Fatalf("composeEnvFileArgs(managed) = %#v, want [.env vars.env secrets.env]", got)
+	}
+}

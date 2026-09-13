@@ -1217,14 +1217,45 @@ func findComposeFile(projectDir string) (string, error) {
 // environment policy to every Docker Compose operation. The project-root path
 // scopes otherwise identical application trees installed on the same host,
 // while the resource kind keeps core and application directories distinct.
+//
+// Interpolation sources the managed environment files (`.env` for imported
+// projects, then `vars.env`, then `secrets.env`) so `${VAR}` references in an
+// imported Compose file resolve from the values the user manages in the UI.
+// Host process variables still take precedence over these files. When none of
+// the managed files exist `/dev/null` preserves the previous isolation and
+// prevents Compose from implicitly loading an unrelated `.env`.
 func composeCommand(ctx context.Context, binary, projectDir, composeFile string, args ...string) *exec.Cmd {
 	ctx = normalizeContext(ctx)
-	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "/dev/null", "-f", composeFile}
+	composeArgs := []string{"compose", "--project-name", composeProjectName(projectDir)}
+	for _, envFile := range composeEnvFileArgs(projectDir) {
+		composeArgs = append(composeArgs, "--env-file", envFile)
+	}
+	composeArgs = append(composeArgs, "-f", composeFile)
 	composeArgs = append(composeArgs, args...)
 	command := exec.CommandContext(ctx, binary, composeArgs...)
 	command.Dir = projectDir
 	command.Env = composeProcessEnvironment(os.Environ(), composeInterpolationVariables(projectDir, composeFile))
 	return command
+}
+
+// composeEnvFileArgs lists the managed environment files that exist in the
+// project directory for Compose interpolation, latest-wins order. Only
+// regular files are used; symlinks and directories are skipped so a swapped
+// path cannot redirect interpolation outside the project.
+func composeEnvFileArgs(projectDir string) []string {
+	candidates := []string{".env", "vars.env", "secrets.env"}
+	found := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		info, err := os.Lstat(filepath.Join(projectDir, name))
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		found = append(found, name)
+	}
+	if len(found) == 0 {
+		return []string{"/dev/null"}
+	}
+	return found
 }
 
 func composeProjectName(projectDir string) string {

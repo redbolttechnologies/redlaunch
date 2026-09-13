@@ -1094,8 +1094,56 @@ func (s *Applications) RestartProxy(ctx context.Context) error {
 	})
 }
 
-// StartService starts one registered service in an application.
+// StartService creates and starts one registered service in an application.
+// It uses `docker compose up` when the runner supports service-scoped
+// startup so the first start after an import creates the container.
+// `docker compose start` requires an existing container and fails with "has
+// no container to start" when the project was imported but never started,
+// which left imported services permanently showing Unknown in the dashboard.
+// For stopped containers with unchanged configuration `up -d` behaves like
+// `start`.
 func (s *Applications) StartService(ctx context.Context, applicationID int64, serviceName string) error {
+	if starter, ok := s.runner.(composeServiceStarter); ok {
+		if s.detailsRepository == nil {
+			return errors.New("application details repository is not configured")
+		}
+		validatedName, err := application.ValidateServiceName(serviceName)
+		if err != nil {
+			return err
+		}
+		lease, err := s.acquireApplicationProject(ctx, applicationID)
+		if err != nil {
+			return err
+		}
+		defer lease.release()
+
+		item, err := s.detailsRepository.Get(ctx, applicationID)
+		if err != nil {
+			return fmt.Errorf("get application for service action: %w", err)
+		}
+		services, err := s.detailsRepository.ListServices(ctx, applicationID)
+		if err != nil {
+			return fmt.Errorf("list services for service action: %w", err)
+		}
+		registered := false
+		for _, service := range services {
+			if service.Name == validatedName {
+				registered = true
+				break
+			}
+		}
+		if !registered {
+			return application.ErrServiceNotFound
+		}
+		directory, err := s.managedApplicationDirectory(item)
+		if err != nil {
+			return fmt.Errorf("resolve application directory for service action: %w", err)
+		}
+		if err := starter.UpService(ctx, directory, validatedName); err != nil {
+			return fmt.Errorf("start service: %w", err)
+		}
+		return nil
+	}
 	return s.runServiceAction(ctx, applicationID, serviceName, "start", func(controller composeServiceController, directory, name string) error {
 		return controller.Start(ctx, directory, name)
 	})
