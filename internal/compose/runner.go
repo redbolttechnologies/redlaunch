@@ -44,6 +44,8 @@ var managerEnvironmentKeys = map[string]struct{}{
 	"GOOGLE_CLIENT_ID":        {},
 	"GOOGLE_CLIENT_SECRET":    {},
 	"GOOGLE_REDIRECT_URL":     {},
+	"HOST_HOSTNAME":           {},
+	"HOST_PUBLIC_IP":          {},
 	"HTTP_ADDR":               {},
 	"APP_BIND_ADDRESS":        {},
 	"APP_PORT":                {},

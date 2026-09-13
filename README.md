@@ -178,6 +178,8 @@ The main configuration values are:
 | `METRICS_SCOPE` | `manager` | Dashboard visibility scope: `manager` reads the manager process environment; `vps` is for explicitly mounted host paths |
 | `METRICS_PROC_ROOT` | empty (`/proc`) | Procfs path used by the dashboard metrics collector; set this to a read-only host procfs mount for VPS scope in Docker |
 | `METRICS_FILESYSTEM_ROOT` | empty (`/`) | Filesystem path used for dashboard disk metrics; set this to a read-only host-root mount for VPS scope in Docker |
+| `HOST_HOSTNAME` | empty (host `HOSTNAME` via Compose) | Host name shown in the header; inside Docker `os.Hostname` would otherwise return the container ID |
+| `HOST_PUBLIC_IP` | empty (auto-detected) | Public IP shown in the header; overrides the automatic container-egress detection |
 | `APP_BIND_ADDRESS` | `127.0.0.1` | Host bind address for the Docker deployment; use `0.0.0.0` only with managed HTTPS and firewalling |
 | `APP_PORT` | `8080` | Host port used by Docker Compose |
 

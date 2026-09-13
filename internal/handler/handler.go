@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -4746,8 +4747,8 @@ func (h *Handler) setupProgress(r *http.Request) (*setupProgressData, bool) {
 }
 
 func discoverServerInfo() ServerInfo {
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
+	hostname := discoverHostname()
+	if hostname == "" {
 		hostname = "Unavailable"
 	}
 
@@ -4762,7 +4763,160 @@ func discoverServerInfo() ServerInfo {
 	}
 }
 
+// publicIPLookup fetches the host's public IP from the container egress
+// address. It is a package variable so tests can stub the external call.
+var publicIPLookup = fetchPublicIP
+
+// containerized reports whether the process runs inside a container, where
+// interface addresses and os.Hostname describe the container rather than the
+// host. It is a variable so tests can control the branch without fixtures.
+var containerized = isRunningInContainer
+
+func discoverHostname() string {
+	if override := strings.TrimSpace(os.Getenv("HOST_HOSTNAME")); override != "" {
+		if isValidHostnameDisplay(override) {
+			return override
+		}
+	}
+
+	for _, candidate := range hostHostnameFileCandidates() {
+		if hostname := readHostnameFile(candidate); hostname != "" {
+			return hostname
+		}
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" || !isValidHostnameDisplay(hostname) {
+		return ""
+	}
+	if containerized() && looksLikeContainerID(hostname) {
+		return ""
+	}
+	return hostname
+}
+
+func hostHostnameFileCandidates() []string {
+	candidates := make([]string, 0, 3)
+	if root := strings.TrimSpace(os.Getenv("METRICS_FILESYSTEM_ROOT")); root != "" {
+		if filepath.IsAbs(root) {
+			candidates = append(candidates, filepath.Join(filepath.Clean(root), "etc", "hostname"))
+		}
+	}
+	candidates = append(candidates,
+		filepath.Join(string(filepath.Separator), "host", "root", "etc", "hostname"),
+		filepath.Join(string(filepath.Separator), "host", "etc", "hostname"),
+	)
+	return candidates
+}
+
+func readHostnameFile(path string) string {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	hostname := strings.TrimSpace(string(contents))
+	if index := strings.IndexAny(hostname, "\r\n"); index >= 0 {
+		hostname = strings.TrimSpace(hostname[:index])
+	}
+	if hostname == "" || !isValidHostnameDisplay(hostname) {
+		return ""
+	}
+	if containerized() && looksLikeContainerID(hostname) {
+		return ""
+	}
+	return hostname
+}
+
+func isValidHostnameDisplay(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 253 {
+		return false
+	}
+	if strings.ContainsAny(value, " \t\n\r\f\v/\\:@[];,&|$`\"'<>|*?") {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeContainerID(value string) bool {
+	if len(value) != 12 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		isHex := character >= '0' && character <= '9' || character >= 'a' && character <= 'f' || character >= 'A' && character <= 'F'
+		if !isHex {
+			return false
+		}
+	}
+	return true
+}
+
+func isRunningInContainer() bool {
+	if _, err := os.Stat(filepath.Join(string(filepath.Separator), ".dockerenv")); err == nil {
+		return true
+	}
+	return false
+}
+
 func discoverIPAddress() string {
+	if override := strings.TrimSpace(os.Getenv("HOST_PUBLIC_IP")); override != "" {
+		if parsed := net.ParseIP(override); parsed != nil {
+			return parsed.String()
+		}
+	}
+
+	if public := publicIPLookup(); public != "" {
+		return public
+	}
+
+	if containerized() {
+		return ""
+	}
+
+	return discoverInterfaceIPAddress()
+}
+
+func fetchPublicIP() string {
+	return fetchPublicIPFrom(publicIPEndpoint)
+}
+
+var publicIPEndpoint = "https://api.ipify.org"
+
+func fetchPublicIPFrom(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(endpoint)
+	if err != nil {
+		return ""
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64))
+	if err != nil {
+		return ""
+	}
+	candidate := strings.TrimSpace(string(body))
+	if parsed := net.ParseIP(candidate); parsed != nil {
+		return parsed.String()
+	}
+	return ""
+}
+
+func discoverInterfaceIPAddress() string {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return ""

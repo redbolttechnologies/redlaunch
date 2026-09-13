@@ -780,7 +780,7 @@ func TestComposeProjectNamesSeparateApplicationAndCoreResources(t *testing.T) {
 
 func TestCommandRunnerExcludesManagerOnlyEnvironment(t *testing.T) {
 	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    environment:\n      APP_VALUE: ${APP_INTERPOLATION_VALUE}\n      MANAGER_VALUE: ${AUTH_SESSION_SECRET}\n      GOOGLE_VALUE: ${GOOGLE_CLIENT_SECRET}\n      METRICS_SCOPE_VALUE: ${METRICS_SCOPE}\n      METRICS_PROC_VALUE: ${METRICS_PROC_ROOT}\n      METRICS_FILESYSTEM_VALUE: ${METRICS_FILESYSTEM_ROOT}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services:\n  web:\n    environment:\n      APP_VALUE: ${APP_INTERPOLATION_VALUE}\n      MANAGER_VALUE: ${AUTH_SESSION_SECRET}\n      GOOGLE_VALUE: ${GOOGLE_CLIENT_SECRET}\n      METRICS_SCOPE_VALUE: ${METRICS_SCOPE}\n      METRICS_PROC_VALUE: ${METRICS_PROC_ROOT}\n      METRICS_FILESYSTEM_VALUE: ${METRICS_FILESYSTEM_ROOT}\n      HOST_NAME_VALUE: ${HOST_HOSTNAME}\n      HOST_IP_VALUE: ${HOST_PUBLIC_IP}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AUTH_SESSION_SECRET", "manager-only-marker")
@@ -788,11 +788,13 @@ func TestCommandRunnerExcludesManagerOnlyEnvironment(t *testing.T) {
 	t.Setenv("METRICS_SCOPE", "vps")
 	t.Setenv("METRICS_PROC_ROOT", "/host/proc")
 	t.Setenv("METRICS_FILESYSTEM_ROOT", "/host/root")
+	t.Setenv("HOST_HOSTNAME", "host-marker")
+	t.Setenv("HOST_PUBLIC_IP", "203.0.113.10")
 	t.Setenv("APP_INTERPOLATION_VALUE", "application-marker")
 
 	binary := filepath.Join(t.TempDir(), "docker")
 	script := `#!/bin/sh
-printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s","GOOGLE_VALUE":"%s","METRICS_SCOPE_VALUE":"%s","METRICS_PROC_VALUE":"%s","METRICS_FILESYSTEM_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}" "${GOOGLE_CLIENT_SECRET-unset}" "${METRICS_SCOPE-unset}" "${METRICS_PROC_ROOT-unset}" "${METRICS_FILESYSTEM_ROOT-unset}"
+printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s","GOOGLE_VALUE":"%s","METRICS_SCOPE_VALUE":"%s","METRICS_PROC_VALUE":"%s","METRICS_FILESYSTEM_VALUE":"%s","HOST_NAME_VALUE":"%s","HOST_IP_VALUE":"%s"}}}}\n' "${APP_INTERPOLATION_VALUE-unset}" "${AUTH_SESSION_SECRET-unset}" "${GOOGLE_CLIENT_SECRET-unset}" "${METRICS_SCOPE-unset}" "${METRICS_PROC_ROOT-unset}" "${METRICS_FILESYSTEM_ROOT-unset}" "${HOST_HOSTNAME-unset}" "${HOST_PUBLIC_IP-unset}"
 `
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -812,7 +814,7 @@ printf '{"services":{"web":{"environment":{"APP_VALUE":"%s","MANAGER_VALUE":"%s"
 	if values["GOOGLE_VALUE"] != "unset" {
 		t.Fatal("manager-only OAuth environment reached Docker Compose")
 	}
-	for _, key := range []string{"METRICS_SCOPE_VALUE", "METRICS_PROC_VALUE", "METRICS_FILESYSTEM_VALUE"} {
+	for _, key := range []string{"METRICS_SCOPE_VALUE", "METRICS_PROC_VALUE", "METRICS_FILESYSTEM_VALUE", "HOST_NAME_VALUE", "HOST_IP_VALUE"} {
 		if values[key] != "unset" {
 			t.Fatalf("manager-only metrics environment %s reached Docker Compose", key)
 		}
