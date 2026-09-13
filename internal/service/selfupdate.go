@@ -371,7 +371,12 @@ func (s *SelfUpdateService) helperRunning(ctx context.Context) (bool, error) {
 }
 
 func isDockerNoSuchContainer(output []byte) bool {
-	return strings.Contains(strings.ToLower(string(output)), "no such container")
+	// Docker reports a missing container as either "No such container" or
+	// "No such object" depending on the version; both mean there is no
+	// previous helper to wait for or clean up.
+	details := strings.ToLower(string(output))
+	return strings.Contains(details, "no such container") ||
+		strings.Contains(details, "no such object")
 }
 
 type selfUpdateTailBuffer struct {

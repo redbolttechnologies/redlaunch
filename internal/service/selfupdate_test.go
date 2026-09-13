@@ -223,3 +223,30 @@ func TestQueueUpdateStopsWhenGitPullFails(t *testing.T) {
 		t.Fatal("detached helper started after a failed git pull")
 	}
 }
+
+func TestQueueUpdateTreatsMissingHelperAsNotRunning(t *testing.T) {
+	// Docker reports a missing container as either "No such container" or
+	// "No such object" depending on the version; both must let the update
+	// proceed instead of failing the rebuild stage.
+	for _, daemonMessage := range []string{
+		"Error: No such container: redbolt-redlaunch-updater",
+		"Error: No such object: redbolt-redlaunch-updater",
+	} {
+		t.Run(daemonMessage, func(t *testing.T) {
+			directory := writeSelfUpdateFixture(t, "exit 0",
+				"if [ \"$1\" = \"inspect\" ]; then echo \""+daemonMessage+"\" >&2; exit 1; fi\necho fake-helper-id\nexit 0")
+
+			service, err := NewSelfUpdateService(directory, "git", "docker")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.QueueUpdateWithProgress(context.Background(), nil); err != nil {
+				t.Fatalf("QueueUpdateWithProgress() error = %v, want helper to start", err)
+			}
+			dockerCalls, _ := readSelfUpdateCalls(t, "docker")
+			if !strings.Contains(dockerCalls, "docker run --rm -d") {
+				t.Fatalf("docker invocations = %q, want the detached helper to start", dockerCalls)
+			}
+		})
+	}
+}
