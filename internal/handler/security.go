@@ -69,15 +69,28 @@ func (h *Handler) sameRequestOrigin(r *http.Request, candidate string) bool {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
 	}
-	if parsed.Scheme != h.requestScheme(r) {
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return false
+	}
+	requestScheme := h.requestScheme(r)
+	if parsed.Scheme != requestScheme {
+		// The bundled Caddy proxy terminates TLS and forwards to the manager
+		// over plain HTTP, so a public https origin reaches the app as an http
+		// request with the public Host preserved. Allow that scheme upgrade
+		// when the hosts match. Reject the downgrade direction (http origin
+		// for an https request) to avoid weakening https deployments.
+		if !(requestScheme == "http" && parsed.Scheme == "https") {
+			return false
+		}
 	}
 	requestHost := strings.TrimSpace(r.Host)
 	if requestHost == "" && r.URL != nil {
 		requestHost = strings.TrimSpace(r.URL.Host)
 	}
-	requestScheme := h.requestScheme(r)
-	return canonicalRequestHost(requestHost, requestScheme) != "" && canonicalRequestHost(requestHost, requestScheme) == canonicalRequestHost(parsed.Host, parsed.Scheme)
+	if parsed.Scheme == requestScheme {
+		return canonicalRequestHost(requestHost, requestScheme) != "" && canonicalRequestHost(requestHost, requestScheme) == canonicalRequestHost(parsed.Host, parsed.Scheme)
+	}
+	return originHostsMatchAcrossSchemeUpgrade(requestHost, parsed.Host)
 }
 
 func (h *Handler) requestScheme(r *http.Request) string {
@@ -99,6 +112,48 @@ func canonicalRequestHost(value, scheme string) string {
 		return strings.TrimSuffix(host, ".") + ":" + port
 	}
 	return strings.TrimSuffix(value, ".")
+}
+
+// originHostsMatchAcrossSchemeUpgrade reports whether an http request Host and
+// an https origin Host identify the same authority behind a TLS-terminating
+// proxy. The proxy preserves Host while the external scheme is https and the
+// internal scheme is http, so the default ports (80 inside, 443 outside) must
+// be treated as equivalent. Explicit non-default ports must still match.
+func originHostsMatchAcrossSchemeUpgrade(requestHost, originHost string) bool {
+	requestName, requestPort := splitOriginHost(requestHost)
+	originName, originPort := splitOriginHost(originHost)
+	if requestName == "" || originName == "" || requestName != originName {
+		return false
+	}
+	if requestPort == "" {
+		requestPort = "80"
+	}
+	if originPort == "" {
+		originPort = "443"
+	}
+	if requestPort == originPort {
+		return true
+	}
+	return requestPort == "80" && originPort == "443"
+}
+
+func splitOriginHost(value string) (string, string) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "", ""
+	}
+	if host, port, err := net.SplitHostPort(value); err == nil {
+		host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+		if host == "" || strings.Contains(host, "@") || strings.Contains(host, "/") {
+			return "", ""
+		}
+		return host, strings.TrimSpace(port)
+	}
+	host := strings.TrimSuffix(value, ".")
+	if host == "" || strings.Contains(host, "@") || strings.Contains(host, "/") {
+		return "", ""
+	}
+	return host, ""
 }
 
 func refererOrigin(value string) string {

@@ -5544,6 +5544,115 @@ func TestStateChangingRequestRejectsMalformedReferer(t *testing.T) {
 	}
 }
 
+func TestStateChangingRequestAllowsHTTPSOriginBehindTLSTerminatingProxy(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bundled Caddy proxy terminates TLS and forwards to the manager over
+	// plain HTTP with the public Host preserved. The browser sends an https
+	// Origin while the app sees an http request.
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://redlaunch.example.com/setup", strings.NewReader(form.Encode()))
+	request.Host = "redlaunch.example.com"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://redlaunch.example.com")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("proxied https-origin POST status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+}
+
+func TestStateChangingRequestAllowsHTTPSRefererBehindTLSTerminatingProxy(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://redlaunch.example.com/setup", strings.NewReader(form.Encode()))
+	request.Host = "redlaunch.example.com"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Referer", "https://redlaunch.example.com/settings")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("proxied https-referer POST status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+}
+
+func TestStateChangingRequestStillRejectsCrossHostHTTPSOriginBehindProxy(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://redlaunch.example.com/setup", strings.NewReader(form.Encode()))
+	request.Host = "redlaunch.example.com"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://evil.example")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-host https-origin POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("cross-host https-origin POST setup calls = %d, want 0", manager.setupCalls)
+	}
+}
+
+func TestStateChangingRequestRejectsPortMismatchAcrossSchemeUpgrade(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "http://redlaunch.example.com:8080/setup", strings.NewReader(form.Encode()))
+	request.Host = "redlaunch.example.com:8080"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://redlaunch.example.com")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("port-mismatch POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
+func TestStateChangingRequestRejectsHTTPOriginForHTTPSRequest(t *testing.T) {
+	manager := &fakeSetupManager{needsSetup: true}
+	web, err := New(nil, manager, SecurityConfig{AccessMode: accessModeManagedHTTPS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "https://manager.example/setup", strings.NewReader(form.Encode()))
+	request.Host = "manager.example"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://manager.example")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("downgrade POST status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if manager.setupCalls != 0 {
+		t.Fatalf("downgrade POST setup calls = %d, want 0", manager.setupCalls)
+	}
+}
+
 func TestGitHubActionsPageShowsSetupForm(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
