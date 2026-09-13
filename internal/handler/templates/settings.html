@@ -11,72 +11,83 @@
     </div>
   </header>
 
-  <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="public-access-title">Public access</h2>
-        <p>Publish the Redlaunch management interface through the managed Caddy proxy. Caddy obtains and renews the HTTPS certificate automatically. Each configured domain serves Redlaunch.</p>
-      </div>
-      <button class="button button-primary" type="button" data-domain-add aria-controls="domain-edit-dialog" aria-haspopup="dialog" aria-expanded="false">
-        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14M5 12h14"></path>
-        </svg>
-        <span>Add domain</span>
-      </button>
-    </header>
-    <div class="service-widget-body">
-      {{if .SettingsPage.Domains}}
-      <div class="service-environment-table-wrap">
-        <table class="service-environment-table">
-          <caption class="sr-only">Domains configured for Redlaunch public access</caption>
-          <thead>
-            <tr>
-              <th scope="col">Domain</th>
-              <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .SettingsPage.Domains}}
-            <tr>
-              <th scope="row"><code>{{.Name}}</code></th>
-              <td class="application-environment-actions">
-                <div class="application-environment-action-group">
-                  <button class="application-environment-delete" type="button" data-domain-delete data-domain-name="{{.Name}}" aria-controls="domain-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Delete domain {{.Name}}">
-                    <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 6h18"></path>
-                      <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
-                      <path d="M10 11v5M14 11v5"></path>
-                    </svg>
-                  </button>
-                </div>
-              </td>
-            </tr>
-            {{end}}
-          </tbody>
-        </table>
-      </div>
-      {{else}}
-      <div class="service-widget-empty" role="status">
-        <p>No domains are configured for Redlaunch public access.</p>
-      </div>
-      {{end}}
+  <div class="application-tabs settings-tabs" data-application-tabs>
+    <div class="application-tablist settings-tablist" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
+      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="true" tabindex="0" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="software-update-tab" type="button" role="tab" aria-controls="software-update-panel" aria-selected="false" tabindex="-1" data-application-tab="software-update-panel">Software update</button>
     </div>
-  </section>
 
-  <section class="service-widget settings-update" aria-labelledby="update-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="update-title">Update Redlaunch</h2>
-        <p>Pull the latest Redlaunch version from GitHub and rebuild the Redlaunch container. This runs <code>git pull</code> followed by <code>docker compose up -d --build</code>, the same steps as <code>make update</code>. The rebuild runs in the background and restarts Redlaunch.</p>
-      </div>
-    </header>
-    <div class="service-widget-body">
-      <form method="post" action="/settings/update">
-        <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
-        <button class="button button-primary" type="submit">Update</button>
-      </form>
-    </div>
-  </section>
+    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0">
+      <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="public-access-title">Public access</h2>
+            <p>Publish the Redlaunch management interface through the managed Caddy proxy. Caddy obtains and renews the HTTPS certificate automatically. Each configured domain serves Redlaunch.</p>
+          </div>
+          <button class="button button-primary" type="button" data-domain-add aria-controls="domain-edit-dialog" aria-haspopup="dialog" aria-expanded="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+            <span>Add domain</span>
+          </button>
+        </header>
+        <div class="service-widget-body">
+          {{if .SettingsPage.Domains}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <caption class="sr-only">Domains configured for Redlaunch public access</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Domain</th>
+                  <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .SettingsPage.Domains}}
+                <tr>
+                  <th scope="row"><code>{{.Name}}</code></th>
+                  <td class="application-environment-actions">
+                    <div class="application-environment-action-group">
+                      <button class="application-environment-delete" type="button" data-domain-delete data-domain-name="{{.Name}}" aria-controls="domain-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Delete domain {{.Name}}">
+                        <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M3 6h18"></path>
+                          <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+                          <path d="M10 11v5M14 11v5"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="service-widget-empty" role="status">
+            <p>No domains are configured for Redlaunch public access.</p>
+          </div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="software-update-panel" role="tabpanel" aria-labelledby="software-update-tab" tabindex="0" hidden>
+      <section class="service-widget settings-update" aria-labelledby="update-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="update-title">Update Redlaunch</h2>
+            <p>Pull the latest Redlaunch version from GitHub and rebuild the Redlaunch container. This runs <code>git pull</code> followed by <code>docker compose up -d --build</code>, the same steps as <code>make update</code>. The rebuild runs in the background and restarts Redlaunch.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <form method="post" action="/settings/update">
+            <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+            <button class="button button-primary" type="submit">Update</button>
+          </form>
+        </div>
+      </section>
+    </section>
+  </div>
 </section>
 
 <dialog class="application-dialog domain-edit-dialog" id="domain-edit-dialog" data-domain-edit-dialog{{with .SettingsPage.DomainEdit}}{{if .Open}} data-domain-edit-open{{end}}{{end}} aria-modal="true" aria-labelledby="domain-edit-dialog-title" aria-describedby="domain-edit-dialog-description">

@@ -27,9 +27,9 @@
       tab.addEventListener("click", () => activateTab(tab, false));
       tab.addEventListener("keydown", (event) => {
         let nextIndex = index;
-        if (event.key === "ArrowRight") {
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
           nextIndex = (index + 1) % tabButtons.length;
-        } else if (event.key === "ArrowLeft") {
+        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
           nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;
         } else if (event.key === "Home") {
           nextIndex = 0;
