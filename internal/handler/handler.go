@@ -1036,12 +1036,12 @@ func (h *Handler) previewDockerComposeProject(w http.ResponseWriter, r *http.Req
 }
 
 type composeImportPreviewPageData struct {
-	Preview      *application.ComposeImportPreview
-	Error        string
-	Importable   bool
-	HasServices  bool
-	HasVolumes   bool
-	HasNetworks  bool
+	Preview     *application.ComposeImportPreview
+	Error       string
+	Importable  bool
+	HasServices bool
+	HasVolumes  bool
+	HasNetworks bool
 }
 
 func (h *Handler) writeComposeImportPreview(w http.ResponseWriter, preview *application.ComposeImportPreview, previewError string, importable bool) {

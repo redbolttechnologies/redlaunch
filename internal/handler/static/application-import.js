@@ -44,8 +44,20 @@
     if (!previewContainer || !submitButton) {
       return;
     }
+    const file = fileInput && fileInput.files && fileInput.files[0];
     const preview = previewContainer.querySelector("[data-compose-import-preview]");
     if (!preview) {
+      if (previewContainer.querySelector('[role="status"]')) {
+        // A preview request is still in flight.
+        setSubmitState(true, "Reading…");
+        return;
+      }
+      if (!file) {
+        setSubmitState(true, "Choose a file to review");
+        return;
+      }
+      // The preview failed to load (inline error shown, if any). Allow the
+      // fallback POST so the server still validates and reports the file.
       setSubmitState(false, submitLabel);
       return;
     }
@@ -71,7 +83,7 @@
     const file = fileInput.files && fileInput.files[0];
     if (!file) {
       previewContainer.innerHTML = "";
-      setSubmitState(false, submitLabel);
+      setSubmitState(true, "Choose a file to review");
       return;
     }
     const requestID = ++previewRequest;
@@ -176,20 +188,36 @@
 
   if (form) {
     form.addEventListener("submit", (event) => {
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if (!file) {
+        return;
+      }
       const preview = previewContainer ? previewContainer.querySelector("[data-compose-import-preview]") : null;
-      if (preview) {
-        const checked = preview.querySelectorAll('input[name="import_service"]:checked');
-        if (checked.length === 0) {
-          event.preventDefault();
-          renderPreviewMessage("Select at least one service to import.", true);
-          return;
-        }
-        if (preview.querySelector('[role="alert"]')) {
-          // The preview already explains a policy rejection; stop the
-          // import so no files or metadata are touched.
+      if (!preview) {
+        if (previewContainer && previewContainer.querySelector('[role="status"]')) {
+          // The summary is still loading; wait for it instead of importing blind.
           event.preventDefault();
           return;
         }
+        // No summary (preview failed to load): allow the fallback POST so
+        // the server still validates and reports the file.
+        if (submitButton) {
+          submitButton.disabled = true;
+          submitButton.textContent = "Importing…";
+        }
+        return;
+      }
+      if (preview.querySelector('[role="alert"]')) {
+        // The preview already explains a policy rejection; stop the
+        // import so no files or metadata are touched.
+        event.preventDefault();
+        return;
+      }
+      const checked = preview.querySelectorAll('input[name="import_service"]:checked');
+      if (checked.length === 0) {
+        event.preventDefault();
+        renderPreviewMessage("Select at least one service to import.", true);
+        return;
       }
       if (submitButton) {
         submitButton.disabled = true;
@@ -197,6 +225,11 @@
       }
     });
   }
+
+  // The summary step is mandatory while JavaScript is active: nothing can be
+  // imported until a preview has loaded successfully. Without JavaScript the
+  // button stays enabled and the form keeps its plain-POST behavior.
+  updateSubmitForPreview();
 
   if (dialog.hasAttribute("data-compose-import-dialog-open")) {
     showDialog();

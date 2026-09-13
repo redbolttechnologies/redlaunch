@@ -183,3 +183,33 @@ func TestImportDockerComposeProjectWithSelection(t *testing.T) {
 		t.Fatalf("import networks = %#v, want [frontend]", applications.importSelection.Networks)
 	}
 }
+
+func TestApplicationDetailsWiresImportPreview(t *testing.T) {
+	applications := &fakeApplicationService{applications: []application.Application{{
+		ID:         7,
+		Name:       "Status page",
+		FolderName: "status-page",
+	}}}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /applications/7 status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`data-compose-import-form`,
+		`data-compose-import-preview-url="/applications/7/import/preview"`,
+		`data-compose-import-preview-container`,
+		`/static/application-import.js`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET /applications/7 did not wire import preview %q", expected)
+		}
+	}
+}
