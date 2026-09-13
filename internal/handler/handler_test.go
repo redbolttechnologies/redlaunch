@@ -280,6 +280,10 @@ type fakeApplicationService struct {
 	secretMoveID                  int64
 	secretMoveName                string
 	secretMoveErr                 error
+	secretRevealID                int64
+	secretRevealName              string
+	secretRevealValue             string
+	secretRevealErr               error
 	postgres                      application.Service
 	postgresInput                 application.PostgreSQLServiceInput
 	postgresErr                   error
@@ -475,6 +479,15 @@ func (s *fakeApplicationService) GetEnvironmentFiles(_ context.Context, _ int64)
 		return application.EnvironmentFiles{}, s.environmentFilesErr
 	}
 	return s.environmentFiles, nil
+}
+
+func (s *fakeApplicationService) GetEnvironmentSecretValue(_ context.Context, id int64, name string) (string, error) {
+	s.secretRevealID = id
+	s.secretRevealName = name
+	if s.secretRevealErr != nil {
+		return "", s.secretRevealErr
+	}
+	return s.secretRevealValue, nil
 }
 
 func (s *fakeApplicationService) UpdateEnvironmentVariable(_ context.Context, id int64, originalName, name, value string) error {
@@ -2264,13 +2277,19 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 		`id="variable-delete-dialog"`,
 		`id="secret-edit-dialog"`,
 		`id="secret-delete-dialog"`,
-		`id="secret-edit-value" name="value" type="password"`,
+		`id="secret-edit-value" name="value" type="password" value=""`,
 		`data-secret-toggle`,
+		`data-secret-copy`,
+		`aria-label="Copy secret to clipboard"`,
+		`class="secret-copy-tooltip" data-secret-status`,
+		`data-secret-has-value="true"`,
+		`data-secret-reveal-base="/applications/7/secrets/value"`,
 		`data-secret-show-icon`,
 		`data-secret-hide-icon aria-hidden="true" hidden`,
 		`data-secret-generate`,
 		`<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>`,
 		`>Generate secret</span>`,
+		`Existing values stay hidden until you choose Show`,
 		`name="original_name"`,
 		`id="variable-edit-name"`,
 		`id="variable-edit-value"`,
@@ -2800,6 +2819,100 @@ func TestApplicationSecretUpdateRequiresExplicitClear(t *testing.T) {
 	}
 	if applications.secretUpdateValue != "" || !applications.secretUpdateReplaceValue {
 		t.Fatalf("clear secret update = value %q replace=%v, want explicit empty replacement", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
+	}
+}
+
+func TestApplicationSecretRevealReturnsSingleValueAsJSON(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:      []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		secretRevealValue: "super-secret",
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/applications/7/secrets/value?name=API_TOKEN", nil)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET secret value status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("GET secret value Cache-Control = %q, want no-store", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("GET secret value Content-Type = %q, want application/json", got)
+	}
+	if applications.secretRevealID != 7 || applications.secretRevealName != "API_TOKEN" {
+		t.Fatalf("secret reveal = (%d, %q), want (7, API_TOKEN)", applications.secretRevealID, applications.secretRevealName)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"value":"super-secret"`) {
+		t.Fatalf("GET secret value body = %q, want JSON value", body)
+	}
+}
+
+func TestApplicationSecretRevealRejectsInvalidName(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:    []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		secretRevealErr: application.ErrEnvironmentVariableNameInvalid,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/applications/7/secrets/value?name=invalid-name", nil)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("GET invalid secret name status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if strings.Contains(recorder.Body.String(), "super-secret") {
+		t.Fatal("invalid secret name response leaked a secret value")
+	}
+}
+
+func TestApplicationSecretRevealMapsNotFound(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:    []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		secretRevealErr: application.ErrEnvironmentVariableNotFound,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/applications/7/secrets/value?name=MISSING", nil)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("GET missing secret status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func TestApplicationSecretRevealRejectsInvalidID(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/applications/0/secrets/value?name=API_TOKEN", nil)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("GET secret value with invalid id status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if applications.secretRevealID != 0 {
+		t.Fatalf("invalid id triggered a secret read = %#v, want none", applications)
 	}
 }
 

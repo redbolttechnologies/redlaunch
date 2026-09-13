@@ -1172,6 +1172,71 @@ func TestApplicationsGetEnvironmentFilesReadsVariablesAndSecrets(t *testing.T) {
 	}
 }
 
+func TestApplicationsGetEnvironmentSecretValueReturnsSingleValue(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, secretsEnvFile), []byte("API_TOKEN=super-secret\nDATABASE_URL=\"postgres://user:password@db/app\"\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	value, err := applications.GetEnvironmentSecretValue(t.Context(), 7, "API_TOKEN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "super-secret" {
+		t.Fatalf("secret value = %q, want super-secret", value)
+	}
+
+	value, err = applications.GetEnvironmentSecretValue(t.Context(), 7, "DATABASE_URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "postgres://user:password@db/app" {
+		t.Fatalf("quoted secret value = %q, want parsed value", value)
+	}
+
+	if _, err := applications.GetEnvironmentSecretValue(t.Context(), 7, "MISSING"); !errors.Is(err, application.ErrEnvironmentVariableNotFound) {
+		t.Fatalf("missing secret error = %v, want not-found", err)
+	}
+	if _, err := applications.GetEnvironmentSecretValue(t.Context(), 7, "invalid-name"); !errors.Is(err, application.ErrEnvironmentVariableNameInvalid) {
+		t.Fatalf("invalid secret name error = %v, want invalid", err)
+	}
+}
+
+func TestApplicationsGetEnvironmentSecretValueRejectsDuplicate(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, secretsEnvFile), []byte("API_TOKEN=one\nAPI_TOKEN=two\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := applications.GetEnvironmentSecretValue(t.Context(), 7, "API_TOKEN"); !errors.Is(err, application.ErrEnvironmentVariableDuplicate) {
+		t.Fatalf("duplicate secret error = %v, want duplicate", err)
+	}
+}
+
 func TestApplicationsUpdateEnvironmentVariablePreservesFileStructure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{

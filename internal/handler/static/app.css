@@ -3201,10 +3201,14 @@ h1 {
   padding-right: calc(var(--space-8) + var(--space-2));
 }
 
-.secret-visibility-toggle {
+.secret-input-wrap-with-copy input {
+  padding-right: calc(var(--space-8) + var(--space-8) + var(--space-2));
+}
+
+.secret-visibility-toggle,
+.secret-copy-button {
   position: absolute;
   top: 50%;
-  right: var(--space-1);
   display: inline-grid;
   width: 2rem;
   height: 2rem;
@@ -3218,17 +3222,68 @@ h1 {
   transform: translateY(-50%);
 }
 
-.secret-visibility-toggle:hover {
+.secret-visibility-toggle {
+  right: var(--space-1);
+}
+
+.secret-copy-button {
+  right: calc(var(--space-1) + 2rem);
+}
+
+.secret-visibility-toggle:hover,
+.secret-copy-button:hover {
   color: hsl(var(--foreground));
   background: hsl(var(--accent));
 }
 
-.secret-visibility-toggle:focus-visible {
+.secret-visibility-toggle:focus-visible,
+.secret-copy-button:focus-visible {
   border-color: hsl(var(--ring));
+}
+
+.secret-visibility-toggle:disabled,
+.secret-copy-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .secret-visibility-toggle svg[hidden] {
   display: none !important;
+}
+
+.secret-copy-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-2));
+  z-index: 20;
+  max-width: 16rem;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--primary-foreground));
+  background: hsl(var(--primary));
+  font-size: 0.75rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px hsl(var(--foreground) / 0.15);
+  pointer-events: none;
+}
+
+.secret-copy-tooltip[hidden] {
+  display: none !important;
+}
+
+.secret-copy-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  right: 2.75rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: inherit;
+  border-right: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border));
+  transform: translateY(-50%) rotate(45deg);
 }
 
 .secret-generate-button {

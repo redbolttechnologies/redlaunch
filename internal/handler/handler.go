@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -152,6 +153,7 @@ type redlaunchDomainService interface {
 
 type applicationEnvironmentService interface {
 	GetEnvironmentFiles(context.Context, int64) (application.EnvironmentFiles, error)
+	GetEnvironmentSecretValue(context.Context, int64, string) (string, error)
 }
 
 type applicationEnvironmentEditor interface {
@@ -650,6 +652,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/variables/delete", h.deleteApplicationVariable)
 	mux.HandleFunc("POST /applications/{id}/variables/move-to-secrets", h.moveApplicationVariableToSecrets)
 	mux.HandleFunc("POST /applications/{id}/secrets", h.updateApplicationSecret)
+	mux.HandleFunc("GET /applications/{id}/secrets/value", h.revealApplicationSecret)
 	mux.HandleFunc("POST /applications/{id}/secrets/delete", h.deleteApplicationSecret)
 	mux.HandleFunc("POST /applications/{id}/secrets/move-to-variables", h.moveApplicationSecretToVariables)
 	mux.HandleFunc("POST /applications/{id}/domains", h.createApplicationDomain)
@@ -1314,6 +1317,63 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 		return
 	}
 	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10)+"?tab=secrets", http.StatusSeeOther)
+}
+
+// revealApplicationSecret returns a single secret value as JSON so the edit
+// dialog can reveal or copy it only after an explicit user action. Secrets
+// are never baked into the details page; this endpoint requires the same
+// authenticated session as the page and never logs or echoes values beyond
+// the JSON body.
+func (h *Handler) revealApplicationSecret(w http.ResponseWriter, r *http.Request) {
+	needsSetup, err := h.setupManager.NeedsSetup()
+	if err != nil {
+		h.logger.Error("inspect setup state", "error", err)
+		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
+		return
+	}
+	if needsSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	if h.applicationEnvironment == nil {
+		h.logger.Error("reveal application secret without an environment service", "application_id", id)
+		http.Error(w, "The secret could not be read right now.", http.StatusInternalServerError)
+		return
+	}
+
+	value, err := h.applicationEnvironment.GetEnvironmentSecretValue(r.Context(), id, r.URL.Query().Get("name"))
+	if err != nil {
+		switch {
+		case errors.Is(err, application.ErrNotFound):
+			http.NotFound(w, r)
+		case errors.Is(err, application.ErrEnvironmentVariableNameRequired),
+			errors.Is(err, application.ErrEnvironmentVariableNameInvalid):
+			http.Error(w, "The secret name is invalid.", http.StatusBadRequest)
+		case errors.Is(err, application.ErrEnvironmentVariableNotFound):
+			http.Error(w, "The secret could not be found. Refresh the page and try again.", http.StatusNotFound)
+		case errors.Is(err, application.ErrEnvironmentVariableDuplicate):
+			http.Error(w, "The secret appears more than once in secrets.env.", http.StatusBadRequest)
+		case errors.Is(err, application.ErrEnvironmentFileNotFound):
+			http.Error(w, "The secrets.env file is unavailable.", http.StatusNotFound)
+		default:
+			h.logger.Error("reveal application secret", "application_id", id, "error", err)
+			http.Error(w, "The secret could not be read right now.", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{"value": value}); err != nil {
+		h.logger.Error("encode application secret", "application_id", id, "error", err)
+	}
 }
 
 func (h *Handler) deleteApplicationSecret(w http.ResponseWriter, r *http.Request) {
@@ -4423,6 +4483,10 @@ func (noApplicationService) DeleteRedlaunchDomain(context.Context, string) error
 
 func (noApplicationService) GetEnvironmentFiles(context.Context, int64) (application.EnvironmentFiles, error) {
 	return application.EnvironmentFiles{}, nil
+}
+
+func (noApplicationService) GetEnvironmentSecretValue(context.Context, int64, string) (string, error) {
+	return "", errors.New("application service is not configured")
 }
 
 func (noApplicationService) UpdateEnvironmentVariable(context.Context, int64, string, string, string) error {

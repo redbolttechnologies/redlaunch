@@ -248,10 +248,19 @@
   const toggleButton = dialog.querySelector("[data-secret-toggle]");
   const showIcon = dialog.querySelector("[data-secret-show-icon]");
   const hideIcon = dialog.querySelector("[data-secret-hide-icon]");
+  const copyButton = dialog.querySelector("[data-secret-copy]");
+  const statusElement = dialog.querySelector("[data-secret-status]");
   const generateButton = dialog.querySelector("[data-secret-generate]");
   const form = dialog.querySelector("form");
   const closeButtons = dialog.querySelectorAll("[data-secret-edit-close]");
   let returnFocus = null;
+  let revealedFromServer = false;
+  let showingMock = false;
+  let editHasValue = false;
+  let pendingController = null;
+  let statusTimer = 0;
+
+  const MOCK_SECRET_VALUE = "••••••••";
 
   const setIconHidden = (icon, hidden) => {
     if (icon) {
@@ -271,6 +280,136 @@
     setIconHidden(hideIcon, !visible);
   };
 
+  const setStatus = (message) => {
+    if (statusTimer) {
+      window.clearTimeout(statusTimer);
+      statusTimer = 0;
+    }
+    if (!statusElement) {
+      return;
+    }
+    if (!message) {
+      statusElement.textContent = "";
+      statusElement.setAttribute("hidden", "");
+      return;
+    }
+    statusElement.textContent = message;
+    statusElement.removeAttribute("hidden");
+    statusTimer = window.setTimeout(() => {
+      if (statusElement.textContent === message) {
+        statusElement.textContent = "";
+        statusElement.setAttribute("hidden", "");
+      }
+      statusTimer = 0;
+    }, 3000);
+  };
+
+  const showMockValue = () => {
+    if (!valueInput) {
+      return;
+    }
+    valueInput.value = MOCK_SECRET_VALUE;
+    showingMock = true;
+    revealedFromServer = false;
+    setSecretVisibility(false);
+  };
+
+  const clearMockForEdit = () => {
+    if (showingMock && valueInput) {
+      valueInput.value = "";
+    }
+    showingMock = false;
+  };
+
+  const isMockShown = () => showingMock && valueInput && valueInput.value === MOCK_SECRET_VALUE;
+
+  const restoreHiddenState = () => {
+    // Hiding a revealed secret restores the mock dots in edit mode so the
+    // field keeps showing the usual password dots instead of going blank.
+    // Truly empty secrets (no existing value) restore to empty.
+    revealedFromServer = false;
+    if (!isAddMode() && editHasValue) {
+      showMockValue();
+      return;
+    }
+    showingMock = false;
+    if (valueInput) {
+      valueInput.value = "";
+    }
+    setSecretVisibility(false);
+  };
+
+  const setBusy = (busy) => {
+    if (toggleButton) {
+      toggleButton.disabled = busy;
+    }
+    if (copyButton) {
+      copyButton.disabled = busy;
+    }
+  };
+
+  const abortPending = () => {
+    if (pendingController && typeof pendingController.abort === "function") {
+      pendingController.abort();
+    }
+    pendingController = null;
+  };
+
+  const isAddMode = () => operationInput && operationInput.value === "add";
+
+  const currentTargetName = () => {
+    if (originalNameInput && originalNameInput.value) {
+      return originalNameInput.value.trim();
+    }
+    return "";
+  };
+
+  const revealBaseURL = () => {
+    if (dialog.dataset && dialog.dataset.secretRevealBase) {
+      return dialog.dataset.secretRevealBase;
+    }
+    if (form && form.getAttribute("action")) {
+      return `${form.getAttribute("action")}/value`;
+    }
+    return "";
+  };
+
+  const fetchSecretValue = async (name, signal) => {
+    const base = revealBaseURL();
+    if (!base) {
+      throw new Error("reveal unavailable");
+    }
+    const response = await fetch(`${base}?name=${encodeURIComponent(name)}`, {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`reveal failed: ${response.status}`);
+    }
+    const data = await response.json();
+    if (!data || typeof data.value !== "string") {
+      throw new Error("reveal invalid");
+    }
+    return data.value;
+  };
+
+  const copyText = async (text) => {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      setStatus("Copy is unavailable in this browser.");
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      setStatus("Could not copy the secret. Try again.");
+      return false;
+    }
+    setStatus("Copied to clipboard.");
+    return true;
+  };
+
   const cleanup = () => {
     document.body.classList.remove("dialog-open");
     if (returnFocus && document.body.contains(returnFocus)) {
@@ -281,6 +420,15 @@
   };
 
   const closeDialog = () => {
+    abortPending();
+    revealedFromServer = false;
+    showingMock = false;
+    setSecretVisibility(false);
+    setBusy(false);
+    setStatus("");
+    if (valueInput) {
+      valueInput.value = "";
+    }
     if (typeof dialog.close === "function" && dialog.open) {
       dialog.close();
     } else {
@@ -316,7 +464,15 @@
       submitButton.disabled = false;
       submitButton.textContent = "Save";
     }
+    abortPending();
+    revealedFromServer = false;
+    showingMock = false;
     setSecretVisibility(false);
+    setBusy(false);
+    setStatus("");
+    if (valueInput) {
+      valueInput.value = "";
+    }
     if (clearInput) {
       clearInput.checked = false;
     }
@@ -329,14 +485,19 @@
     returnFocus = button;
     button.setAttribute("aria-expanded", "true");
     setMode("edit");
+    editHasValue = button.dataset.secretHasValue !== "false";
     if (originalNameInput) {
       originalNameInput.value = button.dataset.secretKey || "";
     }
     if (nameInput) {
       nameInput.value = button.dataset.secretKey || "";
     }
-    if (valueInput) {
+    if (editHasValue) {
+      showMockValue();
+    } else if (valueInput) {
       valueInput.value = "";
+      showingMock = false;
+      setSecretVisibility(false);
     }
     if (clearInput) {
       clearInput.checked = false;
@@ -348,6 +509,7 @@
     returnFocus = button;
     button.setAttribute("aria-expanded", "true");
     setMode("add");
+    editHasValue = false;
     if (originalNameInput) {
       originalNameInput.value = "";
     }
@@ -357,6 +519,7 @@
     if (valueInput) {
       valueInput.value = "";
     }
+    showingMock = false;
     showDialog();
   };
 
@@ -382,8 +545,121 @@
   });
 
   if (toggleButton) {
-    toggleButton.addEventListener("click", () => {
-      setSecretVisibility(valueInput && valueInput.type !== "text");
+    toggleButton.addEventListener("click", async () => {
+      if (!valueInput) {
+        return;
+      }
+      if (valueInput.type === "text") {
+        restoreHiddenState();
+        return;
+      }
+      // A mock value is not a real secret: Show must fetch instead of
+      // merely unmasking the dots.
+      if (valueInput.value !== "" && !isMockShown()) {
+        setSecretVisibility(true);
+        valueInput.focus();
+        return;
+      }
+      if (isAddMode()) {
+        setSecretVisibility(true);
+        return;
+      }
+      const name = currentTargetName();
+      if (!name) {
+        return;
+      }
+      abortPending();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      pendingController = controller;
+      setBusy(true);
+      setStatus("Loading secret…");
+      try {
+        const secret = await fetchSecretValue(name, controller ? controller.signal : undefined);
+        if (pendingController !== controller) {
+          return;
+        }
+        if (secret === "") {
+          editHasValue = false;
+          showingMock = false;
+          valueInput.value = "";
+          setSecretVisibility(false);
+          setStatus("This secret is empty.");
+          valueInput.focus();
+          return;
+        }
+        valueInput.value = secret;
+        showingMock = false;
+        revealedFromServer = true;
+        if (clearInput) {
+          clearInput.checked = false;
+        }
+        setSecretVisibility(true);
+        setStatus("");
+        valueInput.focus();
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          return;
+        }
+        setStatus("Could not load the secret. Try again.");
+      } finally {
+        if (pendingController === controller) {
+          pendingController = null;
+        }
+        setBusy(false);
+      }
+    });
+  }
+
+  if (copyButton) {
+    copyButton.addEventListener("click", async () => {
+      // Never copy the mock dots: they stand in for the hidden value and
+      // must not leak into the clipboard or be mistaken for the secret.
+      if (valueInput && valueInput.value !== "" && !isMockShown()) {
+        setBusy(true);
+        try {
+          await copyText(valueInput.value);
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
+      if (isAddMode()) {
+        setStatus("Enter a value before copying.");
+        return;
+      }
+      const name = currentTargetName();
+      if (!name) {
+        return;
+      }
+      abortPending();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      pendingController = controller;
+      setBusy(true);
+      setStatus("Loading secret…");
+      let secret = "";
+      try {
+        secret = await fetchSecretValue(name, controller ? controller.signal : undefined);
+        if (pendingController !== controller) {
+          return;
+        }
+        if (secret === "") {
+          setStatus("This secret is empty.");
+          return;
+        }
+        // Intentionally not assigned to the input or the DOM: copy only.
+        await copyText(secret);
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          return;
+        }
+        setStatus("Could not copy the secret. Try again.");
+      } finally {
+        secret = "";
+        if (pendingController === controller) {
+          pendingController = null;
+        }
+        setBusy(false);
+      }
     });
   }
 
@@ -393,18 +669,46 @@
       const secret = generateSecret();
       if (valueInput && secret) {
         valueInput.value = secret;
+        showingMock = false;
+        revealedFromServer = false;
         if (clearInput) {
           clearInput.checked = false;
         }
         setSecretVisibility(false);
+        setStatus("");
         valueInput.focus();
       }
     });
   }
 
-  if (valueInput && clearInput) {
+  if (valueInput) {
+    valueInput.addEventListener("focus", () => {
+      // Clear the mock dots so typing starts from an empty field instead
+      // of appending to the placeholder value.
+      if (isMockShown()) {
+        valueInput.value = "";
+        showingMock = false;
+      }
+    });
+    valueInput.addEventListener("blur", () => {
+      // Restore the mock dots when the user leaves an untouched empty
+      // field in edit mode.
+      if (!isAddMode() && editHasValue && valueInput.value === "" && !revealedFromServer && valueInput.type !== "text") {
+        showMockValue();
+      }
+    });
     valueInput.addEventListener("input", () => {
-      if (valueInput.value !== "") {
+      // Programmatic fills via fetch do not fire input events, so any input
+      // event means the value is now a user edit, not a pristine reveal.
+      // If the user typed over a selected mock, drop the mock remainder.
+      if (showingMock) {
+        if (valueInput.value.includes(MOCK_SECRET_VALUE)) {
+          valueInput.value = valueInput.value.split(MOCK_SECRET_VALUE).join("");
+        }
+        showingMock = valueInput.value === MOCK_SECRET_VALUE;
+      }
+      revealedFromServer = false;
+      if (clearInput && valueInput.value !== "" && !isMockShown()) {
         clearInput.checked = false;
       }
     });
@@ -429,6 +733,13 @@
 
   if (form) {
     form.addEventListener("submit", () => {
+      abortPending();
+      // The mock dots stand in for "keep the existing value" and must
+      // never be submitted as the secret itself.
+      if (isMockShown()) {
+        valueInput.value = "";
+      }
+      showingMock = false;
       setSecretVisibility(false);
       if (submitButton) {
         submitButton.disabled = true;
@@ -438,7 +749,21 @@
   }
 
   if (dialog.hasAttribute("data-secret-edit-open")) {
-    setMode(operationInput && operationInput.value === "add" ? "add" : "edit");
+    const reopenedMode = operationInput && operationInput.value === "add" ? "add" : "edit";
+    setMode(reopenedMode);
+    if (reopenedMode === "edit") {
+      const originalName = originalNameInput ? originalNameInput.value : "";
+      const escapedName = originalName && typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(originalName)
+        : originalName.replace(/["\\]/g, "\\$&");
+      const trigger = originalName
+        ? document.querySelector(`[data-secret-edit][data-secret-key="${escapedName}"]`)
+        : null;
+      editHasValue = !trigger || trigger.dataset.secretHasValue !== "false";
+      if (editHasValue && valueInput && valueInput.value === "") {
+        showMockValue();
+      }
+    }
     showDialog();
   }
 })();

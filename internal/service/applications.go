@@ -101,6 +101,47 @@ func (s *Applications) GetEnvironmentFiles(ctx context.Context, applicationID in
 	}, nil
 }
 
+// GetEnvironmentSecretValue returns the parsed value of one entry from an
+// application's secrets.env file. It exists so the UI can reveal or copy a
+// single secret on explicit user action without loading every secret into
+// the page.
+func (s *Applications) GetEnvironmentSecretValue(ctx context.Context, applicationID int64, name string) (string, error) {
+	name, err := application.ValidateEnvironmentVariableName(name)
+	if err != nil {
+		return "", err
+	}
+	if s.detailsRepository == nil {
+		return "", errors.New("application details repository is not configured")
+	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return "", err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return "", err
+	}
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return "", err
+	}
+
+	snapshot, err := snapshotManagedFile(filepath.Join(directory, secretsEnvFile))
+	if err != nil {
+		return "", fmt.Errorf("read application secrets file: %w", err)
+	}
+	if !snapshot.exists {
+		return "", application.ErrEnvironmentFileNotFound
+	}
+	entry, err := findEnvironmentEntry(string(snapshot.contents), name)
+	if err != nil {
+		return "", err
+	}
+	return entry.value, nil
+}
+
 // UpdateEnvironmentVariable changes one entry in an application's vars.env
 // file while preserving the rest of the file and its permissions.
 func (s *Applications) UpdateEnvironmentVariable(ctx context.Context, applicationID int64, originalName, name, value string) error {
