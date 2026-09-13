@@ -1283,6 +1283,71 @@ func TestApplicationsRendersCreateControlsAndEmptyState(t *testing.T) {
 	}
 }
 
+type fakeApplicationServiceWithPendingDeletions struct {
+	*fakeApplicationService
+	pending []application.ApplicationDeletionIntent
+}
+
+func (s *fakeApplicationServiceWithPendingDeletions) ListIncompleteApplicationDeletions(context.Context) ([]application.ApplicationDeletionIntent, error) {
+	return s.pending, nil
+}
+
+func TestApplicationsRendersPendingDeletionBanner(t *testing.T) {
+	applications := &fakeApplicationServiceWithPendingDeletions{
+		fakeApplicationService: &fakeApplicationService{},
+		pending: []application.ApplicationDeletionIntent{{
+			ApplicationID: 9,
+			Name:          "Talent <Hunt>",
+			FolderName:    "talenthunt",
+			Stage:         "folder",
+			State:         "failed",
+		}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /applications status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`Unfinished application deletion`,
+		`Talent &lt;Hunt&gt;`,
+		`talenthunt`,
+		`href="/applications/9"`,
+		`Continue deletion`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET /applications did not render pending deletion %q: %s", expected, body)
+		}
+	}
+}
+
+func TestApplicationsHidesPendingDeletionBannerWithoutIntents(t *testing.T) {
+	web, err := New(nil, &fakeApplicationService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /applications status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, unexpected := range []string{"Unfinished application deletion", "Continue deletion"} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("GET /applications rendered unexpected pending deletion %q: %s", unexpected, body)
+		}
+	}
+}
+
 func TestApplicationsRendersExistingApplicationCard(t *testing.T) {
 	applications := &fakeApplicationService{applications: []application.Application{{
 		ID:           7,

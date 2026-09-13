@@ -274,3 +274,46 @@ func TestApplicationMutationRejectsActiveDeletionIntent(t *testing.T) {
 		t.Fatalf("DeleteService during deletion error = %v, want %v", err, application.ErrApplicationDeletionInProgress)
 	}
 }
+
+// TestApplicationsListIncompleteApplicationDeletions ensures the Applications
+// page can surface unfinished tombstones with a continue entry point.
+func TestApplicationsListIncompleteApplicationDeletions(t *testing.T) {
+	ctx := r06TestContext(t)
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "redlaunch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	stuck, err := database.Create(ctx, application.Application{Name: "Talent Hunt", FolderName: "talenthunt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := database.Create(ctx, application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectsRoot := filepath.Join(t.TempDir(), "projects")
+	applications, err := NewApplications(database, projectsRoot, &serviceRuntimeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := database.BeginApplicationDeletion(ctx, stuck, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.BeginApplicationDeletion(ctx, finished, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateApplicationDeletion(ctx, finished.ID, applicationDeletionStageComplete, "complete", "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	intents, err := applications.ListIncompleteApplicationDeletions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 || intents[0].ApplicationID != stuck.ID || intents[0].FolderName != "talenthunt" {
+		t.Fatalf("incomplete deletions = %#v, want exactly the talenthunt tombstone", intents)
+	}
+}

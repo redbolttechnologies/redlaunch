@@ -283,3 +283,41 @@ func TestStoreServiceDeletionIntentLifecycle(t *testing.T) {
 		t.Fatalf("GetServiceDeletion(missing) = %v, want %v", err, application.ErrServiceNotFound)
 	}
 }
+
+func TestStoreListIncompleteApplicationDeletions(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	now := time.Date(2026, time.September, 11, 10, 0, 0, 0, time.UTC)
+	stuck, err := database.Create(t.Context(), application.Application{Name: "Talent Hunt", FolderName: "talenthunt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.BeginApplicationDeletion(t.Context(), stuck, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.BeginApplicationDeletion(t.Context(), finished, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateApplicationDeletion(t.Context(), finished.ID, "complete", "complete", "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	intents, err := database.ListIncompleteApplicationDeletions(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("incomplete deletions = %#v, want exactly the talenthunt tombstone", intents)
+	}
+	if intents[0].ApplicationID != stuck.ID || intents[0].FolderName != "talenthunt" {
+		t.Fatalf("incomplete deletion = %#v, want the talenthunt tombstone", intents[0])
+	}
+}

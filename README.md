@@ -64,6 +64,12 @@ requests are refused until it finishes. If stale updater containers from an
 older release remain, remove them once with
 `docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)`.
 
+To open a shell inside the running Redlaunch container (`redbolt-redlaunch`):
+
+```sh
+./redlaunch-terminal.sh
+```
+
 For the GitHub Actions wizard, generated workflow, and secure handoff steps,
 see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 

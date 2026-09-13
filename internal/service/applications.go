@@ -559,6 +559,10 @@ func (s *Applications) applicationDeletionDependencies() (applicationDeletionSch
 	return s.scheduleDisabler, s.keyCleanup
 }
 
+type applicationDeletionIntentLister interface {
+	ListIncompleteApplicationDeletions(context.Context) ([]application.ApplicationDeletionIntent, error)
+}
+
 // GetApplicationDeletion exposes only the non-secret tombstone needed by the
 // HTTP layer to offer a retry after metadata has already been removed.
 func (s *Applications) GetApplicationDeletion(ctx context.Context, applicationID int64) (application.ApplicationDeletionIntent, error) {
@@ -566,6 +570,20 @@ func (s *Applications) GetApplicationDeletion(ctx context.Context, applicationID
 		return application.ApplicationDeletionIntent{}, application.ErrNotFound
 	}
 	return s.deletionIntents.GetApplicationDeletion(ctx, applicationID)
+}
+
+// ListIncompleteApplicationDeletions exposes non-secret tombstones for
+// deletions that have not reached completion, so the HTTP layer can offer a
+// continue/retry entry point on the Applications page.
+func (s *Applications) ListIncompleteApplicationDeletions(ctx context.Context) ([]application.ApplicationDeletionIntent, error) {
+	if s.deletionIntents == nil {
+		return nil, nil
+	}
+	lister, ok := s.deletionIntents.(applicationDeletionIntentLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListIncompleteApplicationDeletions(ctx)
 }
 
 // NewApplications constructs an application service rooted below the

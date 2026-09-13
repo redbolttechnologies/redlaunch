@@ -128,6 +128,10 @@ type applicationDeletionProgressService interface {
 	DeleteApplicationWithProgress(context.Context, int64, func(stage, message string)) error
 }
 
+type applicationDeletionLister interface {
+	ListIncompleteApplicationDeletions(context.Context) ([]application.ApplicationDeletionIntent, error)
+}
+
 type applicationDetailsService interface {
 	Get(context.Context, int64) (application.Application, error)
 	ListServices(context.Context, int64) ([]application.Service, error)
@@ -807,7 +811,10 @@ func (h *Handler) applications(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The applications could not be read.", http.StatusInternalServerError)
 		return
 	}
-	h.writeApplicationPage(w, r, http.StatusOK, applicationPageData{Applications: items})
+	h.writeApplicationPage(w, r, http.StatusOK, applicationPageData{
+		Applications:     items,
+		PendingDeletions: h.pendingApplicationDeletions(r.Context()),
+	})
 }
 
 func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request) {
@@ -3157,6 +3164,7 @@ func (h *Handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	if !h.validRequestCSRF(r) {
 		data.Error = "This applications page expired. Submit the refreshed form to continue."
 		data.Applications = h.currentApplications(r.Context())
+		data.PendingDeletions = h.pendingApplicationDeletions(r.Context())
 		h.writeApplicationPage(w, r, http.StatusForbidden, data)
 		return
 	}
@@ -3165,6 +3173,7 @@ func (h *Handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		h.logger.Info("create application rejected", "reason", userMessage(err))
 		data.Error = userMessage(err)
 		data.Applications = h.currentApplications(r.Context())
+		data.PendingDeletions = h.pendingApplicationDeletions(r.Context())
 		h.writeApplicationPage(w, r, http.StatusBadRequest, data)
 		return
 	}
@@ -3178,6 +3187,23 @@ func (h *Handler) currentApplications(ctx context.Context) []application.Applica
 		return nil
 	}
 	return items
+}
+
+// pendingApplicationDeletions returns incomplete deletion tombstones for the
+// Applications page banner. It uses an optional interface so handlers built
+// with partial test fakes keep working; a list failure hides the banner
+// rather than breaking the page.
+func (h *Handler) pendingApplicationDeletions(ctx context.Context) []application.ApplicationDeletionIntent {
+	lister, ok := h.applicationManager.(applicationDeletionLister)
+	if !ok {
+		return nil
+	}
+	intents, err := lister.ListIncompleteApplicationDeletions(ctx)
+	if err != nil {
+		h.logger.Error("list incomplete application deletions", "error", err)
+		return nil
+	}
+	return intents
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
@@ -4192,11 +4218,16 @@ const (
 
 type applicationPageData struct {
 	Applications []application.Application
-	CSRFToken    string
-	Error        string
-	Name         string
-	FolderName   string
-	ModalOpen    bool
+	// PendingDeletions holds deletion tombstones that have not reached
+	// completion. The Applications page offers each as a continue entry
+	// point to the existing recovery page instead of only rejecting
+	// folder reuse at creation time.
+	PendingDeletions []application.ApplicationDeletionIntent
+	CSRFToken        string
+	Error            string
+	Name             string
+	FolderName       string
+	ModalOpen        bool
 }
 
 type applicationDetailsPageData struct {

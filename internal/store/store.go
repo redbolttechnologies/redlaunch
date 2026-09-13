@@ -585,6 +585,45 @@ func (s *Store) IsApplicationFolderDeletionActive(ctx context.Context, folderNam
 	return true, nil
 }
 
+// ListIncompleteApplicationDeletions returns deletion tombstones that have
+// not reached completion, newest first. The HTTP layer uses this to offer a
+// continue/retry entry point instead of only rejecting folder reuse.
+func (s *Store) ListIncompleteApplicationDeletions(ctx context.Context) ([]application.ApplicationDeletionIntent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT application_id, application_name, folder_name, stage, state,
+			last_error, created_at, updated_at
+		FROM application_deletion_intents
+		WHERE state != 'complete'
+		ORDER BY updated_at DESC, application_id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list incomplete application deletions: %w", err)
+	}
+	defer rows.Close()
+	intents := []application.ApplicationDeletionIntent{}
+	for rows.Next() {
+		var intent application.ApplicationDeletionIntent
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&intent.ApplicationID, &intent.Name, &intent.FolderName, &intent.Stage,
+			&intent.State, &intent.LastError, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan incomplete application deletion: %w", err)
+		}
+		intent.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse application deletion creation time: %w", err)
+		}
+		intent.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse application deletion update time: %w", err)
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate incomplete application deletions: %w", err)
+	}
+	return intents, nil
+}
+
 // BeginServiceDeletion records or returns the durable deletion intent for one
 // service. It has no foreign key so the tombstone survives service metadata
 // deletion until cleanup is complete. A completed tombstone for a currently
