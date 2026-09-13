@@ -407,10 +407,14 @@ operator resolution; it does not guess or rotate credentials.
 
 To bring in an existing Compose project, open an application that has no
 registered services and choose **Import Docker Compose project...**. Upload its
-Compose YAML file. Redlaunch validates the file, registers each Compose service,
-and adds the managed container names, labels, <code>vars.env</code>, and
-<code>secrets.env</code> references. Imported services are not started
-automatically; start them from the Services tab when ready.
+Compose YAML file. Redlaunch first shows a summary of every service, volume,
+and network found in the file with its actual settings, along with the
+detected type (application, PostgreSQL, or Redis) for each service. Uncheck
+anything you do not want, then confirm. Redlaunch validates the selection,
+registers only the selected services, and adds the managed container names,
+labels, <code>vars.env</code>, and <code>secrets.env</code> references.
+Imported services are not started automatically; start them from the Services
+tab when ready.
 
 Imports intentionally support a local, managed subset: service definitions,
 declared images, local build contexts, relative

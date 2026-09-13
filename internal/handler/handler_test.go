@@ -212,6 +212,12 @@ type fakeApplicationService struct {
 	importContents                []byte
 	importedServices              []application.Service
 	importErr                     error
+	importSelection               application.ComposeImportSelection
+	importSelective               bool
+	preview                       *application.ComposeImportPreview
+	previewErr                    error
+	previewID                     int64
+	previewContents               []byte
 	environmentImportInput        application.EnvironmentFileImportInput
 	environmentImportErr          error
 	listErr                       error
@@ -362,6 +368,20 @@ func (s *fakeApplicationService) Create(_ context.Context, name, folderName stri
 func (s *fakeApplicationService) ImportDockerComposeProject(_ context.Context, id int64, contents []byte) ([]application.Service, error) {
 	s.importID = id
 	s.importContents = append([]byte(nil), contents...)
+	return s.importedServices, s.importErr
+}
+
+func (s *fakeApplicationService) PreviewDockerComposeProject(_ context.Context, id int64, contents []byte) (*application.ComposeImportPreview, error) {
+	s.previewID = id
+	s.previewContents = append([]byte(nil), contents...)
+	return s.preview, s.previewErr
+}
+
+func (s *fakeApplicationService) ImportDockerComposeProjectWithSelection(_ context.Context, id int64, contents []byte, selection application.ComposeImportSelection) ([]application.Service, error) {
+	s.importID = id
+	s.importContents = append([]byte(nil), contents...)
+	s.importSelection = selection
+	s.importSelective = true
 	return s.importedServices, s.importErr
 }
 

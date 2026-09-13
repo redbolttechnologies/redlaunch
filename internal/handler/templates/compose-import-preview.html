@@ -1,0 +1,198 @@
+{{define "compose-import-preview.html"}}
+{{if .Error}}
+<div class="application-alert application-dialog-alert" role="alert">
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+{{if .Preview}}
+<input type="hidden" name="import_selective" value="1">
+<div class="compose-import-preview" data-compose-import-preview>
+  <div class="compose-import-preview-summary" role="status">
+    <span>{{len .Preview.Services}} {{if eq (len .Preview.Services) 1}}service{{else}}services{{end}}</span>
+    <span aria-hidden="true">·</span>
+    <span>{{len .Preview.Volumes}} {{if eq (len .Preview.Volumes) 1}}volume{{else}}volumes{{end}}</span>
+    <span aria-hidden="true">·</span>
+    <span>{{len .Preview.Networks}} {{if eq (len .Preview.Networks) 1}}network{{else}}networks{{end}}</span>
+  </div>
+
+  {{if .HasServices}}
+  <section class="compose-import-preview-section" aria-labelledby="compose-import-preview-services-title">
+    <header class="compose-import-preview-section-header">
+      <div>
+        <h3 id="compose-import-preview-services-title">Services</h3>
+        <p>Uncheck a service to leave it out of this import.</p>
+      </div>
+    </header>
+    <ul class="compose-import-preview-list">
+      {{range .Preview.Services}}
+      <li class="compose-import-preview-item">
+        <label class="compose-import-preview-check">
+          <input type="checkbox" name="import_service" value="{{.Name}}" checked>
+          <span class="compose-import-preview-check-copy">
+            <span class="compose-import-preview-name"><code>{{.Name}}</code></span>
+            <span class="service-type-badge service-type-{{serviceTypeClass .DetectedType}}">{{serviceTypeLabel .DetectedType}}</span>
+          </span>
+        </label>
+        {{if .DetectionReason}}
+        <p class="compose-import-preview-reason">{{.DetectionReason}}</p>
+        {{end}}
+        <dl class="compose-import-preview-details">
+          <div>
+            <dt>Image</dt>
+            <dd>{{if .Image}}<code>{{.Image}}</code>{{else}}<span class="compose-import-preview-empty">No image declared</span>{{end}}</dd>
+          </div>
+          {{if .ContainerName}}
+          <div>
+            <dt>Container name</dt>
+            <dd><code>{{.ContainerName}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Ports}}
+          <div>
+            <dt>Ports</dt>
+            <dd><code>{{range $index, $port := .Ports}}{{if $index}}, {{end}}{{$port}}{{end}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Volumes}}
+          <div>
+            <dt>Volumes</dt>
+            <dd><code>{{range $index, $volume := .Volumes}}{{if $index}}, {{end}}{{$volume}}{{end}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Networks}}
+          <div>
+            <dt>Networks</dt>
+            <dd><code>{{range $index, $network := .Networks}}{{if $index}}, {{end}}{{$network}}{{end}}</code></dd>
+          </div>
+          {{end}}
+          {{if .EnvFiles}}
+          <div>
+            <dt>Env files</dt>
+            <dd><code>{{range $index, $file := .EnvFiles}}{{if $index}}, {{end}}{{$file}}{{end}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Environment}}
+          <div>
+            <dt>Environment</dt>
+            <dd><code>{{range $index, $entry := .Environment}}{{if $index}}, {{end}}{{$entry}}{{end}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Command}}
+          <div>
+            <dt>Command</dt>
+            <dd><code>{{.Command}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Build}}
+          <div>
+            <dt>Build</dt>
+            <dd><code>{{.Build}}</code></dd>
+          </div>
+          {{end}}
+          {{if .Restart}}
+          <div>
+            <dt>Restart</dt>
+            <dd><code>{{.Restart}}</code></dd>
+          </div>
+          {{end}}
+          {{if .DependsOn}}
+          <div>
+            <dt>Depends on</dt>
+            <dd><code>{{range $index, $dependency := .DependsOn}}{{if $index}}, {{end}}{{$dependency}}{{end}}</code></dd>
+          </div>
+          {{end}}
+        </dl>
+      </li>
+      {{end}}
+    </ul>
+  </section>
+  {{end}}
+
+  {{if .HasVolumes}}
+  <section class="compose-import-preview-section" aria-labelledby="compose-import-preview-volumes-title">
+    <header class="compose-import-preview-section-header">
+      <div>
+        <h3 id="compose-import-preview-volumes-title">Volumes</h3>
+        <p>Named volumes declared by the Compose file.</p>
+      </div>
+    </header>
+    <ul class="compose-import-preview-list">
+      {{range .Preview.Volumes}}
+      <li class="compose-import-preview-item">
+        <label class="compose-import-preview-check">
+          <input type="checkbox" name="import_volume" value="{{.Name}}" checked>
+          <span class="compose-import-preview-check-copy">
+            <span class="compose-import-preview-name"><code>{{.Name}}</code></span>
+          </span>
+        </label>
+        {{if .Config}}
+        <dl class="compose-import-preview-details">
+          <div>
+            <dt>Settings</dt>
+            <dd><code>{{range $index, $setting := .Config}}{{if $index}}, {{end}}{{$setting}}{{end}}</code></dd>
+          </div>
+        </dl>
+        {{else}}
+        <p class="compose-import-preview-reason">Uses default volume settings.</p>
+        {{end}}
+        {{if .UsedBy}}
+        <p class="compose-import-preview-reason">Used by {{range $index, $user := .UsedBy}}{{if $index}}, {{end}}<code>{{$user}}</code>{{end}}.</p>
+        {{else}}
+        <p class="compose-import-preview-reason">Not referenced by any listed service.</p>
+        {{end}}
+      </li>
+      {{end}}
+    </ul>
+  </section>
+  {{else}}
+  <p class="compose-import-preview-empty-section">No top-level volumes declared.</p>
+  {{end}}
+
+  {{if .HasNetworks}}
+  <section class="compose-import-preview-section" aria-labelledby="compose-import-preview-networks-title">
+    <header class="compose-import-preview-section-header">
+      <div>
+        <h3 id="compose-import-preview-networks-title">Networks</h3>
+        <p>Networks declared by the Compose file.</p>
+      </div>
+    </header>
+    <ul class="compose-import-preview-list">
+      {{range .Preview.Networks}}
+      <li class="compose-import-preview-item">
+        <label class="compose-import-preview-check">
+          <input type="checkbox" name="import_network" value="{{.Name}}" checked>
+          <span class="compose-import-preview-check-copy">
+            <span class="compose-import-preview-name"><code>{{.Name}}</code></span>
+          </span>
+        </label>
+        {{if .Config}}
+        <dl class="compose-import-preview-details">
+          <div>
+            <dt>Settings</dt>
+            <dd><code>{{range $index, $setting := .Config}}{{if $index}}, {{end}}{{$setting}}{{end}}</code></dd>
+          </div>
+        </dl>
+        {{else}}
+        <p class="compose-import-preview-reason">Uses default network settings.</p>
+        {{end}}
+        {{if .UsedBy}}
+        <p class="compose-import-preview-reason">Used by {{range $index, $user := .UsedBy}}{{if $index}}, {{end}}<code>{{$user}}</code>{{end}}.</p>
+        {{else}}
+        <p class="compose-import-preview-reason">Not referenced by any listed service.</p>
+        {{end}}
+      </li>
+      {{end}}
+    </ul>
+  </section>
+  {{else}}
+  <p class="compose-import-preview-empty-section">No top-level networks declared.</p>
+  {{end}}
+
+  {{if not .Importable}}
+  <div class="application-alert application-dialog-alert" role="alert">
+    <span>Resolve the issue above before importing. No changes have been made.</span>
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{end}}

@@ -114,6 +114,8 @@ type applicationService interface {
 
 type applicationComposeImporter interface {
 	ImportDockerComposeProject(context.Context, int64, []byte) ([]application.Service, error)
+	PreviewDockerComposeProject(context.Context, int64, []byte) (*application.ComposeImportPreview, error)
+	ImportDockerComposeProjectWithSelection(context.Context, int64, []byte, application.ComposeImportSelection) ([]application.Service, error)
 }
 
 type applicationEnvironmentFileImporter interface {
@@ -650,6 +652,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /applications/{id}", h.applicationDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/import", h.importDockerComposeProject)
+	mux.HandleFunc("POST /applications/{id}/import/preview", h.previewDockerComposeProject)
 	mux.HandleFunc("POST /applications/{id}/environment/import", h.importApplicationEnvironmentFiles)
 	mux.HandleFunc("POST /applications/{id}/delete", h.deleteApplication)
 	mux.HandleFunc("GET /applications/{id}/delete/status", h.applicationDeleteStatus)
@@ -935,7 +938,7 @@ func (h *Handler) importDockerComposeProject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	_, err = h.applicationImporter.ImportDockerComposeProject(r.Context(), id, contents)
+	_, err = h.importDockerComposeProjectWithSelection(r, id, contents)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if composeImportUserError(err) {
@@ -945,6 +948,125 @@ func (h *Handler) importDockerComposeProject(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+func (h *Handler) importDockerComposeProjectWithSelection(r *http.Request, id int64, contents []byte) ([]application.Service, error) {
+	if r.Form.Get("import_selective") != "1" {
+		return h.applicationImporter.ImportDockerComposeProject(r.Context(), id, contents)
+	}
+	selection := application.ComposeImportSelection{
+		Services:  append([]string(nil), r.Form["import_service"]...),
+		Volumes:   append([]string(nil), r.Form["import_volume"]...),
+		Networks:  append([]string(nil), r.Form["import_network"]...),
+		Selective: true,
+	}
+	return h.applicationImporter.ImportDockerComposeProjectWithSelection(r.Context(), id, contents, selection)
+}
+
+func (h *Handler) previewDockerComposeProject(w http.ResponseWriter, r *http.Request) {
+	needsSetup, err := h.setupManager.NeedsSetup()
+	if err != nil {
+		h.logger.Error("inspect setup state", "error", err)
+		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
+		return
+	}
+	if needsSetup {
+		http.Error(w, "Setup is not complete.", http.StatusForbidden)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	if h.applicationImporter == nil {
+		h.logger.Error("preview Docker Compose project without an importer", "application_id", id)
+		http.Error(w, "The Docker Compose importer is not configured.", http.StatusInternalServerError)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxComposeImportBody)
+	parseErr := r.ParseMultipartForm(application.MaxComposeFileSize)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	if parseErr != nil {
+		h.writeComposeImportPreviewError(w, "Choose a Docker Compose file no larger than 4 MB.", http.StatusBadRequest)
+		return
+	}
+
+	if !h.validRequestCSRF(r) {
+		http.Error(w, "This application page expired. Submit the refreshed page to continue.", http.StatusForbidden)
+		return
+	}
+
+	file, _, err := r.FormFile("compose_file")
+	if err != nil {
+		h.writeComposeImportPreviewError(w, "Choose a Docker Compose file.", http.StatusBadRequest)
+		return
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, application.MaxComposeFileSize+1))
+	_ = file.Close()
+	if readErr != nil {
+		h.writeComposeImportPreviewError(w, "The Docker Compose file could not be read.", http.StatusBadRequest)
+		return
+	}
+	if len(contents) > application.MaxComposeFileSize {
+		h.writeComposeImportPreviewError(w, "Compose files must be 4 MB or smaller.", http.StatusBadRequest)
+		return
+	}
+
+	preview, err := h.applicationImporter.PreviewDockerComposeProject(r.Context(), id, contents)
+	if err != nil {
+		if preview != nil {
+			// Parsing succeeded but policy rejects the file. Show what was
+			// found alongside the reason so the dialog explains the block.
+			h.writeComposeImportPreview(w, preview, composeImportUserMessage(err), false)
+			return
+		}
+		status := http.StatusInternalServerError
+		if composeImportUserError(err) {
+			status = http.StatusBadRequest
+		}
+		h.writeComposeImportPreviewError(w, composeImportUserMessage(err), status)
+		return
+	}
+	h.writeComposeImportPreview(w, preview, "", true)
+}
+
+type composeImportPreviewPageData struct {
+	Preview      *application.ComposeImportPreview
+	Error        string
+	Importable   bool
+	HasServices  bool
+	HasVolumes   bool
+	HasNetworks  bool
+}
+
+func (h *Handler) writeComposeImportPreview(w http.ResponseWriter, preview *application.ComposeImportPreview, previewError string, importable bool) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	data := composeImportPreviewPageData{
+		Preview:     preview,
+		Error:       previewError,
+		Importable:  importable && preview != nil && len(preview.Services) > 0,
+		HasServices: preview != nil && len(preview.Services) > 0,
+		HasVolumes:  preview != nil && len(preview.Volumes) > 0,
+		HasNetworks: preview != nil && len(preview.Networks) > 0,
+	}
+	if err := h.templates.ExecuteTemplate(w, "compose-import-preview.html", data); err != nil {
+		h.logger.Error("render Compose import preview", "error", err)
+	}
+}
+
+func (h *Handler) writeComposeImportPreviewError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	data := composeImportPreviewPageData{Error: message}
+	if err := h.templates.ExecuteTemplate(w, "compose-import-preview.html", data); err != nil {
+		h.logger.Error("render Compose import preview error", "error", err)
+	}
 }
 
 const maxEnvironmentImportBody = 2*application.MaxEnvironmentFileSize + 256*1024
