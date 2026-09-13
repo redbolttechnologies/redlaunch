@@ -428,12 +428,19 @@ an operator starts a service. The upload also cannot choose its Compose project
 name; Redlaunch supplies a stable installation-, scope-, and
 resource-specific identity.
 
-Compose is invoked with project-level <code>.env</code> loading disabled. Its
-configuration subprocess receives Docker settings and explicitly referenced
-application interpolation variables, while Redlaunch session, OAuth, database,
-and listener settings are filtered out. Policy errors identify the rejected
-Compose line and leave the existing files and SQLite service metadata
-unchanged.
+Compose interpolation resolves from the managed project files: an existing
+project-level <code>.env</code> first, then <code>vars.env</code>, then
+<code>secrets.env</code>, with later files winning. When none of those files
+exist, project-level loading stays disabled via <code>/dev/null</code>. The
+configuration subprocess additionally receives Docker settings and explicitly
+referenced application interpolation variables from the host environment,
+which take precedence over the files, while Redlaunch session, OAuth,
+database, and listener settings are filtered out. Variables referenced
+without a fallback value (for example <code>${DB_PASSWORD}</code>) are added
+as empty placeholders to <code>vars.env</code> or <code>secrets.env</code>
+during import so the missing configuration is visible; set their values
+before starting services. Policy errors identify the rejected Compose line
+and leave the existing files and SQLite service metadata unchanged.
 
 Compose anchors, aliases, merge keys, and unsupported inline structures are
 rejected where Redlaunch must edit the structure; supported inline

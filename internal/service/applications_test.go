@@ -532,6 +532,84 @@ func TestApplicationsImportDockerComposeProjectCreatesMissingReferencedEnvFiles(
 	}
 }
 
+func TestRequiredImportedInterpolationVariables(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		contents string
+		want     []string
+	}{
+		{name: "plain is required", contents: "environment:\n  POSTGRES_PASSWORD: ${DB_PASSWORD}\n", want: []string{"DB_PASSWORD"}},
+		{name: "defaults are skipped", contents: "a: ${A:-x}\nb: ${B-def}\nc: ${C:=y}\nd: ${D=z}\n", want: nil},
+		{name: "error and alternate forms are required", contents: "a: ${A:?msg}\nb: ${B?msg}\nc: ${C:+alt}\n", want: []string{"A", "B", "C"}},
+		{name: "bare and escaped", contents: "a: $BARE\nb: $${ESCAPED}\n", want: []string{"BARE"}},
+		{name: "invalid are skipped", contents: "a: ${1BAD}\nb: ${}\nc: ${UN_CLOSED\nd: ${BAD-CHAR!}\n", want: nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := requiredImportedInterpolationVariables(testCase.contents)
+			if len(got) != len(testCase.want) {
+				t.Fatalf("requiredImportedInterpolationVariables() = %#v, want %#v", got, testCase.want)
+			}
+			for _, name := range testCase.want {
+				if _, ok := got[name]; !ok {
+					t.Fatalf("requiredImportedInterpolationVariables() = %#v, want %#v", got, testCase.want)
+				}
+			}
+		})
+	}
+}
+
+func TestImportedInterpolationVariableIsSecret(t *testing.T) {
+	for name, want := range map[string]bool{
+		"DB_PASSWORD": true, "BETTER_AUTH_SECRET": true, "AI_API_KEY": true,
+		"APP_PORT": false, "DATABASE_URL": false, "DB_USER": false,
+	} {
+		if got := importedInterpolationVariableIsSecret(name); got != want {
+			t.Fatalf("importedInterpolationVariableIsSecret(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestApplicationsImportCreatesInterpolationPlaceholders(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	runner := &serviceRuntimeRunner{
+		configured: []compose.ConfiguredService{{Name: "db", Image: "postgres:16-alpine"}},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdApplication, err := applications.Create(t.Context(), "Status", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status")
+	if err := os.WriteFile(filepath.Join(directory, varsEnvFile), []byte("PLAIN_VAR=preset\nOTHER=keep\n"), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("services:\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_PASSWORD: ${DB_PASSWORD}\n      POSTGRES_USER: ${DB_USER:-appuser}\n      TOKEN: ${MY_TOKEN}\n      MODE: ${APP_MODE}\n      PLAIN: $PLAIN_VAR\n")
+	if _, err := applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, contents); err != nil {
+		t.Fatal(err)
+	}
+	varsContents := readServiceFile(t, filepath.Join(directory, varsEnvFile))
+	secretsContents := readServiceFile(t, filepath.Join(directory, secretsEnvFile))
+	if !strings.Contains(varsContents, "PLAIN_VAR=preset\n") || !strings.Contains(varsContents, "OTHER=keep\n") {
+		t.Fatalf("vars.env lost predefined entries:\n%s", varsContents)
+	}
+	if strings.Count(varsContents, "PLAIN_VAR=") != 1 {
+		t.Fatalf("vars.env duplicated predefined variable:\n%s", varsContents)
+	}
+	if !strings.Contains(varsContents, "APP_MODE=\n") {
+		t.Fatalf("vars.env is missing the APP_MODE placeholder:\n%s", varsContents)
+	}
+	if !strings.Contains(secretsContents, "DB_PASSWORD=\n") || !strings.Contains(secretsContents, "MY_TOKEN=\n") {
+		t.Fatalf("secrets.env is missing secret placeholders:\n%s", secretsContents)
+	}
+	if strings.Contains(varsContents, "DB_USER=") || strings.Contains(secretsContents, "DB_USER=") {
+		t.Fatalf("placeholder was created for a variable with a default:\nvars:\n%s\nsecrets:\n%s", varsContents, secretsContents)
+	}
+}
+
 func TestApplicationsImportDockerComposeProjectValidatesManagedFieldsAfterStaging(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}

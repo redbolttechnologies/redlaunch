@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +139,9 @@ func (s *Applications) ImportDockerComposeProject(ctx context.Context, applicati
 	referencedEnvSnapshots, err = ensureImportedReferencedEnvFiles(directory, processedContents)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("create referenced environment files: %w", err), rollbackFiles())
+	}
+	if err := populateImportedInterpolationPlaceholders(directory, processedContents); err != nil {
+		return nil, errors.Join(fmt.Errorf("create imported interpolation placeholders: %w", err), rollbackFiles())
 	}
 
 	configuredServices, err := s.runner.(composeProjectConfigReader).ConfigServices(ctx, directory)
@@ -688,6 +692,176 @@ func replaceImportedYAMLLines(lines []string, start, end int, replacement []stri
 	result = append(result, replacement...)
 	result = append(result, lines[end:]...)
 	return result
+}
+
+// populateImportedInterpolationPlaceholders appends NAME= placeholders to the
+// managed environment files for interpolation variables the staged Compose
+// contents reference without a fallback value (for example ${DB_PASSWORD}).
+// Without a placeholder the variable silently resolves to an empty string and
+// services such as PostgreSQL fail at runtime with no hint in the UI about
+// which value is missing. Variables with a default (${VAR:-fallback}) resolve
+// on their own and are skipped, as are variables already defined in one of
+// the project environment files. Secret-like names go to secrets.env, the
+// rest to vars.env. Empty placeholders do not change Compose resolution; they
+// only make the missing configuration visible and editable.
+func populateImportedInterpolationPlaceholders(directory, processedContents string) error {
+	required := requiredImportedInterpolationVariables(processedContents)
+	if len(required) == 0 {
+		return nil
+	}
+	defined := make(map[string]struct{})
+	for _, name := range []string{".env", varsEnvFile, secretsEnvFile} {
+		contents, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(contents), "\n") {
+			if key, ok := parseEnvironmentKey(line); ok {
+				defined[key] = struct{}{}
+			}
+		}
+	}
+	varsPlaceholders := make([]string, 0)
+	secretsPlaceholders := make([]string, 0)
+	for name := range required {
+		if _, exists := defined[name]; exists {
+			continue
+		}
+		if importedInterpolationVariableIsSecret(name) {
+			secretsPlaceholders = append(secretsPlaceholders, name)
+		} else {
+			varsPlaceholders = append(varsPlaceholders, name)
+		}
+	}
+	if len(varsPlaceholders) == 0 && len(secretsPlaceholders) == 0 {
+		return nil
+	}
+	sort.Strings(varsPlaceholders)
+	sort.Strings(secretsPlaceholders)
+	if len(varsPlaceholders) > 0 {
+		if err := appendImportedInterpolationPlaceholders(filepath.Join(directory, varsEnvFile), varsPlaceholders); err != nil {
+			return err
+		}
+	}
+	if len(secretsPlaceholders) > 0 {
+		if err := appendImportedInterpolationPlaceholders(filepath.Join(directory, secretsEnvFile), secretsPlaceholders); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendImportedInterpolationPlaceholders(path string, names []string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text := string(contents)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	var additions strings.Builder
+	additions.WriteString("# Added by Compose import: required variables without defaults. Set values before starting services.\n")
+	for _, name := range names {
+		additions.WriteString(name + "=\n")
+	}
+	return writeManagedFile(path, text+additions.String(), envFileMode)
+}
+
+// requiredImportedInterpolationVariables returns the names referenced as
+// ${NAME}, ${NAME?...}, ${NAME+...}, or bare $NAME in the Compose contents,
+// excluding references that carry a fallback value (${NAME:-...},
+// ${NAME-...}, ${NAME:=...}, ${NAME=...}) and escaped $$ sequences. It
+// mirrors the scanning rules of the Compose runner's interpolation allowlist
+// so both agree on which names a file references.
+func requiredImportedInterpolationVariables(contents string) map[string]struct{} {
+	required := make(map[string]struct{})
+	for index := 0; index < len(contents); index++ {
+		if contents[index] != '$' || index+1 >= len(contents) {
+			continue
+		}
+		if contents[index+1] == '$' {
+			index++
+			continue
+		}
+		if contents[index+1] == '{' {
+			rest := contents[index+2:]
+			closing := strings.IndexByte(rest, '}')
+			if closing < 0 {
+				break
+			}
+			if name, fallback, ok := splitImportedInterpolationInner(rest[:closing]); ok && !fallback {
+				required[name] = struct{}{}
+			}
+			index += closing + 2
+			continue
+		}
+		end := index + 1
+		for end < len(contents) && isImportedInterpolationNameCharacter(contents[end], end == index+1) {
+			end++
+		}
+		if end > index+1 {
+			if name := contents[index+1 : end]; validImportedInterpolationName(name) {
+				required[name] = struct{}{}
+			}
+			index = end - 1
+		}
+	}
+	return required
+}
+
+// splitImportedInterpolationInner splits the inside of a ${...} reference
+// into its variable name and whether it carries a fallback value.
+// Operators that resolve to a value when the variable is unset (-, :-, =,
+// :=) count as a fallback; plain references and the ?, :?, +, :+ forms still
+// need a configured value.
+func splitImportedInterpolationInner(inner string) (string, bool, bool) {
+	separator := strings.IndexAny(inner, ":?+-=")
+	if separator < 0 {
+		if !validImportedInterpolationName(inner) {
+			return "", false, false
+		}
+		return inner, false, true
+	}
+	name := inner[:separator]
+	if !validImportedInterpolationName(name) {
+		return "", false, false
+	}
+	remainder := inner[separator:]
+	return name, strings.HasPrefix(remainder, "-") || strings.HasPrefix(remainder, ":-") ||
+		strings.HasPrefix(remainder, "=") || strings.HasPrefix(remainder, ":="), true
+}
+
+func validImportedInterpolationName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character == '_' || index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isImportedInterpolationNameCharacter(character byte, first bool) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character == '_' || !first && character >= '0' && character <= '9'
+}
+
+// importedInterpolationVariableIsSecret reports whether an interpolation
+// variable name looks like a credential that belongs in secrets.env rather
+// than vars.env. It mirrors the runner's diagnostic redaction keywords so
+// classification stays consistent across the codebase.
+func importedInterpolationVariableIsSecret(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, part := range []string{"PASSWORD", "SECRET", "TOKEN", "API_KEY", "PRIVATE_KEY", "CREDENTIAL"} {
+		if strings.Contains(upper, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureImportedReferencedEnvFiles creates empty files for local env_file
