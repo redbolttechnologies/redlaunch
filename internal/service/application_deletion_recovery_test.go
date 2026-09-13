@@ -191,6 +191,55 @@ func TestApplicationDeletionRetryDoesNotRemoveReplacementFolder(t *testing.T) {
 	}
 }
 
+// TestApplicationDeletionRepairsDanglingDependsOn covers the reported stuck
+// deletion: migrate still references db after db was removed, so Docker
+// rejects the project during the resources stage ("depends on undefined
+// service"). Deletion must prune the dangling reference before Down.
+func TestApplicationDeletionRepairsDanglingDependsOn(t *testing.T) {
+	ctx := r06TestContext(t)
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "redlaunch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	item, err := database.Create(ctx, application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectsRoot := filepath.Join(t.TempDir(), "projects")
+	runner := &validatingComposeRunner{runner: &serviceRuntimeRunner{}}
+	applications, err := NewApplications(database, projectsRoot, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(projectsRoot, applicationsDir, item.FolderName)
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	brokenCompose := "services:\n  migrate:\n    image: example/migrate:latest\n    depends_on:\n      db:\n        condition: service_started\n"
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte(brokenCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.DeleteApplicationWithProgress(ctx, item.ID, nil); err != nil {
+		t.Fatalf("deletion with dangling depends_on: %v", err)
+	}
+	intent, err := database.GetApplicationDeletion(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.State != "complete" || intent.Stage != applicationDeletionStageComplete {
+		t.Fatalf("intent after dangling-depends_on deletion = %#v, want complete", intent)
+	}
+	if _, err := database.Get(ctx, item.ID); !errors.Is(err, application.ErrNotFound) {
+		t.Fatalf("application after dangling-depends_on deletion = %v, want not found", err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("application folder after dangling-depends_on deletion = %v, want not found", err)
+	}
+}
+
 // TestApplicationDeletionTreatsMissingContainerAsDeleted covers the reported
 // failure: when the container was already removed manually, the resources
 // stage must treat Docker's "No such container" as already deleted instead of

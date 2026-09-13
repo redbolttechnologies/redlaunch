@@ -2645,6 +2645,9 @@ func (r *validatingComposeRunner) Restart(ctx context.Context, projectDir, servi
 }
 
 func (r *validatingComposeRunner) Down(ctx context.Context, projectDir string) error {
+	if err := validateComposeDependsOnForTest(projectDir); err != nil {
+		return fmt.Errorf("resolve Compose volume ownership: %w", err)
+	}
 	return r.runner.Down(ctx, projectDir)
 }
 

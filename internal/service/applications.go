@@ -1692,6 +1692,9 @@ func (s *Applications) DeleteApplicationWithProgress(ctx context.Context, applic
 func (s *Applications) deleteApplicationWithoutIntent(ctx context.Context, applicationID int64, folderName, directory string, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
 
 	reportApplicationDeletionProgress(progress, "resources", "Removing application containers and Docker resources")
+	if err := s.repairDanglingDependsOn(directory); err != nil {
+		return err
+	}
 	if err := remover.Down(ctx, directory); err != nil && !isMissingDockerResourceError(err) {
 		return fmt.Errorf("remove application resources: %w", err)
 	}
@@ -1768,6 +1771,9 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 			}
 		}
 		if !directoryMissing {
+			if err := s.repairDanglingDependsOn(directory); err != nil {
+				return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
+			}
 			if err := remover.Down(ctx, directory); err != nil && !isMissingDockerResourceError(err) {
 				return s.failApplicationDeletion(applicationID, applicationDeletionStageResources, err)
 			}
