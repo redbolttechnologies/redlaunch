@@ -25,6 +25,7 @@
     <div class="setup-progress-error" role="alert">
       <p class="setup-progress-error-title">The service deletion stopped during <strong>{{.ServiceDeleteProgress.ErrorStage}}</strong>.</p>
       <p>{{.ServiceDeleteProgress.ErrorDetail}}</p>
+      {{if .ServiceDeleteProgress.ErrorTechnical}}<pre>{{.ServiceDeleteProgress.ErrorTechnical}}</pre>{{end}}
     </div>
     {{end}}
 

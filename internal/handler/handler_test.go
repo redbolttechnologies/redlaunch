@@ -3620,7 +3620,7 @@ func TestDeleteServiceShowsFailedProgressStage(t *testing.T) {
 		t.Fatalf("GET failed service deletion status = %d, want %d", statusRecorder.Code, http.StatusOK)
 	}
 	body := statusRecorder.Body.String()
-	for _, expected := range []string{"Service deletion stopped", "Remove service container", "could not be removed"} {
+	for _, expected := range []string{"Service deletion stopped", "Remove service container", "could not be removed", "<pre>docker failed</pre>"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("failed service deletion response did not render %q: %s", expected, body)
 		}
@@ -3832,7 +3832,7 @@ func TestDeleteApplicationShowsFailedProgressStage(t *testing.T) {
 		t.Fatalf("GET failed application deletion status = %d, want %d", statusRecorder.Code, http.StatusOK)
 	}
 	body := statusRecorder.Body.String()
-	for _, expected := range []string{"Application deletion stopped", "Remove application Docker resources", "Docker resources could not be removed"} {
+	for _, expected := range []string{"Application deletion stopped", "Remove application Docker resources", "Docker resources could not be removed", "<pre>docker failed</pre>"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("failed application deletion response did not render %q: %s", expected, body)
 		}

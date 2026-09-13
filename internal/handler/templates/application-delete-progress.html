@@ -25,6 +25,7 @@
     <div class="setup-progress-error" role="alert">
       <p class="setup-progress-error-title">The application deletion stopped during <strong>{{.ApplicationDeleteProgress.ErrorStage}}</strong>.</p>
       <p>{{.ApplicationDeleteProgress.ErrorDetail}}</p>
+      {{if .ApplicationDeleteProgress.ErrorTechnical}}<pre>{{.ApplicationDeleteProgress.ErrorTechnical}}</pre>{{end}}
     </div>
     {{end}}
 

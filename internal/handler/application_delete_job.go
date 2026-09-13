@@ -39,6 +39,7 @@ type applicationDeleteJob struct {
 	currentStage    string
 	errorStage      string
 	errorDetail     string
+	errorTechnical  string
 	steps           []applicationDeleteJobStep
 	finishedAt      time.Time
 }
@@ -57,6 +58,7 @@ type applicationDeleteProgressData struct {
 	CurrentStage    string
 	ErrorStage      string
 	ErrorDetail     string
+	ErrorTechnical  string
 	StatusURL       string
 	CloseURL        string
 	DeleteURL       string
@@ -198,6 +200,7 @@ func (j *applicationDeleteJob) fail(err error) {
 	}
 	j.state = applicationDeleteJobStateFailed
 	j.errorDetail = applicationDeletionUserMessage(err)
+	j.errorTechnical = applicationDeletionDiagnosticDetail(err)
 	j.finishedAt = time.Now()
 }
 
@@ -214,6 +217,7 @@ func (j *applicationDeleteJob) snapshot() applicationDeleteProgressData {
 		CurrentStage:    j.currentStage,
 		ErrorStage:      j.errorStage,
 		ErrorDetail:     j.errorDetail,
+		ErrorTechnical:  j.errorTechnical,
 		Steps:           steps,
 	}
 }
@@ -305,7 +309,7 @@ func (h *Handler) runApplicationDeleteJob(ctx context.Context, job *applicationD
 	if err != nil {
 		job.fail(err)
 		snapshot := job.snapshot()
-		h.logger.Error("delete application", "application_id", job.applicationID, "stage", snapshot.ErrorStage, "error", applicationDeletionUserMessage(err))
+		h.logger.Error("delete application", "application_id", job.applicationID, "stage", snapshot.ErrorStage, "error", err)
 		return
 	}
 	job.complete()
@@ -328,4 +332,70 @@ func applicationDeletionUserMessage(err error) string {
 	default:
 		return "The application could not be deleted."
 	}
+}
+
+const maxDeletionDiagnosticLength = 2048
+
+// deletionDiagnosticDetail extracts the technical cause from a deletion
+// failure for the failed progress dialog. Outer operation prefixes duplicate
+// the failed stage label, so they are stripped; the Docker-level message is
+// preserved because that is what identifies the real failure. Compose command
+// output is already redacted at the source, with defense-in-depth redaction
+// of common secret markers below and a length cap. It returns "" when there
+// is nothing safe and useful to show.
+func deletionDiagnosticDetail(err error, prefixes []string) string {
+	if err == nil {
+		return ""
+	}
+	detail := strings.TrimSpace(err.Error())
+	for {
+		previous := detail
+		lower := strings.ToLower(detail)
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				detail = strings.TrimSpace(detail[len(prefix):])
+				break
+			}
+		}
+		if detail == previous {
+			break
+		}
+	}
+	detail = redactDeletionDiagnostics(detail)
+	if detail == "" {
+		return ""
+	}
+	if runes := []rune(detail); len(runes) > maxDeletionDiagnosticLength {
+		return string(runes[:maxDeletionDiagnosticLength]) + "…"
+	}
+	return detail
+}
+
+func redactDeletionDiagnostics(detail string) string {
+	lines := strings.Split(detail, "\n")
+	for index, line := range lines {
+		lower := strings.ToLower(line)
+		for _, marker := range []string{"password=", "password:", "secret=", "secret:", "token=", "token:", "private_key", "credential="} {
+			if at := strings.Index(lower, marker); at >= 0 {
+				lines[index] = line[:at] + "[redacted]"
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func applicationDeletionDiagnosticDetail(err error) string {
+	return deletionDiagnosticDetail(err, []string{
+		"remove application resources: ",
+		"delete application metadata: ",
+		"delete application folder: ",
+		"verify application folder ownership: ",
+		"release application deletion leases: ",
+		"checkpoint application deletion: ",
+		"resolve application directory for deletion: ",
+		"validate stored application folder for deletion: ",
+		"get application for deletion: ",
+		"record application deletion intent: ",
+	})
 }

@@ -35,15 +35,16 @@ type serviceDeleteJobStore struct {
 type serviceDeleteJob struct {
 	mu sync.RWMutex
 
-	id            string
-	applicationID int64
-	serviceName   string
-	state         string
-	currentStage  string
-	errorStage    string
-	errorDetail   string
-	steps         []serviceDeleteJobStep
-	finishedAt    time.Time
+	id             string
+	applicationID  int64
+	serviceName    string
+	state          string
+	currentStage   string
+	errorStage     string
+	errorDetail    string
+	errorTechnical string
+	steps          []serviceDeleteJobStep
+	finishedAt     time.Time
 }
 
 type serviceDeleteJobStep struct {
@@ -53,16 +54,17 @@ type serviceDeleteJobStep struct {
 }
 
 type serviceDeleteProgressData struct {
-	JobID         string
-	ApplicationID int64
-	ServiceName   string
-	State         string
-	CurrentStage  string
-	ErrorStage    string
-	ErrorDetail   string
-	StatusURL     string
-	CloseURL      string
-	Steps         []serviceDeleteJobStep
+	JobID          string
+	ApplicationID  int64
+	ServiceName    string
+	State          string
+	CurrentStage   string
+	ErrorStage     string
+	ErrorDetail    string
+	ErrorTechnical string
+	StatusURL      string
+	CloseURL       string
+	Steps          []serviceDeleteJobStep
 }
 
 func newServiceDeleteJobStore() *serviceDeleteJobStore {
@@ -200,6 +202,7 @@ func (j *serviceDeleteJob) fail(err error) {
 	}
 	j.state = serviceDeleteJobStateFailed
 	j.errorDetail = serviceDeletionUserMessage(err)
+	j.errorTechnical = serviceDeletionDiagnosticDetail(err)
 	j.finishedAt = time.Now()
 }
 
@@ -209,14 +212,15 @@ func (j *serviceDeleteJob) snapshot() serviceDeleteProgressData {
 	steps := make([]serviceDeleteJobStep, len(j.steps))
 	copy(steps, j.steps)
 	return serviceDeleteProgressData{
-		JobID:         j.id,
-		ApplicationID: j.applicationID,
-		ServiceName:   j.serviceName,
-		State:         j.state,
-		CurrentStage:  j.currentStage,
-		ErrorStage:    j.errorStage,
-		ErrorDetail:   j.errorDetail,
-		Steps:         steps,
+		JobID:          j.id,
+		ApplicationID:  j.applicationID,
+		ServiceName:    j.serviceName,
+		State:          j.state,
+		CurrentStage:   j.currentStage,
+		ErrorStage:     j.errorStage,
+		ErrorDetail:    j.errorDetail,
+		ErrorTechnical: j.errorTechnical,
+		Steps:          steps,
 	}
 }
 
@@ -242,7 +246,7 @@ func (h *Handler) runServiceDeleteJob(ctx context.Context, job *serviceDeleteJob
 	if err != nil {
 		job.fail(err)
 		snapshot := job.snapshot()
-		h.logger.Error("delete service", "application_id", job.applicationID, "service", job.serviceName, "stage", snapshot.ErrorStage, "error", serviceDeletionUserMessage(err))
+		h.logger.Error("delete service", "application_id", job.applicationID, "service", job.serviceName, "stage", snapshot.ErrorStage, "error", err)
 		return
 	}
 	job.complete()
@@ -272,4 +276,21 @@ func serviceDeletionUserMessage(err error) string {
 	default:
 		return "The service could not be deleted."
 	}
+}
+
+func serviceDeletionDiagnosticDetail(err error) string {
+	return deletionDiagnosticDetail(err, []string{
+		"stop service: ",
+		"remove service container: ",
+		"remove service from compose file: ",
+		"delete service metadata: ",
+		"stage service removal in compose file: ",
+		"restore compose file before service removal: ",
+		"list routings for service deletion: ",
+		"delete service routing: ",
+		"reload proxy after service deletion: ",
+		"resolve application directory for service deletion: ",
+		"record service deletion intent: ",
+		"checkpoint service deletion: ",
+	})
 }
