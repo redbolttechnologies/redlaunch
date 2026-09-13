@@ -162,7 +162,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid hsl(var(--ring));
+  outline: 2px solid hsl(var(--ring) / 0.4);
   outline-offset: 2px;
 }
 
@@ -592,6 +592,11 @@ code {
 .button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.35);
 }
 
 .setup-progress-backdrop {
@@ -2224,8 +2229,12 @@ h1 {
 }
 
 .service-log-filter:focus {
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.14);
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.service-log-filter:focus-visible {
+  outline: none;
 }
 
 .service-log-filter-empty {
@@ -3137,8 +3146,14 @@ h1 {
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.14);
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: none;
 }
 
 .routing-domain-value {
@@ -3222,8 +3237,8 @@ h1 {
 }
 
 .switch-field:has(input:focus-visible) {
-  border-color: hsl(var(--ring));
-  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.14);
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
 }
 
 .switch-field .checkbox-field-copy {
@@ -3315,7 +3330,9 @@ h1 {
 
 .secret-visibility-toggle:focus-visible,
 .secret-copy-button:focus-visible {
-  border-color: hsl(var(--ring));
+  border-color: hsl(var(--ring) / 0.5);
+  outline: none;
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
 }
 
 .secret-visibility-toggle:disabled,
