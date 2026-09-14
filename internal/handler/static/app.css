@@ -1388,6 +1388,11 @@ h1 {
   white-space: nowrap;
 }
 
+.environment-import-content {
+  min-height: 12rem;
+  white-space: pre;
+}
+
 .service-split-button {
   display: inline-flex;
   align-items: stretch;

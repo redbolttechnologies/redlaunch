@@ -450,9 +450,11 @@ container names, labels, and required environment files. A failed validation
 leaves the original files and metadata unchanged.
 
 To import application configuration, choose **Import variables...** on the
-Variables tab or **Import secrets...** on the Secrets tab. Upload a dotenv file
-for the matching managed file. Redlaunch validates the entries, keeps both
-managed files in the application directory, and masks secret values in the UI.
+Variables tab or **Import secrets...** on the Secrets tab. Paste or type dotenv
+entries directly into the textbox, or upload a dotenv file to load its contents
+into the textbox for review and editing before importing. Redlaunch validates
+the entries, keeps both managed files in the application directory, and masks
+secret values in the UI.
 
 For a custom application image, the **Use Docker Registry** switch controls how
 the image reference is interpreted:

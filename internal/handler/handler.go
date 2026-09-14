@@ -1100,7 +1100,7 @@ func (h *Handler) importApplicationEnvironmentFiles(w http.ResponseWriter, r *ht
 		defer r.MultipartForm.RemoveAll()
 	}
 	if parseErr != nil {
-		h.renderApplicationEnvironmentImportError(w, r, id, "Choose an environment file no larger than 1 MB.", environmentImportKind(r.Form.Get("environment_import_kind")), http.StatusBadRequest)
+		h.renderApplicationEnvironmentImportError(w, r, id, "Choose an environment file no larger than 1 MB.", environmentImportKind(r.Form.Get("environment_import_kind")), "", http.StatusBadRequest)
 		return
 	}
 
@@ -1110,18 +1110,18 @@ func (h *Handler) importApplicationEnvironmentFiles(w http.ResponseWriter, r *ht
 	}
 	importKind := environmentImportKind(r.Form.Get("environment_import_kind"))
 
-	variables, variablesProvided, readErr := readUploadedEnvironmentFile(r, "variables_file")
+	variables, variablesProvided, readErr := resolveEnvironmentImportContents(r, "variables_content", "variables_file")
 	if readErr != nil {
-		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(readErr), importKind, http.StatusBadRequest)
+		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(readErr), importKind, variablesReopenContent(r, importKind), http.StatusBadRequest)
 		return
 	}
-	secrets, secretsProvided, readErr := readUploadedEnvironmentFile(r, "secrets_file")
+	secrets, secretsProvided, readErr := resolveEnvironmentImportContents(r, "secrets_content", "secrets_file")
 	if readErr != nil {
-		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(readErr), importKind, http.StatusBadRequest)
+		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(readErr), importKind, variablesContentForReopen(importKind, variables), http.StatusBadRequest)
 		return
 	}
 	if !variablesProvided && !secretsProvided {
-		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(application.ErrEnvironmentImportFileRequired), importKind, http.StatusBadRequest)
+		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(application.ErrEnvironmentImportFileRequired), importKind, "", http.StatusBadRequest)
 		return
 	}
 
@@ -1138,7 +1138,7 @@ func (h *Handler) importApplicationEnvironmentFiles(w http.ResponseWriter, r *ht
 		} else {
 			h.logger.Error("import application environment files", "application_id", id, "error", err)
 		}
-		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(err), importKind, status)
+		h.renderApplicationEnvironmentImportError(w, r, id, environmentImportMessage(err), importKind, variablesContentForReopen(importKind, variables), status)
 		return
 	}
 
@@ -1167,6 +1167,92 @@ func readUploadedEnvironmentFile(r *http.Request, fieldName string) ([]byte, boo
 		return nil, true, application.ErrEnvironmentImportFileTooLarge
 	}
 	return contents, true, nil
+}
+
+// environmentImportFormField returns the submitted textarea value and whether
+// the field was present in the request body. Presence matters because an empty
+// textbox is an explicit request to clear the managed file, while a missing
+// field means an older client that only uploads files.
+func environmentImportFormField(r *http.Request, fieldName string) (string, bool) {
+	if r.MultipartForm != nil {
+		if values, ok := r.MultipartForm.Value[fieldName]; ok {
+			if len(values) == 0 {
+				return "", true
+			}
+			return values[0], true
+		}
+	}
+	if r.PostForm != nil {
+		if values, ok := r.PostForm[fieldName]; ok {
+			if len(values) == 0 {
+				return "", true
+			}
+			return values[0], true
+		}
+	}
+	if r.Form != nil {
+		if values, ok := r.Form[fieldName]; ok {
+			if len(values) == 0 {
+				return "", true
+			}
+			return values[0], true
+		}
+	}
+	return "", false
+}
+
+// resolveEnvironmentImportContents prefers the editable textbox content and
+// falls back to an uploaded file. The file input exists so users can load a
+// dotenv file into the textbox for review; JavaScript clears the file input
+// after loading, so a non-empty textbox always wins. Without JavaScript an
+// empty textbox with a chosen file still imports the file, while an empty
+// textbox without a file clears the managed file.
+func resolveEnvironmentImportContents(r *http.Request, contentField, fileField string) ([]byte, bool, error) {
+	content, contentPresent := environmentImportFormField(r, contentField)
+	fileContents, fileProvided, fileErr := readUploadedEnvironmentFile(r, fileField)
+	if fileErr != nil {
+		return nil, true, fileErr
+	}
+	if contentPresent {
+		if len(content) > application.MaxEnvironmentFileSize {
+			return nil, true, application.ErrEnvironmentImportFileTooLarge
+		}
+		if content != "" {
+			return []byte(content), true, nil
+		}
+		if fileProvided {
+			return fileContents, true, nil
+		}
+		return []byte{}, true, nil
+	}
+	if fileProvided {
+		return fileContents, true, nil
+	}
+	return nil, false, nil
+}
+
+// variablesContentForReopen preserves non-secret variables content when the
+// variables dialog is reopened after a validation failure. Secrets are never
+// echoed back to the browser.
+func variablesContentForReopen(importKind string, variables []byte) string {
+	if importKind != "variables" {
+		return ""
+	}
+	return string(variables)
+}
+
+// variablesReopenContent reads the raw variables textbox for reopening the
+// dialog after the content itself failed to resolve (for example, it was too
+// large). Oversized content is not echoed back.
+func variablesReopenContent(r *http.Request, importKind string) string {
+	if importKind != "variables" {
+		return ""
+	}
+	content, present := environmentImportFormField(r, "variables_content")
+	if !present || len(content) > application.MaxEnvironmentFileSize {
+		return ""
+	}
+	return content
 }
 
 func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) (applicationDetailsPageData, error) {
@@ -1742,7 +1828,7 @@ func (h *Handler) renderApplicationImportError(w http.ResponseWriter, r *http.Re
 	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
 }
 
-func (h *Handler) renderApplicationEnvironmentImportError(w http.ResponseWriter, r *http.Request, id int64, message, importKind string, status int) {
+func (h *Handler) renderApplicationEnvironmentImportError(w http.ResponseWriter, r *http.Request, id int64, message, importKind, variablesContent string, status int) {
 	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
 		http.NotFound(w, r)
@@ -1755,6 +1841,7 @@ func (h *Handler) renderApplicationEnvironmentImportError(w http.ResponseWriter,
 	}
 	data.EnvironmentImportError = message
 	data.EnvironmentImportKind = importKind
+	data.EnvironmentImportVariablesContent = variablesContent
 	h.writeApplicationDetailsPage(w, r, status, data, nil, nil)
 }
 
@@ -4353,23 +4440,24 @@ type applicationPageData struct {
 }
 
 type applicationDetailsPageData struct {
-	Application               application.Application
-	Services                  []application.Service
-	ImportError               string
-	EnvironmentImportError    string
-	EnvironmentImportKind     string
-	Domains                   []application.Domain
-	Variables                 environmentFilePageData
-	Secrets                   environmentFilePageData
-	CSRFToken                 string
-	DomainEdit                *domainEditPageData
-	DomainDelete              *domainDeletePageData
-	VariableEdit              *variableEditPageData
-	VariableDelete            *variableDeletePageData
-	SecretEdit                *secretEditPageData
-	SecretDelete              *secretDeletePageData
-	ServiceDeleteProgress     *serviceDeleteProgressData
-	ApplicationDeleteProgress *applicationDeleteProgressData
+	Application                       application.Application
+	Services                          []application.Service
+	ImportError                       string
+	EnvironmentImportError            string
+	EnvironmentImportKind             string
+	EnvironmentImportVariablesContent string
+	Domains                           []application.Domain
+	Variables                         environmentFilePageData
+	Secrets                           environmentFilePageData
+	CSRFToken                         string
+	DomainEdit                        *domainEditPageData
+	DomainDelete                      *domainDeletePageData
+	VariableEdit                      *variableEditPageData
+	VariableDelete                    *variableDeletePageData
+	SecretEdit                        *secretEditPageData
+	SecretDelete                      *secretDeletePageData
+	ServiceDeleteProgress             *serviceDeleteProgressData
+	ApplicationDeleteProgress         *applicationDeleteProgressData
 }
 
 type applicationRoutingPageData struct {

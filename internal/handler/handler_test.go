@@ -1938,6 +1938,226 @@ func TestImportApplicationEnvironmentFilesRendersSafeValidationError(t *testing.
 	}
 }
 
+func newEnvironmentImportTextboxRequest(t *testing.T, kind, token, variablesContent string, provideVariablesContent bool, variablesFile []byte, provideVariablesFile bool, secretsContent string, provideSecretsContent bool, secretsFile []byte, provideSecretsFile bool) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("csrf_token", token); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "" {
+		if err := writer.WriteField("environment_import_kind", kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provideVariablesContent {
+		if err := writer.WriteField("variables_content", variablesContent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provideVariablesFile {
+		file, err := writer.CreateFormFile("variables_file", ".env")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(variablesFile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provideSecretsContent {
+		if err := writer.WriteField("secrets_content", secretsContent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provideSecretsFile {
+		file, err := writer.CreateFormFile("secrets_file", ".env")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Write(secretsFile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/environment/import", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	return request
+}
+
+func TestImportApplicationEnvironmentFilesAcceptsTextboxContent(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "variables", web.csrfToken, "APP_NAME=from-textbox\n", true, nil, false, "", false, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST textbox import status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	input := applications.environmentImportInput
+	if !input.VariablesProvided || string(input.Variables) != "APP_NAME=from-textbox\n" {
+		t.Fatalf("imported variables = (%v, %q), want textbox contents", input.VariablesProvided, input.Variables)
+	}
+	if input.SecretsProvided {
+		t.Fatalf("imported secrets should not be provided: %#v", input)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesPrefersTextboxOverFile(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "variables", web.csrfToken, "APP_NAME=edited\n", true, []byte("APP_NAME=from-file\n"), true, "", false, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST textbox-over-file import status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	input := applications.environmentImportInput
+	if string(input.Variables) != "APP_NAME=edited\n" {
+		t.Fatalf("imported variables = %q, want edited textbox contents", input.Variables)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesFallsBackToFileWhenTextboxEmpty(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "variables", web.csrfToken, "", true, []byte("APP_NAME=from-file\n"), true, "", false, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST empty-textbox-with-file import status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	input := applications.environmentImportInput
+	if string(input.Variables) != "APP_NAME=from-file\n" {
+		t.Fatalf("imported variables = %q, want uploaded file contents", input.Variables)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesEmptyTextboxClears(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "variables", web.csrfToken, "", true, nil, false, "", false, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST empty textbox import status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	input := applications.environmentImportInput
+	if !input.VariablesProvided || len(input.Variables) != 0 {
+		t.Fatalf("imported variables = (%v, %q), want explicit clear", input.VariablesProvided, input.Variables)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesPreservesVariablesContentOnError(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:         []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		environmentImportErr: application.ErrEnvironmentImportInvalid,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "variables", web.csrfToken, "APP_NAME=textbox-value\n", true, nil, false, "", false, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST invalid textbox import status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "APP_NAME=textbox-value") {
+		t.Fatalf("invalid variables import response did not preserve textbox contents: %s", body)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesAcceptsSecretsTextboxContent(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "secrets", web.csrfToken, "", false, nil, false, "API_TOKEN=from-textbox\n", true, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST secrets textbox import status = %d, want %d", recorder.Code, http.StatusSeeOther)
+	}
+	if got := recorder.Header().Get("Location"); got != "/applications/7?tab=secrets" {
+		t.Fatalf("POST secrets textbox import Location = %q, want secrets tab", got)
+	}
+	input := applications.environmentImportInput
+	if !input.SecretsProvided || string(input.Secrets) != "API_TOKEN=from-textbox\n" {
+		t.Fatalf("imported secrets = (%v, %q), want textbox contents", input.SecretsProvided, input.Secrets)
+	}
+	if input.VariablesProvided {
+		t.Fatalf("imported variables should not be provided: %#v", input)
+	}
+}
+
+func TestImportApplicationEnvironmentFilesDoesNotPreserveSecretsContentOnError(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:         []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		environmentImportErr: application.ErrEnvironmentImportInvalid,
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := newEnvironmentImportTextboxRequest(t, "secrets", web.csrfToken, "", false, nil, false, "API_TOKEN=textbox-secret\n", true, nil, false)
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST invalid secrets textbox import status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, "textbox-secret") {
+		t.Fatalf("invalid secrets import response exposed secret contents: %s", body)
+	}
+}
+
 func TestApplicationDetailsRendersDomains(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications: []application.Application{{

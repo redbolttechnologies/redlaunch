@@ -387,7 +387,7 @@
     <header class="application-dialog-header">
       <div>
         <h2 id="variables-import-dialog-title">Import variables</h2>
-        <p id="variables-import-dialog-description">Upload a <code>.env</code> file to replace the application's managed <code>vars.env</code> file.</p>
+        <p id="variables-import-dialog-description">Paste or type <code>.env</code> entries to replace the application's managed <code>vars.env</code> file. Optionally upload a file to load it into the editor first.</p>
       </div>
       <button class="icon-button" type="button" data-environment-import-close aria-label="Close import variables dialog">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -405,9 +405,15 @@
       </div>
       {{end}}
       <div class="field">
-        <label for="variables-import-file">Variables file <code>vars.env</code></label>
-        <input id="variables-import-file" name="variables_file" type="file" accept=".env,text/plain" required>
-        <span class="field-help">Non-secret values loaded by managed services. Up to 1 MB.</span>
+        <label for="variables-import-content">Variables <code>vars.env</code></label>
+        <textarea id="variables-import-content" name="variables_content" rows="10" class="environment-import-content" placeholder="KEY=value&#10;ANOTHER=value" autocomplete="off" autocapitalize="none" spellcheck="false" data-environment-import-content>{{if and .ApplicationDetailsPage.EnvironmentImportError (eq .ApplicationDetailsPage.EnvironmentImportKind "variables")}}{{.ApplicationDetailsPage.EnvironmentImportVariablesContent}}{{end}}</textarea>
+        <span class="field-help">Non-secret values loaded by managed services. Up to 1 MB. An empty textbox clears the managed variables file.</span>
+      </div>
+      <div class="field">
+        <label for="variables-import-file">Upload a file <span class="field-label-optional">(optional)</span></label>
+        <input id="variables-import-file" name="variables_file" type="file" accept=".env,text/plain" data-environment-import-file>
+        <span class="field-help">Choosing a file loads its contents into the textbox above for review. Nothing is saved until you choose Import variables.</span>
+        <span class="field-help" data-environment-import-status role="status" aria-live="polite" hidden></span>
       </div>
       <div class="application-form-note">
         <span class="application-form-note-mark" aria-hidden="true">i</span>
@@ -426,7 +432,7 @@
     <header class="application-dialog-header">
       <div>
         <h2 id="secrets-import-dialog-title">Import secrets</h2>
-        <p id="secrets-import-dialog-description">Upload a <code>.env</code> file to replace the application's managed <code>secrets.env</code> file.</p>
+        <p id="secrets-import-dialog-description">Paste or type <code>.env</code> entries to replace the application's managed <code>secrets.env</code> file. Optionally upload a file to load it into the editor first.</p>
       </div>
       <button class="icon-button" type="button" data-environment-import-close aria-label="Close import secrets dialog">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -444,9 +450,15 @@
       </div>
       {{end}}
       <div class="field">
-        <label for="secrets-import-file">Secrets file <code>secrets.env</code></label>
-        <input id="secrets-import-file" name="secrets_file" type="file" accept=".env,text/plain" required>
-        <span class="field-help">Credentials and other sensitive values. Up to 1 MB; values remain masked in Redlaunch.</span>
+        <label for="secrets-import-content">Secrets <code>secrets.env</code></label>
+        <textarea id="secrets-import-content" name="secrets_content" rows="10" class="environment-import-content" placeholder="KEY=value&#10;ANOTHER=value" autocomplete="new-password" autocapitalize="none" spellcheck="false" data-environment-import-content></textarea>
+        <span class="field-help">Credentials and other sensitive values. Up to 1 MB; values remain masked in Redlaunch. An empty textbox clears the managed secrets file.</span>
+      </div>
+      <div class="field">
+        <label for="secrets-import-file">Upload a file <span class="field-label-optional">(optional)</span></label>
+        <input id="secrets-import-file" name="secrets_file" type="file" accept=".env,text/plain" data-environment-import-file>
+        <span class="field-help">Choosing a file loads its contents into the textbox above for review. Nothing is saved until you choose Import secrets.</span>
+        <span class="field-help" data-environment-import-status role="status" aria-live="polite" hidden></span>
       </div>
       <div class="application-form-note">
         <span class="application-form-note-mark" aria-hidden="true">i</span>
