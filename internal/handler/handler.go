@@ -1171,7 +1171,7 @@ func readUploadedEnvironmentFile(r *http.Request, fieldName string) ([]byte, boo
 
 // environmentImportFormField returns the submitted textarea value and whether
 // the field was present in the request body. Presence matters because an empty
-// textbox is an explicit request to clear the managed file, while a missing
+// textbox merges nothing into the managed file, while a missing
 // field means an older client that only uploads files.
 func environmentImportFormField(r *http.Request, fieldName string) (string, bool) {
 	if r.MultipartForm != nil {
@@ -1206,7 +1206,7 @@ func environmentImportFormField(r *http.Request, fieldName string) (string, bool
 // dotenv file into the textbox for review; JavaScript clears the file input
 // after loading, so a non-empty textbox always wins. Without JavaScript an
 // empty textbox with a chosen file still imports the file, while an empty
-// textbox without a file clears the managed file.
+// textbox without a file merges nothing into the managed file.
 func resolveEnvironmentImportContents(r *http.Request, contentField, fileField string) ([]byte, bool, error) {
 	content, contentPresent := environmentImportFormField(r, contentField)
 	fileContents, fileProvided, fileErr := readUploadedEnvironmentFile(r, fileField)

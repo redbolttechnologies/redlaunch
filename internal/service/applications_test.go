@@ -2057,7 +2057,7 @@ func TestApplicationsEnvironmentSecretRejectsUnsafeUpdates(t *testing.T) {
 	}
 }
 
-func TestApplicationsImportEnvironmentFilesReplacesSelectedFiles(t *testing.T) {
+func TestApplicationsImportEnvironmentFilesMergesSelectedFiles(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
@@ -2090,11 +2090,13 @@ func TestApplicationsImportEnvironmentFilesReplacesSelectedFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readServiceFile(t, varsPath); got != variables {
-		t.Fatalf("vars.env after import = %q, want uploaded contents", got)
+	wantVars := "OLD=value\nAPP_NAME=\"Status page\"\nPORT=8080 # local port\n"
+	if got := readServiceFile(t, varsPath); got != wantVars {
+		t.Fatalf("vars.env after import = %q, want merged contents %q", got, wantVars)
 	}
-	if got := readServiceFile(t, secretsPath); got != secrets {
-		t.Fatalf("secrets.env after import = %q, want uploaded contents", got)
+	wantSecrets := "OLD_SECRET=old\nAPI_TOKEN=super-secret\n"
+	if got := readServiceFile(t, secretsPath); got != wantSecrets {
+		t.Fatalf("secrets.env after import = %q, want merged contents %q", got, wantSecrets)
 	}
 	if got := serviceFilePermissions(t, varsPath); got != 0o640 {
 		t.Fatalf("vars.env permissions after import = %o, want existing permissions", got)
@@ -2109,10 +2111,11 @@ func TestApplicationsImportEnvironmentFilesReplacesSelectedFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := readServiceFile(t, varsPath); got != "APP_NAME=updated\n" {
-		t.Fatalf("vars.env after variables-only import = %q, want updated contents", got)
+	wantVars = "OLD=value\nAPP_NAME=updated\nPORT=8080 # local port\n"
+	if got := readServiceFile(t, varsPath); got != wantVars {
+		t.Fatalf("vars.env after variables-only import = %q, want merged contents %q", got, wantVars)
 	}
-	if got := readServiceFile(t, secretsPath); got != secrets {
+	if got := readServiceFile(t, secretsPath); got != wantSecrets {
 		t.Fatalf("secrets.env after variables-only import = %q, want unchanged contents", got)
 	}
 }
@@ -2208,6 +2211,93 @@ func TestApplicationsImportEnvironmentFilesRejectsInvalidInputWithoutChangingFil
 		VariablesProvided: true,
 	}); !errors.Is(err, application.ErrEnvironmentImportFileTooLarge) {
 		t.Fatalf("oversized ImportEnvironmentFiles() error = %v, want too-large error", err)
+	}
+}
+
+func TestApplicationsImportEnvironmentFilesMergeKeepsOverwritesAndAdds(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	originalVars := "# keep this\nKEEP=old\nOVERWRITE=old # keep comment\nexport PREFIXED=old\n"
+	originalSecrets := "# keep secrets\nKEEP_SECRET=old\nOVERWRITE_SECRET=old\n"
+	if err := os.WriteFile(varsPath, []byte(originalVars), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretsPath, []byte(originalSecrets), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.ImportEnvironmentFiles(t.Context(), 7, application.EnvironmentFileImportInput{
+		Variables:         []byte("OVERWRITE=new\nPREFIXED=new\nADDED=value # new note\n"),
+		VariablesProvided: true,
+		Secrets:           []byte("OVERWRITE_SECRET=new-secret\nADDED_SECRET=secret\n"),
+		SecretsProvided:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantVars := "# keep this\nKEEP=old\nOVERWRITE=new # keep comment\nexport PREFIXED=new\nADDED=value # new note\n"
+	if got := readServiceFile(t, varsPath); got != wantVars {
+		t.Fatalf("vars.env after merge = %q, want %q", got, wantVars)
+	}
+	wantSecrets := "# keep secrets\nKEEP_SECRET=old\nOVERWRITE_SECRET=new-secret\nADDED_SECRET=secret\n"
+	if got := readServiceFile(t, secretsPath); got != wantSecrets {
+		t.Fatalf("secrets.env after merge = %q, want %q", got, wantSecrets)
+	}
+}
+
+func TestApplicationsImportEnvironmentFilesEmptyImportKeepsExisting(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	applications, err := NewApplications(repository, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	varsPath := filepath.Join(directory, varsEnvFile)
+	secretsPath := filepath.Join(directory, secretsEnvFile)
+	originalVars := "KEEP=variable\n"
+	originalSecrets := "KEEP_SECRET=secret\n"
+	if err := os.WriteFile(varsPath, []byte(originalVars), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretsPath, []byte(originalSecrets), envFileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applications.ImportEnvironmentFiles(t.Context(), 7, application.EnvironmentFileImportInput{
+		Variables:         []byte{},
+		VariablesProvided: true,
+		Secrets:           []byte("# only a comment\n\n"),
+		SecretsProvided:   true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readServiceFile(t, varsPath); got != originalVars {
+		t.Fatalf("vars.env after empty merge = %q, want unchanged %q", got, originalVars)
+	}
+	if got := readServiceFile(t, secretsPath); got != originalSecrets {
+		t.Fatalf("secrets.env after comment-only merge = %q, want unchanged %q", got, originalSecrets)
+	}
+	if got := serviceFilePermissions(t, varsPath); got != 0o640 {
+		t.Fatalf("vars.env permissions after empty merge = %o, want unchanged", got)
 	}
 }
 

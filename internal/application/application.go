@@ -495,8 +495,8 @@ type EnvironmentFiles struct {
 }
 
 // EnvironmentFileImportInput contains the uploaded managed environment files.
-// A file is replaced only when its corresponding Provided field is true; an
-// empty provided file intentionally clears that managed file.
+// A file is merged only when its corresponding Provided field is true; an
+// empty provided file leaves the managed file unchanged.
 type EnvironmentFileImportInput struct {
 	Variables         []byte
 	VariablesProvided bool
