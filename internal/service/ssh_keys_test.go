@@ -71,7 +71,7 @@ func (g *fakeServerSSHKeyGenerator) Generate(context.Context, string) (string, s
 func TestServerSSHKeyCreateInstallsPublicKey(t *testing.T) {
 	authorizedKeys := filepath.Join(t.TempDir(), ".ssh", "authorized_keys")
 	repository := newFakeServerSSHKeyRepository()
-	service, err := NewServerSSHKeyService(authorizedKeys, "deploy", repository, &fakeServerSSHKeyGenerator{})
+	service, err := NewServerSSHKeyServiceWithPath(authorizedKeys, "redlaunch", repository, &fakeServerSSHKeyGenerator{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestServerSSHKeyCreatePreservesUnmanagedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository := newFakeServerSSHKeyRepository()
-	service, err := NewServerSSHKeyService(authorizedKeys, "deploy", repository, &fakeServerSSHKeyGenerator{})
+	service, err := NewServerSSHKeyServiceWithPath(authorizedKeys, "redlaunch", repository, &fakeServerSSHKeyGenerator{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestServerSSHKeyCreatePreservesUnmanagedKeys(t *testing.T) {
 
 func TestServerSSHKeyCreateRejectsDisplayName(t *testing.T) {
 	authorizedKeys := filepath.Join(t.TempDir(), "authorized_keys")
-	service, err := NewServerSSHKeyService(authorizedKeys, "deploy", newFakeServerSSHKeyRepository(), &fakeServerSSHKeyGenerator{})
+	service, err := NewServerSSHKeyServiceWithPath(authorizedKeys, "redlaunch", newFakeServerSSHKeyRepository(), &fakeServerSSHKeyGenerator{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,11 +185,24 @@ func TestServerSSHKeyCreateRejectsDisplayName(t *testing.T) {
 	}
 }
 
+func TestServerSSHKeyUsesDedicatedUser(t *testing.T) {
+	service, err := NewServerSSHKeyService(newFakeServerSSHKeyRepository(), &fakeServerSSHKeyGenerator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Username() != "redlaunch" {
+		t.Fatalf("SSH username = %q, want redlaunch", service.Username())
+	}
+	if service.AuthorizedKeysPath() != "/home/redlaunch/.ssh/authorized_keys" {
+		t.Fatalf("authorized keys path = %q, want the redlaunch home", service.AuthorizedKeysPath())
+	}
+}
+
 func TestServerSSHKeyRequiresAbsolutePath(t *testing.T) {
-	if _, err := NewServerSSHKeyService("relative/authorized_keys", "deploy", newFakeServerSSHKeyRepository(), nil); err == nil {
+	if _, err := NewServerSSHKeyServiceWithPath("relative/authorized_keys", "redlaunch", newFakeServerSSHKeyRepository(), nil); err == nil {
 		t.Fatal("relative authorized_keys path was accepted")
 	}
-	if _, err := NewServerSSHKeyService("/", "deploy", newFakeServerSSHKeyRepository(), nil); err == nil {
+	if _, err := NewServerSSHKeyServiceWithPath("/", "redlaunch", newFakeServerSSHKeyRepository(), nil); err == nil {
 		t.Fatal("filesystem-root authorized_keys path was accepted")
 	}
 }
@@ -204,7 +217,7 @@ func TestServerSSHKeyRefusesSymlinkedAuthorizedKeys(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewServerSSHKeyService(link, "deploy", newFakeServerSSHKeyRepository(), &fakeServerSSHKeyGenerator{})
+	service, err := NewServerSSHKeyServiceWithPath(link, "redlaunch", newFakeServerSSHKeyRepository(), &fakeServerSSHKeyGenerator{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,6 +141,49 @@ done
 # entered during this setup run when Compose interpolates the .env file.
 unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SECRET AUTH_COOKIE_SECURE MANAGEMENT_ACCESS_MODE APP_BIND_ADDRESS
 
+# Dedicated login user for the Settings SSH keys tab. External automation
+# (for example GitHub Actions) logs in as this user; it owns no Redlaunch
+# files and has no sudo privileges. Password login stays disabled: only keys
+# installed through the SSH keys tab grant access.
+readonly redlaunch_ssh_user=redlaunch
+readonly redlaunch_ssh_dir=/home/redlaunch/.ssh
+readonly redlaunch_authorized_keys=/home/redlaunch/.ssh/authorized_keys
+
+privileged() {
+	if [[ $EUID -eq 0 ]]; then
+		"$@"
+	elif command -v sudo >/dev/null 2>&1; then
+		sudo "$@"
+	else
+		fail 'creating the redlaunch SSH user requires root or sudo'
+	fi
+}
+
+ensure_redlaunch_ssh_user() {
+	if ! id -u "$redlaunch_ssh_user" >/dev/null 2>&1; then
+		printf '\nCreating the dedicated redlaunch SSH user...\n' >&2
+		privileged useradd --create-home --shell /bin/bash --user-group "$redlaunch_ssh_user" ||
+			fail 'could not create the redlaunch user'
+	fi
+	privileged install -d -m 700 -o "$redlaunch_ssh_user" -g "$redlaunch_ssh_user" "$redlaunch_ssh_dir" ||
+		fail 'could not prepare /home/redlaunch/.ssh'
+	if privileged test -L "$redlaunch_authorized_keys"; then
+		fail '/home/redlaunch/.ssh/authorized_keys must not be a symlink'
+	fi
+	if ! privileged test -e "$redlaunch_authorized_keys"; then
+		privileged touch "$redlaunch_authorized_keys" ||
+			fail 'could not create /home/redlaunch/.ssh/authorized_keys'
+	fi
+	privileged chown "$redlaunch_ssh_user:$redlaunch_ssh_user" "$redlaunch_authorized_keys" ||
+		fail 'could not set ownership on /home/redlaunch/.ssh/authorized_keys'
+	privileged chmod 600 "$redlaunch_authorized_keys" ||
+		fail 'could not set permissions on /home/redlaunch/.ssh/authorized_keys'
+	privileged passwd -l "$redlaunch_ssh_user" >/dev/null ||
+		fail 'could not lock password login for the redlaunch user'
+}
+
+ensure_redlaunch_ssh_user
+
 printf '\nEnsuring the persistent application data volume exists...\n' >&2
 docker volume create "$app_data_volume" >/dev/null
 

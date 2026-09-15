@@ -77,15 +77,10 @@
         <header class="service-widget-header">
           <div class="service-widget-heading">
             <h2 id="ssh-keys-title">SSH keys</h2>
-            {{if .SettingsPage.SSHKeysConfigured}}
-            <p>Create SSH keys for external automation, for example GitHub Actions, to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>. Each public key is added to the server authorized keys and removed when the key is revoked.</p>
-            {{else}}
-            <p>Create SSH keys for external automation, for example GitHub Actions, to access this server. Configure the authorized keys location to enable this section.</p>
-            {{end}}
+            <p>Create SSH keys for external automation, for example GitHub Actions, to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>. Each public key is added to the <code>redlaunch</code> user authorized keys and removed when the key is revoked.</p>
           </div>
         </header>
         <div class="service-widget-body">
-          {{if .SettingsPage.SSHKeysConfigured}}
           {{with .SettingsPage.SSHKeySetup}}
           <section class="service-widget github-actions-handoff" aria-labelledby="ssh-key-handoff-title">
             <header class="service-widget-header">
@@ -167,14 +162,6 @@
           <div class="service-widget-empty" role="status">
             <p>No SSH keys are installed on this server.</p>
           </div>
-          {{end}}
-          {{end}}
-          {{else}}
-          <div class="application-alert" role="status">
-            <span>SSH keys are not configured for this server. Set <code>SSH_AUTHORIZED_KEYS_PATH</code> to the host authorized keys file and <code>SSH_KEYS_USERNAME</code> to the login user, then restart Redlaunch.</span>
-          </div>
-          {{if .SettingsPage.SSHKeyError}}
-          <div class="application-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
           {{end}}
           {{end}}
         </div>

@@ -44,9 +44,7 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 	}
 	data := settingsPageData{Domains: domains}
 	if h.serverSSHKeys != nil {
-		data.SSHKeysConfigured = h.serverSSHKeys.Configured()
 		data.SSHKeysUsername = h.serverSSHKeys.Username()
-		data.SSHKeysPath = h.serverSSHKeys.AuthorizedKeysPath()
 		keys, err := h.serverSSHKeys.List(ctx)
 		if err != nil {
 			return settingsPageData{}, err

@@ -270,9 +270,7 @@ type githubActionsService interface {
 }
 
 type serverSSHKeyService interface {
-	Configured() bool
 	Username() string
-	AuthorizedKeysPath() string
 	List(context.Context) ([]application.ServerSSHKey, error)
 	Create(context.Context, string) (application.ServerSSHKeySetup, error)
 	Revoke(context.Context, int64) error
@@ -4798,16 +4796,14 @@ type settingsPageData struct {
 	DomainEdit   *domainEditPageData
 	DomainDelete *domainDeletePageData
 
-	SSHKeys           []application.ServerSSHKey
-	SSHKeysConfigured bool
-	SSHKeysUsername   string
-	SSHKeysPath       string
-	SSHKeySetup       *application.ServerSSHKeySetup
-	SSHKeyError       string
-	SSHKeyNotice      string
-	SSHKeyName        string
-	SSHKeyDelete      *sshKeyDeletePageData
-	SSHActive         bool
+	SSHKeys         []application.ServerSSHKey
+	SSHKeysUsername string
+	SSHKeySetup     *application.ServerSSHKeySetup
+	SSHKeyError     string
+	SSHKeyNotice    string
+	SSHKeyName      string
+	SSHKeyDelete    *sshKeyDeletePageData
+	SSHActive       bool
 }
 
 type sshKeyDeletePageData struct {

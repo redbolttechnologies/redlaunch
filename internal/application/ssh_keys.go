@@ -52,27 +52,3 @@ func ValidateSSHKeyDisplayName(value string) (string, error) {
 	}
 	return name, nil
 }
-
-// ValidateSSHKeyUsername validates the configured OS login name shown in the
-// SSH keys UI. It accepts POSIX-style login names only.
-func ValidateSSHKeyUsername(value string) (string, error) {
-	name := strings.TrimSpace(value)
-	if name == "" {
-		return "", errors.New("SSH username is required")
-	}
-	if len(name) > 32 {
-		return "", errors.New("SSH username is too long")
-	}
-	for index, character := range name {
-		if index == 0 {
-			if character != '_' && !isASCIIAlpha(character) {
-				return "", errors.New("SSH username is invalid")
-			}
-			continue
-		}
-		if character != '_' && character != '-' && !isASCIIAlphaNumeric(character) {
-			return "", errors.New("SSH username is invalid")
-		}
-	}
-	return name, nil
-}

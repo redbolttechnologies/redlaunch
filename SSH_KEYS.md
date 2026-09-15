@@ -5,31 +5,49 @@ automation, for example GitHub Actions, to SSH into this server itself.
 
 Each key has a display name used only in the Redlaunch list, for example
 `GHA migrator workflow access`. Redlaunch generates the pair, installs the
-public key in the host `authorized_keys` file, and shows the private key once.
-Revoking a key removes its public key from `authorized_keys`.
+public key in the dedicated `redlaunch` user authorized keys file, and shows
+the private key once. Revoking a key removes its public key from
+`authorized_keys`.
 
-Keys grant full shell access as the configured login user. Treat them like
-host credentials.
+Keys grant shell access as the dedicated `redlaunch` user. That user owns no
+Redlaunch files and has no sudo privileges. Treat keys like host credentials.
 
 ## Prerequisites
 
-Set both values before starting Redlaunch, and mount the host authorized keys
-file at the identical path inside the manager container:
+`make setup` creates the dedicated user with password login locked:
 
 ```sh
-SSH_AUTHORIZED_KEYS_PATH=/root/.ssh/authorized_keys
-SSH_KEYS_USERNAME=root
+id redlaunch
+sudo grep "redlaunch-ssh-key:" /home/redlaunch/.ssh/authorized_keys
 ```
+
+The manager container mounts the host file at the identical path:
 
 ```yaml
 volumes:
-  - "/root/.ssh/authorized_keys:/root/.ssh/authorized_keys"
+  - "/home/redlaunch/.ssh/authorized_keys:/home/redlaunch/.ssh/authorized_keys"
 ```
 
-The SSH keys tab is disabled while `SSH_AUTHORIZED_KEYS_PATH` is empty. The
-manager preserves unmanaged lines and comments in the file and only rewrites
-lines ending in `redlaunch-ssh-key:<id>`. The file is created with mode `0600`
-when missing and must not be a symlink.
+The manager preserves unmanaged lines and comments in the file and only
+rewrites lines ending in `redlaunch-ssh-key:<id>`. The file is created with
+mode `0600` when missing and must not be a symlink.
+
+Existing installations from before this tab existed need the user once:
+
+```sh
+sudo useradd --create-home --shell /bin/bash --user-group redlaunch
+sudo install -d -m 700 -o redlaunch -g redlaunch /home/redlaunch/.ssh
+sudo touch /home/redlaunch/.ssh/authorized_keys
+sudo chown redlaunch:redlaunch /home/redlaunch/.ssh/authorized_keys
+sudo chmod 600 /home/redlaunch/.ssh/authorized_keys
+sudo passwd -l redlaunch
+```
+
+Then restart the stack so the new mount applies:
+
+```sh
+docker compose up -d
+```
 
 ## Create a key
 
@@ -43,13 +61,13 @@ Use the private key from the external system:
 
 ```sh
 install -m 600 redlaunch-ssh-key-1.key ~/.ssh/redlaunch-key
-ssh -i ~/.ssh/redlaunch-key root@your-server
+ssh -i ~/.ssh/redlaunch-key redlaunch@your-server
 ```
 
 Verify the installed key on the server:
 
 ```sh
-grep "redlaunch-ssh-key:" /root/.ssh/authorized_keys
+grep "redlaunch-ssh-key:" /home/redlaunch/.ssh/authorized_keys
 ```
 
 ## Revoke a key
@@ -61,8 +79,6 @@ key from the external system separately.
 
 ## Troubleshooting
 
-- The tab reports `SSH keys are not configured` when
-  `SSH_AUTHORIZED_KEYS_PATH` is empty.
 - A creation failure leaves no stored metadata; the database row is removed
   when the `authorized_keys` write fails.
 - A revoke failure keeps both the file and the metadata unchanged, except when

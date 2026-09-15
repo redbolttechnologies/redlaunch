@@ -227,6 +227,10 @@ The setup script asks for:
 
 - creates a private <code>.env</code> file;
 - generates a secure session secret when one was not supplied;
+- creates the dedicated <code>redlaunch</code> SSH user with password login
+  locked and an empty <code>/home/redlaunch/.ssh/authorized_keys</code> file
+  for the Settings SSH keys tab (uses <code>sudo</code> unless run as root;
+  existing keys are never overwritten);
 - creates the external <code>redlaunch_app-data</code> Docker volume for the
   SQLite database;
 - adds the first email address to Redlaunch's SQLite login allowlist; and

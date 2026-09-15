@@ -23,8 +23,18 @@ type ServerSSHKeyRepository interface {
 	DeleteServerSSHKey(context.Context, int64) error
 }
 
-// ServerSSHKeyService manages Ed25519 keys that grant SSH access to the host
-// itself. Public keys are persisted in SQLite and mirrored into the host's
+// ServerSSHUsername is the dedicated login user for the Settings SSH keys
+// tab. The user is created by scripts/setup.sh with password login locked;
+// only keys installed through this service grant access.
+const ServerSSHUsername = "redlaunch"
+
+// ServerSSHAuthorizedKeysPath is the host authorized_keys file for the
+// dedicated SSH user. Docker Compose mounts this exact path into the manager
+// container so the service can install and revoke keys.
+const ServerSSHAuthorizedKeysPath = "/home/redlaunch/.ssh/authorized_keys"
+
+// ServerSSHKeyService manages Ed25519 keys for the dedicated redlaunch host
+// user. Public keys are persisted in SQLite and mirrored into the host's
 // authorized_keys file; private keys are returned transiently at creation.
 type ServerSSHKeyService struct {
 	authorizedKeysPath string
@@ -35,27 +45,28 @@ type ServerSSHKeyService struct {
 	mu sync.Mutex
 }
 
-// NewServerSSHKeyService constructs the host SSH key service. An empty
-// authorizedKeysPath leaves the service disabled; List still serves stored
-// metadata while Create and Revoke report that SSH keys are not configured.
-func NewServerSSHKeyService(authorizedKeysPath, username string, repository ServerSSHKeyRepository, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
+// NewServerSSHKeyService constructs the host SSH key service for the
+// dedicated redlaunch user.
+func NewServerSSHKeyService(repository ServerSSHKeyRepository, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
+	return NewServerSSHKeyServiceWithPath(ServerSSHAuthorizedKeysPath, ServerSSHUsername, repository, keyGenerator)
+}
+
+// NewServerSSHKeyServiceWithPath constructs the service with an explicit
+// authorized_keys location. Production code uses NewServerSSHKeyService; tests
+// use this to point at temporary files.
+func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username string, repository ServerSSHKeyRepository, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
 	path := strings.TrimSpace(authorizedKeysPath)
-	if path != "" {
-		if !filepath.IsAbs(path) {
-			return nil, errors.New("SSH authorized keys path must be absolute")
-		}
-		cleaned := filepath.Clean(path)
-		if cleaned == string(filepath.Separator) {
-			return nil, errors.New("SSH authorized keys path must not be the filesystem root")
-		}
-		path = cleaned
+	if path == "" || !filepath.IsAbs(path) {
+		return nil, errors.New("SSH authorized keys path must be absolute")
 	}
+	cleaned := filepath.Clean(path)
+	if cleaned == string(filepath.Separator) {
+		return nil, errors.New("SSH authorized keys path must not be the filesystem root")
+	}
+	path = cleaned
 	name := strings.TrimSpace(username)
 	if name == "" {
-		name = "root"
-	}
-	if _, err := application.ValidateSSHKeyUsername(name); err != nil {
-		return nil, fmt.Errorf("invalid SSH username: %w", err)
+		return nil, errors.New("SSH username is required")
 	}
 	if repository == nil {
 		return nil, errors.New("SSH key service repository is required")
@@ -71,15 +82,10 @@ func NewServerSSHKeyService(authorizedKeysPath, username string, repository Serv
 	}, nil
 }
 
-// Configured reports whether an authorized_keys target is configured.
-func (s *ServerSSHKeyService) Configured() bool {
-	return s != nil && strings.TrimSpace(s.authorizedKeysPath) != ""
-}
-
 // Username returns the OS login name these keys grant access to.
 func (s *ServerSSHKeyService) Username() string {
 	if s == nil || strings.TrimSpace(s.username) == "" {
-		return "root"
+		return ServerSSHUsername
 	}
 	return s.username
 }
@@ -102,9 +108,6 @@ func (s *ServerSSHKeyService) List(ctx context.Context) ([]application.ServerSSH
 func (s *ServerSSHKeyService) Create(ctx context.Context, displayName string) (application.ServerSSHKeySetup, error) {
 	if s == nil || s.repository == nil {
 		return application.ServerSSHKeySetup{}, errors.New("SSH key service is not configured")
-	}
-	if !s.Configured() {
-		return application.ServerSSHKeySetup{}, errors.New("SSH keys are not configured for this server")
 	}
 	normalized, err := application.ValidateSSHKeyDisplayName(displayName)
 	if err != nil {
@@ -151,9 +154,6 @@ func (s *ServerSSHKeyService) Revoke(ctx context.Context, id int64) error {
 	}
 	if id < 1 {
 		return application.ErrSSHKeyNotFound
-	}
-	if !s.Configured() {
-		return errors.New("SSH keys are not configured for this server")
 	}
 
 	s.mu.Lock()

@@ -37,8 +37,6 @@ type Config struct {
 	MetricsScope          string
 	MetricsProcRoot       string
 	MetricsFilesystemRoot string
-	SSHAuthorizedKeysPath string
-	SSHKeysUsername       string
 }
 
 // Load reads configuration from the process environment and an optional dotenv
@@ -70,8 +68,6 @@ func Load() (Config, error) {
 		MetricsScope:          strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "METRICS_SCOPE", MetricsScopeManager))),
 		MetricsProcRoot:       strings.TrimSpace(valueOrDefault(environment, "METRICS_PROC_ROOT", "")),
 		MetricsFilesystemRoot: strings.TrimSpace(valueOrDefault(environment, "METRICS_FILESYSTEM_ROOT", "")),
-		SSHAuthorizedKeysPath: strings.TrimSpace(valueOrDefault(environment, "SSH_AUTHORIZED_KEYS_PATH", "")),
-		SSHKeysUsername:       strings.TrimSpace(valueOrDefault(environment, "SSH_KEYS_USERNAME", "root")),
 	}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
@@ -141,21 +137,6 @@ func Load() (Config, error) {
 	if filepath.Clean(strings.TrimSpace(cfg.RedlaunchDir)) == string(filepath.Separator) {
 		return Config{}, errors.New("REDLAUNCH_DIR must not be the filesystem root")
 	}
-	if cfg.SSHAuthorizedKeysPath != "" {
-		if !filepath.IsAbs(cfg.SSHAuthorizedKeysPath) {
-			return Config{}, errors.New("SSH_AUTHORIZED_KEYS_PATH must be an absolute path")
-		}
-		if filepath.Clean(cfg.SSHAuthorizedKeysPath) == string(filepath.Separator) {
-			return Config{}, errors.New("SSH_AUTHORIZED_KEYS_PATH must not be the filesystem root")
-		}
-		cfg.SSHAuthorizedKeysPath = filepath.Clean(cfg.SSHAuthorizedKeysPath)
-	}
-	if cfg.SSHKeysUsername == "" {
-		cfg.SSHKeysUsername = "root"
-	}
-	if !validSSHUsername(cfg.SSHKeysUsername) {
-		return Config{}, errors.New("SSH_KEYS_USERNAME is invalid")
-	}
 	return cfg, nil
 }
 
@@ -201,26 +182,6 @@ func validContainerName(value string) bool {
 		}
 	}
 	return value != ""
-}
-
-func validSSHUsername(value string) bool {
-	if value == "" || len(value) > 32 {
-		return false
-	}
-	for index, character := range value {
-		letter := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
-		digit := character >= '0' && character <= '9'
-		if index == 0 {
-			if character != '_' && !letter {
-				return false
-			}
-			continue
-		}
-		if character != '_' && character != '-' && !letter && !digit {
-			return false
-		}
-	}
-	return true
 }
 
 // validImageReference accepts Docker image references without whitespace or

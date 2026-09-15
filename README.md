@@ -52,7 +52,9 @@ make update
 ```
 
 This pulls the latest Git changes and rebuilds and restarts the Docker Compose
-deployment.
+deployment. Installations from before the Settings SSH keys tab also need the
+one-time `redlaunch` user setup in the [server SSH keys guide](SSH_KEYS.md)
+before keys can be created.
 
 The same operation is available in the web interface: open **Settings**, find
 **Update Redlaunch**, and click **Update**. It pulls the latest version from

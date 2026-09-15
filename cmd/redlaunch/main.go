@@ -160,19 +160,13 @@ func run(ctx context.Context) error {
 	}
 
 	serverSSHKeys, err := service.NewServerSSHKeyService(
-		cfg.SSHAuthorizedKeysPath,
-		cfg.SSHKeysUsername,
 		database,
 		service.CommandSSHKeyGenerator{},
 	)
 	if err != nil {
 		return fmt.Errorf("create SSH key service: %w", err)
 	}
-	if serverSSHKeys.Configured() {
-		logger.Info("SSH keys configured", "username", serverSSHKeys.Username(), "authorized_keys", serverSSHKeys.AuthorizedKeysPath())
-	} else {
-		logger.Info("SSH keys are not configured; set SSH_AUTHORIZED_KEYS_PATH to enable the Settings SSH keys tab")
-	}
+	logger.Info("SSH keys managed", "username", serverSSHKeys.Username(), "authorized_keys", serverSSHKeys.AuthorizedKeysPath())
 
 	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
 		Directory:    cfg.RedlaunchDir,

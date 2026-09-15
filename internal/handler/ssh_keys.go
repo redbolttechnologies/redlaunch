@@ -31,8 +31,9 @@ func (h *Handler) createServerSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	displayName := r.Form.Get("display_name")
-	if h.serverSSHKeys == nil || !h.serverSSHKeys.Configured() {
-		h.renderSSHKeyError(w, r, displayName, nil, "SSH keys are not configured for this server. Set SSH_AUTHORIZED_KEYS_PATH and restart Redlaunch.", http.StatusInternalServerError)
+	if h.serverSSHKeys == nil {
+		h.logger.Error("create server SSH key without a key service")
+		h.renderSSHKeyError(w, r, displayName, nil, "The SSH key could not be created right now.", http.StatusInternalServerError)
 		return
 	}
 	setup, err := h.serverSSHKeys.Create(r.Context(), displayName)
@@ -83,8 +84,9 @@ func (h *Handler) revokeServerSSHKey(w http.ResponseWriter, r *http.Request) {
 		h.renderSSHKeyDeleteError(w, r, 0, "", "The SSH key could not be found. Refresh the page and try again.", http.StatusBadRequest)
 		return
 	}
-	if h.serverSSHKeys == nil || !h.serverSSHKeys.Configured() {
-		h.renderSSHKeyDeleteError(w, r, id, "", "SSH keys are not configured for this server.", http.StatusInternalServerError)
+	if h.serverSSHKeys == nil {
+		h.logger.Error("revoke server SSH key without a key service")
+		h.renderSSHKeyDeleteError(w, r, id, "", "The SSH key could not be revoked right now.", http.StatusInternalServerError)
 		return
 	}
 	displayName := sshKeyDisplayNameForDelete(r.Context(), h, id)
