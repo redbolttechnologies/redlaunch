@@ -155,6 +155,7 @@ var (
 	ErrGitHubActionsImageInvalid        = errors.New("GitHub Actions image repository is invalid")
 	ErrGitHubActionsServiceRequired     = errors.New("GitHub Actions service is required")
 	ErrGitHubActionsNotConfigured       = errors.New("GitHub Actions deployment is not configured")
+	ErrRegistryUnavailable              = errors.New("local image registry is unavailable")
 )
 
 var (
@@ -540,29 +541,22 @@ type ProxyDomain struct {
 	MappedPath      string
 }
 
-// RegistryImage is one Docker image present on the host. The fields retain
-// Docker's display format so the UI matches docker images output.
+// RegistryImage is one image previously pushed to the managed local image
+// registry, for example by a GitHub Actions workflow through the SSH tunnel.
+// Repository and Tag are the validated registry path and tag; Digest is the
+// manifest digest the tag currently points at and may be empty when it could
+// not be read.
 type RegistryImage struct {
 	Repository string
 	Tag        string
-	ImageID    string
-	CreatedAt  string
-	Size       string
+	Digest     string
 }
 
-// Reference returns the repository and tag in the familiar repository:tag
-// form. Empty parts are kept visible so a <none> entry cannot be mistaken
-// for a named image.
+// Reference returns the pullable image reference for the local registry, in
+// the same localhost:5000/<repository>:<tag> form the GitHub Actions
+// workflow pushes.
 func (image RegistryImage) Reference() string {
-	repository := image.Repository
-	if repository == "" {
-		repository = "<none>"
-	}
-	tag := image.Tag
-	if tag == "" {
-		tag = "<none>"
-	}
-	return repository + ":" + tag
+	return LocalRegistryAddress + "/" + image.Repository + ":" + image.Tag
 }
 
 // BackupSchedule contains the persisted schedule and most recent backup

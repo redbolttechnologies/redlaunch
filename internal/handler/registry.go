@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
+
+	"redlaunch/internal/application"
 )
 
 func (h *Handler) registryPage(w http.ResponseWriter, r *http.Request) {
@@ -26,6 +29,10 @@ func (h *Handler) registryPage(w http.ResponseWriter, r *http.Request) {
 
 	images, err := h.registryImages.ListRegistryImages(r.Context())
 	if err != nil {
+		if errors.Is(err, application.ErrRegistryUnavailable) {
+			h.writeRegistryPage(w, r, http.StatusOK, registryPageData{Unavailable: true})
+			return
+		}
 		h.logger.Error("list registry images", "error", err)
 		h.writeRegistryPage(w, r, http.StatusOK, registryPageData{
 			Error: "The image list could not be read right now.",

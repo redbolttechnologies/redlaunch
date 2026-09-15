@@ -104,7 +104,7 @@ localhost:5000/<image-repository>:<commit-sha>
 
 Set the selected Redlaunch service to the exact commit-SHA image when you are
 ready to deploy it. Updating or restarting that service automatically is not
-part of this workflow.
+part of this workflow. Pushed tags are listed on the Registry page.
 
 ## Rotation and revocation
 

@@ -486,67 +486,6 @@ func TestDecodeServiceRuntimesAcceptsJSONArray(t *testing.T) {
 	}
 }
 
-func TestDecodeImageRuntimesReadsDockerJSONLines(t *testing.T) {
-	output := []byte("{\"Repository\":\"caddy\",\"Tag\":\"2.11.4-alpine\",\"ID\":\"5f5c8640aae0\",\"CreatedAt\":\"2026-06-22 22:12:24 +0200 CEST\",\"Size\":\"84.9MB\"}\n" +
-		"{\"Repository\":\"registry\",\"Tag\":\"3.1.1\",\"ID\":\"1be55279f18a\",\"CreatedAt\":\"2026-06-22 21:54:07 +0200 CEST\",\"Size\":\"80.1MB\"}")
-
-	got, err := decodeImageRuntimes(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("decodeImageRuntimes() returned %d rows, want 2", len(got))
-	}
-	if got[0] != (ImageRuntime{Repository: "caddy", Tag: "2.11.4-alpine", ID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"}) {
-		t.Fatalf("decoded first image = %#v", got[0])
-	}
-	if got[1].Repository != "registry" || got[1].Tag != "3.1.1" || got[1].ID != "1be55279f18a" || got[1].Size != "80.1MB" {
-		t.Fatalf("decoded second image = %#v", got[1])
-	}
-}
-
-func TestDecodeImageRuntimesAcceptsJSONArrayAndEmptyOutput(t *testing.T) {
-	got, err := decodeImageRuntimes([]byte(`[{"Repository":"redis","Tag":"7","ID":"71da9275c5f3","Size":"192MB"}]`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Repository != "redis" || got[0].Tag != "7" || got[0].ID != "71da9275c5f3" {
-		t.Fatalf("decoded JSON array = %#v, want redis image", got)
-	}
-
-	empty, err := decodeImageRuntimes([]byte("  \n "))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(empty) != 0 {
-		t.Fatalf("decodeImageRuntimes(empty) = %#v, want no images", empty)
-	}
-}
-
-func TestCommandRunnerListImagesUsesExplicitDockerArguments(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\nprintf '%s\\n' '{\"Repository\":\"caddy\",\"Tag\":\"2.11.4-alpine\",\"ID\":\"5f5c8640aae0\",\"Size\":\"84.9MB\"}'\n"
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := (CommandRunner{Binary: binary}).ListImages(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Repository != "caddy" || got[0].Tag != "2.11.4-alpine" || got[0].ID != "5f5c8640aae0" {
-		t.Fatalf("ListImages() = %#v, want caddy image", got)
-	}
-	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	args := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	if strings.Join(args, "\x00") != "images\x00--format\x00json" {
-		t.Fatalf("ListImages() arguments = %#v, want images --format json", args)
-	}
-}
-
 func TestCommandRunnerIsServiceRunningReadsComposeRuntimeState(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string

@@ -4594,7 +4594,10 @@ type proxyPageData struct {
 
 type registryPageData struct {
 	Images []application.RegistryImage
-	Error  string
+	// Unavailable reports that the local registry container is not
+	// installed or not running, as opposed to a failed inspection.
+	Unavailable bool
+	Error       string
 }
 
 type settingsPageData struct {

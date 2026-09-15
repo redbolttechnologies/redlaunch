@@ -154,6 +154,11 @@ func run(ctx context.Context) error {
 	}
 	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
 
+	registry, err := service.NewRegistryService(service.RegistryContainerName, compose.CommandRunner{})
+	if err != nil {
+		return fmt.Errorf("create registry service: %w", err)
+	}
+
 	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
 		Directory:    cfg.RedlaunchDir,
 		UpdaterImage: cfg.RedlaunchImage,
@@ -178,6 +183,7 @@ func run(ctx context.Context) error {
 		Applications:  applications,
 		Backups:       backupManager,
 		GitHubActions: githubActions,
+		Registry:      registry,
 		SelfUpdate:    selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,

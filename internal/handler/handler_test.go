@@ -6287,10 +6287,10 @@ func TestRevokeGitHubActionsRequiresCSRFAndRedirects(t *testing.T) {
 	}
 }
 
-func TestRegistryRendersMenuAndPresentImages(t *testing.T) {
+func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 	registry := &fakeRegistryService{images: []application.RegistryImage{
-		{Repository: "caddy", Tag: "2.11.4-alpine", ImageID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
-		{Repository: "<unsafe>", Tag: "latest", ImageID: "d21905ceb6c9", CreatedAt: "2026-09-12 21:44:36 +0200 CEST", Size: "187MB"},
+		{Repository: "status-page/web", Tag: "abc123", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Repository: "<unsafe>", Tag: "latest", Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 	}}
 	web, err := New(nil, registry)
 	if err != nil {
@@ -6311,14 +6311,13 @@ func TestRegistryRendersMenuAndPresentImages(t *testing.T) {
 		`>Registry</span>`,
 		`class="side-menu-item side-menu-item-active"`,
 		`aria-current="page"`,
-		`<h2 id="registry-images-title">Images</h2>`,
+		`<h2 id="registry-images-title">Pushed images</h2>`,
 		`>Repository</th>`,
 		`>Tag</th>`,
-		`>Image ID</th>`,
-		`caddy`,
-		`2.11.4-alpine`,
-		`5f5c8640aae0`,
-		`84.9MB`,
+		`>Digest</th>`,
+		`status-page/web`,
+		`abc123`,
+		`sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
 		`&lt;unsafe&gt;`,
 		`aria-labelledby="page-title"`,
 	} {
@@ -6349,8 +6348,25 @@ func TestRegistryRendersEmptyState(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	if body := recorder.Body.String(); !strings.Contains(body, "No images are present on this host.") {
+	if body := recorder.Body.String(); !strings.Contains(body, "No images have been pushed to the local registry yet.") {
 		t.Fatalf("GET /registry empty state missing: %s", body)
+	}
+}
+
+func TestRegistryRendersUnavailableState(t *testing.T) {
+	web, err := New(nil, &fakeRegistryService{err: application.ErrRegistryUnavailable})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "The local registry is not available.") {
+		t.Fatalf("GET /registry unavailable state missing: %s", body)
 	}
 }
 

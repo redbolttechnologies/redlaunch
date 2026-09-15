@@ -7,7 +7,7 @@
   <header class="page-heading">
     <div class="page-heading-copy">
       <h1 id="page-title">Registry</h1>
-      <p>Images currently present on this host.</p>
+      <p>Images previously pushed to the local registry.</p>
     </div>
   </header>
 
@@ -23,40 +23,40 @@
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
       <div class="service-widget-heading">
-        <h2 id="registry-images-title">Images</h2>
-        <p>Local Docker images available to managed Compose projects.</p>
+        <h2 id="registry-images-title">Pushed images</h2>
+        <p>Tags pushed through the GitHub Actions SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
       </div>
     </header>
     <div class="service-widget-body">
       {{if .RegistryPage.Images}}
       <div class="service-environment-table-wrap">
         <table class="service-environment-table registry-images-table">
-          <caption class="sr-only">Docker images present on this host</caption>
+          <caption class="sr-only">Images pushed to the local registry</caption>
           <thead>
             <tr>
               <th scope="col">Repository</th>
               <th scope="col">Tag</th>
-              <th scope="col">Image ID</th>
-              <th scope="col">Created</th>
-              <th scope="col">Size</th>
+              <th scope="col">Digest</th>
             </tr>
           </thead>
           <tbody>
             {{range .RegistryPage.Images}}
             <tr>
-              <th scope="row"><code>{{if .Repository}}{{.Repository}}{{else}}&lt;none&gt;{{end}}</code></th>
-              <td><code>{{if .Tag}}{{.Tag}}{{else}}&lt;none&gt;{{end}}</code></td>
-              <td><code>{{if .ImageID}}{{.ImageID}}{{else}}—{{end}}</code></td>
-              <td>{{if .CreatedAt}}{{.CreatedAt}}{{else}}—{{end}}</td>
-              <td><code>{{if .Size}}{{.Size}}{{else}}—{{end}}</code></td>
+              <th scope="row"><code>{{.Repository}}</code></th>
+              <td><code>{{.Tag}}</code></td>
+              <td><code>{{if .Digest}}{{.Digest}}{{else}}—{{end}}</code></td>
             </tr>
             {{end}}
           </tbody>
         </table>
       </div>
+      {{else if .RegistryPage.Unavailable}}
+      <div class="service-widget-empty" role="status">
+        <p>The local registry is not available. Install it during setup or configure a GitHub Actions deployment, which starts it automatically.</p>
+      </div>
       {{else}}
       <div class="service-widget-empty" role="status">
-        <p>No images are present on this host.</p>
+        <p>No images have been pushed to the local registry yet.</p>
       </div>
       {{end}}
     </div>

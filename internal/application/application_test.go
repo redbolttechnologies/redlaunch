@@ -271,11 +271,9 @@ func TestDefaultApplicationImageName(t *testing.T) {
 }
 
 func TestRegistryImageReference(t *testing.T) {
-	if got := (RegistryImage{Repository: "caddy", Tag: "2.11.4-alpine"}).Reference(); got != "caddy:2.11.4-alpine" {
-		t.Fatalf("Reference() = %q, want caddy:2.11.4-alpine", got)
-	}
-	if got := (RegistryImage{}).Reference(); got != "<none>:<none>" {
-		t.Fatalf("Reference() = %q, want <none>:<none>", got)
+	got := (RegistryImage{Repository: "status-page/web", Tag: "abc123"}).Reference()
+	if got != "localhost:5000/status-page/web:abc123" {
+		t.Fatalf("Reference() = %q, want localhost:5000/status-page/web:abc123", got)
 	}
 }
 
