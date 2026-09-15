@@ -28,6 +28,8 @@ func setBackupConfigTestEnvironment(t *testing.T) {
 	t.Setenv("METRICS_SCOPE", MetricsScopeManager)
 	t.Setenv("METRICS_PROC_ROOT", "")
 	t.Setenv("METRICS_FILESYSTEM_ROOT", "")
+	t.Setenv("SSH_AUTHORIZED_KEYS_PATH", "")
+	t.Setenv("SSH_KEYS_USERNAME", "root")
 }
 
 func TestLoadAcceptsGoogleAuthenticationConfiguration(t *testing.T) {

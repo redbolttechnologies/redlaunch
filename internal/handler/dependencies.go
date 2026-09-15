@@ -18,6 +18,7 @@ type Dependencies struct {
 	Applications   applicationService
 	Backups        serviceBackupService
 	GitHubActions  githubActionsService
+	ServerSSHKeys  serverSSHKeyService
 	Registry       registryImageService
 	Metrics        dashboardMetricsService
 	Authentication authenticationService
@@ -60,6 +61,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	}
 	if deps.GitHubActions != nil {
 		assembled = append(assembled, deps.GitHubActions)
+	}
+	if deps.ServerSSHKeys != nil {
+		assembled = append(assembled, deps.ServerSSHKeys)
 	}
 	if deps.Registry != nil {
 		assembled = append(assembled, deps.Registry)

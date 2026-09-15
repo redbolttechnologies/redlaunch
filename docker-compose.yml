@@ -59,6 +59,11 @@ services:
       # egress address (the host public IP on a VPS) before falling back.
       HOST_HOSTNAME: "${HOSTNAME:-}"
       HOST_PUBLIC_IP: "${HOST_PUBLIC_IP:-}"
+      # SSH keys tab in Settings. Set SSH_AUTHORIZED_KEYS_PATH to the host
+      # authorized_keys file and mount that file at the identical path so the
+      # manager can install and revoke host shell keys. Leave empty to disable.
+      SSH_AUTHORIZED_KEYS_PATH: "${SSH_AUTHORIZED_KEYS_PATH:-}"
+      SSH_KEYS_USERNAME: "${SSH_KEYS_USERNAME:-root}"
       # Keep the container listener aligned with the host port so managed
       # Caddy routing through host.docker.internal works when APP_PORT is
       # changed from the default.
@@ -75,6 +80,9 @@ services:
       - "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket"
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "${REDLAUNCH_DIR:-${PWD}}:${REDLAUNCH_DIR:-${PWD}}"
+      # To enable the Settings SSH keys tab, mount the host authorized_keys
+      # file at the identical path, for example:
+      # - "/root/.ssh/authorized_keys:/root/.ssh/authorized_keys"
 
 volumes:
   app-data:

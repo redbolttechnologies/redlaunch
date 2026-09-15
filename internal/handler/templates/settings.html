@@ -13,11 +13,12 @@
 
   <div class="application-tabs settings-tabs" data-application-tabs>
     <div class="application-tablist settings-tablist" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
-      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="true" tabindex="0" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="{{if .SettingsPage.SSHActive}}false{{else}}true{{end}}" tabindex="{{if .SettingsPage.SSHActive}}-1{{else}}0{{end}}" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="ssh-keys-tab" type="button" role="tab" aria-controls="ssh-keys-panel" aria-selected="{{if .SettingsPage.SSHActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.SSHActive}}0{{else}}-1{{end}}" data-application-tab="ssh-keys-panel">SSH keys</button>
       <button class="application-tab" id="software-update-tab" type="button" role="tab" aria-controls="software-update-panel" aria-selected="false" tabindex="-1" data-application-tab="software-update-panel">Software update</button>
     </div>
 
-    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0">
+    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if .SettingsPage.SSHActive}} hidden{{end}}>
       <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">
@@ -66,6 +67,115 @@
           <div class="service-widget-empty" role="status">
             <p>No domains are configured for Redlaunch public access.</p>
           </div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="ssh-keys-panel" role="tabpanel" aria-labelledby="ssh-keys-tab" tabindex="0"{{if .SettingsPage.SSHActive}}{{else}} hidden{{end}}>
+      <section class="service-widget settings-ssh-keys" aria-labelledby="ssh-keys-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="ssh-keys-title">SSH keys</h2>
+            {{if .SettingsPage.SSHKeysConfigured}}
+            <p>Create SSH keys for external automation, for example GitHub Actions, to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>. Each public key is added to the server authorized keys and removed when the key is revoked.</p>
+            {{else}}
+            <p>Create SSH keys for external automation, for example GitHub Actions, to access this server. Configure the authorized keys location to enable this section.</p>
+            {{end}}
+          </div>
+        </header>
+        <div class="service-widget-body">
+          {{if .SettingsPage.SSHKeysConfigured}}
+          {{with .SettingsPage.SSHKeySetup}}
+          <section class="service-widget github-actions-handoff" aria-labelledby="ssh-key-handoff-title">
+            <header class="service-widget-header">
+              <div class="service-widget-heading">
+                <h3 id="ssh-key-handoff-title">Store this private key now</h3>
+                <p>Key <strong>{{.Key.DisplayName}}</strong> was created. This private key will not be shown again.</p>
+              </div>
+            </header>
+            <div class="service-widget-body github-actions-handoff-body">
+              <div class="application-alert" role="alert">
+                <strong>Store the private key safely.</strong>
+                <span>It will not be displayed again. Add it to the external system, for example as a GitHub Actions secret, then keep a secure backup.</span>
+              </div>
+              <div class="field">
+                <label for="ssh-key-private-value">Private key for {{.Key.DisplayName}}</label>
+                <textarea id="ssh-key-private-value" class="github-actions-secret" rows="12" readonly autocomplete="off" spellcheck="false">{{.PrivateKey}}</textarea>
+                <div class="application-form-actions">
+                  <button class="button button-secondary" type="button" data-copy-target="ssh-key-private-value"><span>Copy private key</span></button>
+                  <button class="button button-secondary" type="button" data-ssh-key-download data-ssh-key-source="ssh-key-private-value" data-ssh-key-filename="redlaunch-ssh-key-{{.Key.ID}}.key"><span>Download private key</span></button>
+                </div>
+                <span class="field-help">Fingerprint: <code>{{.Key.KeyFingerprint}}</code>. The matching public key is already installed on this server.</span>
+              </div>
+            </div>
+          </section>
+          {{end}}
+          {{if .SettingsPage.SSHKeyError}}
+          <div class="application-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
+          {{end}}
+          {{if .SettingsPage.SSHKeyNotice}}
+          <div class="application-alert" role="status"><span>{{.SettingsPage.SSHKeyNotice}}</span></div>
+          {{end}}
+          <form class="application-form" method="post" action="/settings/ssh-keys">
+            <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+            <div class="field">
+              <label for="ssh-key-display-name">Display name</label>
+              <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
+              <span class="field-help">Only shown in this list. The key grants full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
+            </div>
+            <div class="application-form-actions">
+              <button class="button button-primary" type="submit">Create SSH key</button>
+            </div>
+          </form>
+          {{if .SettingsPage.SSHKeys}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <caption class="sr-only">SSH keys installed on this server</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Display name</th>
+                  <th scope="col">Fingerprint</th>
+                  <th scope="col">Created</th>
+                  <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .SettingsPage.SSHKeys}}
+                <tr>
+                  <th scope="row">{{.DisplayName}}</th>
+                  <td><code>{{.KeyFingerprint}}</code></td>
+                  <td><time datetime="{{backupAtISO .CreatedAt}}">{{backupAt .CreatedAt}}</time></td>
+                  <td class="application-environment-actions">
+                    <div class="application-environment-action-group">
+                      <button class="application-environment-delete" type="button" data-ssh-key-revoke data-ssh-key-id="{{.ID}}" data-ssh-key-name="{{.DisplayName}}" aria-controls="ssh-key-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Revoke SSH key {{.DisplayName}}">
+                        <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M3 6h18"></path>
+                          <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+                          <path d="M10 11v5M14 11v5"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          {{if .SettingsPage.SSHKeySetup}}{{else}}
+          <div class="service-widget-empty" role="status">
+            <p>No SSH keys are installed on this server.</p>
+          </div>
+          {{end}}
+          {{end}}
+          {{else}}
+          <div class="application-alert" role="status">
+            <span>SSH keys are not configured for this server. Set <code>SSH_AUTHORIZED_KEYS_PATH</code> to the host authorized keys file and <code>SSH_KEYS_USERNAME</code> to the login user, then restart Redlaunch.</span>
+          </div>
+          {{if .SettingsPage.SSHKeyError}}
+          <div class="application-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
+          {{end}}
           {{end}}
         </div>
       </section>
@@ -149,6 +259,36 @@
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-domain-delete-close data-domain-delete-cancel>Cancel</button>
         <button class="button button-destructive" type="submit" data-domain-delete-submit>Delete domain</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog ssh-key-delete-dialog" id="ssh-key-delete-dialog" data-ssh-key-delete-dialog{{with .SettingsPage.SSHKeyDelete}}{{if .Open}} data-ssh-key-delete-open{{end}}{{end}} aria-modal="true" aria-labelledby="ssh-key-delete-dialog-title" aria-describedby="ssh-key-delete-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="ssh-key-delete-dialog-title">Revoke SSH key</h2>
+        <p id="ssh-key-delete-dialog-description">Remove <code data-ssh-key-delete-name-display>{{with .SettingsPage.SSHKeyDelete}}{{.DisplayName}}{{end}}</code> from the server authorized keys? External systems using this key will lose access immediately. This action cannot be undone.</p>
+      </div>
+      <button class="icon-button" type="button" data-ssh-key-delete-close aria-label="Close revoke SSH key dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/ssh-keys/delete">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      <input type="hidden" name="id" value="{{with .SettingsPage.SSHKeyDelete}}{{.ID}}{{end}}" data-ssh-key-delete-id-input>
+      {{with .SettingsPage.SSHKeyDelete}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-ssh-key-delete-close data-ssh-key-delete-cancel>Cancel</button>
+        <button class="button button-destructive" type="submit" data-ssh-key-delete-submit>Revoke key</button>
       </footer>
     </form>
   </div>

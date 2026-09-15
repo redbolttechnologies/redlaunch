@@ -1695,6 +1695,31 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record Redlaunch domains migration: %w", err)
 		}
 	}
+
+	var serverSSHKeysMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 16`).Scan(&serverSSHKeysMigrationApplied); err != nil {
+		return fmt.Errorf("check server SSH keys migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS server_ssh_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			display_name TEXT NOT NULL,
+			public_key TEXT NOT NULL UNIQUE,
+			key_fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create server SSH keys table: %w", err)
+	}
+	if serverSSHKeysMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (16, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record server SSH keys migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

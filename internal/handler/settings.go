@@ -42,7 +42,18 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 	if err != nil {
 		return settingsPageData{}, err
 	}
-	return settingsPageData{Domains: domains}, nil
+	data := settingsPageData{Domains: domains}
+	if h.serverSSHKeys != nil {
+		data.SSHKeysConfigured = h.serverSSHKeys.Configured()
+		data.SSHKeysUsername = h.serverSSHKeys.Username()
+		data.SSHKeysPath = h.serverSSHKeys.AuthorizedKeysPath()
+		keys, err := h.serverSSHKeys.List(ctx)
+		if err != nil {
+			return settingsPageData{}, err
+		}
+		data.SSHKeys = keys
+	}
+	return data, nil
 }
 
 func (h *Handler) createRedlaunchDomain(w http.ResponseWriter, r *http.Request) {

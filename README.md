@@ -73,6 +73,9 @@ To open a shell inside the running Redlaunch container (`redbolt-redlaunch`):
 For the GitHub Actions wizard, generated workflow, and secure handoff steps,
 see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 
+For host shell access from external automation, see the
+[server SSH keys guide](SSH_KEYS.md).
+
 ## What it can do
 
 - Create and manage Docker Compose applications.
@@ -89,6 +92,7 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Configure repository-specific GitHub Actions image builds through a restricted
   SSH tunnel to the local registry.
+- Create and revoke server SSH keys for external automation from Settings.
 - Limit access to an allowlist of Google accounts.
 
 ## First steps

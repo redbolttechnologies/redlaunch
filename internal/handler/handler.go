@@ -53,6 +53,7 @@ type Handler struct {
 	redisManager                   redisService
 	applicationContainerManager    applicationContainerService
 	githubActions                  githubActionsService
+	serverSSHKeys                  serverSSHKeyService
 	githubActionsJobs              *githubActionsJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
@@ -268,6 +269,15 @@ type githubActionsService interface {
 	CleanupApplicationKey(context.Context, int64) error
 }
 
+type serverSSHKeyService interface {
+	Configured() bool
+	Username() string
+	AuthorizedKeysPath() string
+	List(context.Context) ([]application.ServerSSHKey, error)
+	Create(context.Context, string) (application.ServerSSHKeySetup, error)
+	Revoke(context.Context, int64) error
+}
+
 type selfUpdateService interface {
 	QueueUpdateWithProgress(context.Context, func(stage, message string)) error
 }
@@ -349,6 +359,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	redis := redisService(noApplicationService{})
 	applicationContainer := applicationContainerService(noApplicationService{})
 	githubActions := githubActionsService(noGitHubActionsService{})
+	var serverSSHKeys serverSSHKeyService
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
 	var registryImages registryImageService
@@ -541,6 +552,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				githubActions = dependency
 			}
+		case serverSSHKeyService:
+			if dependency != nil {
+				serverSSHKeys = dependency
+			}
 		case proxyDetailsService:
 			if dependency != nil {
 				proxy = dependency
@@ -623,6 +638,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		redisManager:                   redis,
 		applicationContainerManager:    applicationContainer,
 		githubActions:                  githubActions,
+		serverSSHKeys:                  serverSSHKeys,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
@@ -686,6 +702,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /settings", h.settingsPage)
 	mux.HandleFunc("POST /settings/domains", h.createRedlaunchDomain)
 	mux.HandleFunc("POST /settings/domains/delete", h.deleteRedlaunchDomain)
+	mux.HandleFunc("POST /settings/ssh-keys", h.createServerSSHKey)
+	mux.HandleFunc("POST /settings/ssh-keys/delete", h.revokeServerSSHKey)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
@@ -4779,6 +4797,24 @@ type settingsPageData struct {
 	CSRFToken    string
 	DomainEdit   *domainEditPageData
 	DomainDelete *domainDeletePageData
+
+	SSHKeys           []application.ServerSSHKey
+	SSHKeysConfigured bool
+	SSHKeysUsername   string
+	SSHKeysPath       string
+	SSHKeySetup       *application.ServerSSHKeySetup
+	SSHKeyError       string
+	SSHKeyNotice      string
+	SSHKeyName        string
+	SSHKeyDelete      *sshKeyDeletePageData
+	SSHActive         bool
+}
+
+type sshKeyDeletePageData struct {
+	Open        bool
+	ID          int64
+	DisplayName string
+	Error       string
 }
 
 type postgresqlServicePageData struct {
