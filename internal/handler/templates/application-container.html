@@ -13,13 +13,17 @@
     <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
       <path d="m9 18 6-6-6-6"></path>
     </svg>
-    <span aria-current="page">Create application container</span>
+    <span aria-current="page">{{if .ApplicationContainerPage.IsEdit}}Edit <code>{{.ApplicationContainerPage.ServiceName}}</code>{{else}}Create application container{{end}}</span>
   </nav>
 
   <header class="page-heading service-form-heading">
     <div class="page-heading-copy">
-      <h1 id="page-title">Create application container</h1>
+      <h1 id="page-title">{{if .ApplicationContainerPage.IsEdit}}Edit application container{{else}}Create application container{{end}}</h1>
+      {{if .ApplicationContainerPage.IsEdit}}
+      <p>Update the configuration for <code>{{.ApplicationContainerPage.ServiceName}}</code> in <strong>{{.ApplicationContainerPage.Application.Name}}</strong>.</p>
+      {{else}}
       <p>Run a custom application container alongside <strong>{{.ApplicationContainerPage.Application.Name}}</strong>.</p>
+      {{end}}
     </div>
   </header>
 
@@ -34,14 +38,18 @@
     </div>
     {{end}}
 
-    <form class="application-form service-form" method="post" action="/applications/{{.ApplicationContainerPage.Application.ID}}/services/application/new">
+    <form class="application-form service-form" method="post" action="{{if .ApplicationContainerPage.IsEdit}}/applications/{{.ApplicationContainerPage.Application.ID}}/services/{{.ApplicationContainerPage.ServiceName}}/edit{{else}}/applications/{{.ApplicationContainerPage.Application.ID}}/services/application/new{{end}}">
       <input type="hidden" name="csrf_token" value="{{.ApplicationContainerPage.CSRFToken}}">
 
       <div class="service-form-grid">
         <div class="field">
           <label for="application-container-service-name">Service name</label>
-          <input id="application-container-service-name" name="service_name" type="text" maxlength="64" value="{{.ApplicationContainerPage.ServiceName}}" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+          <input id="application-container-service-name" name="service_name" type="text" maxlength="64" value="{{.ApplicationContainerPage.ServiceName}}" autocomplete="off" autocapitalize="none" spellcheck="false" required{{if .ApplicationContainerPage.IsEdit}} readonly aria-readonly="true"{{end}}>
+          {{if .ApplicationContainerPage.IsEdit}}
+          <span class="field-help">Service names cannot be changed after creation.</span>
+          {{else}}
           <span class="field-help">The Compose service name. Defaults to <code>app</code>.</span>
+          {{end}}
         </div>
 
         <div class="field">
@@ -62,6 +70,8 @@
           </label>
         </div>
 
+        {{if .ApplicationContainerPage.IsEdit}}
+        {{else}}
         <div class="field">
           <span class="field-label">Startup</span>
           <label class="switch-field" for="application-container-auto-start">
@@ -73,6 +83,7 @@
             <span class="switch-visual" aria-hidden="true"><span></span></span>
           </label>
         </div>
+        {{end}}
       </div>
 
       <section class="advanced-settings" aria-labelledby="advanced-settings-title">
@@ -356,12 +367,21 @@
 
       <div class="application-form-note">
         <span class="application-form-note-mark" aria-hidden="true">i</span>
+        {{if .ApplicationContainerPage.IsEdit}}
+        <span>The container definition in <code>compose.yml</code> will be updated and the container will be recreated so changes take effect immediately.</span>
+        {{else}}
         <span>The container definition will be added to <code>compose.yml</code> and both environment files will be loaded{{if .ApplicationContainerPage.AutoStart}}; the container will start immediately{{else}}. The container will remain stopped until you start it{{end}}.</span>
+        {{end}}
       </div>
 
       <footer class="application-form-actions">
+        {{if .ApplicationContainerPage.IsEdit}}
+        <a class="button button-secondary" href="/applications/{{.ApplicationContainerPage.Application.ID}}/services/{{.ApplicationContainerPage.ServiceName}}">Cancel</a>
+        <button class="button button-primary" type="submit">Save changes</button>
+        {{else}}
         <a class="button button-secondary" href="/applications/{{.ApplicationContainerPage.Application.ID}}">Cancel</a>
         <button class="button button-primary" type="submit">Create container</button>
+        {{end}}
       </footer>
     </form>
   </div>

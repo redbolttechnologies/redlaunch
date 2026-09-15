@@ -273,6 +273,20 @@ func (s *applicationRepositoryStub) CreateService(_ context.Context, item applic
 	return item, nil
 }
 
+func (s *applicationRepositoryStub) UpdateServiceImage(_ context.Context, applicationID int64, serviceName, imageName string) (application.Service, error) {
+	if s.serviceErr != nil {
+		return application.Service{}, s.serviceErr
+	}
+	for index := range s.services {
+		if s.services[index].ApplicationID == applicationID && s.services[index].Name == serviceName {
+			s.services[index].ImageName = imageName
+			s.service = s.services[index]
+			return s.services[index], nil
+		}
+	}
+	return application.Service{}, application.ErrServiceNotFound
+}
+
 func (s *applicationRepositoryStub) CreateDomain(_ context.Context, item application.Domain) (application.Domain, error) {
 	if s.domainErr != nil {
 		return application.Domain{}, s.domainErr

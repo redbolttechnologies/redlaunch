@@ -322,6 +322,13 @@ type fakeApplicationService struct {
 	applicationContainerStarted   chan struct{}
 	applicationContainerRelease   chan struct{}
 	applicationContainerStages    []string
+	applicationContainerConfig    application.ApplicationServiceInput
+	applicationContainerConfigErr error
+	applicationContainerUpdateID  int64
+	applicationContainerUpdateName string
+	applicationContainerUpdateInput application.ApplicationServiceInput
+	applicationContainerUpdateErr error
+	applicationContainerUpdated   application.Service
 	serviceAction                 string
 	serviceActionID               int64
 	serviceActionName             string
@@ -797,8 +804,40 @@ func (s *fakeApplicationService) ValidateApplicationServiceInput(input applicati
 	if strings.TrimSpace(imageName) == "" {
 		imageName = application.DefaultApplicationImageName(input.ServiceName)
 	}
-	_, err := application.ValidateImageName(imageName)
-	return err
+	if _, err := application.ValidateImageName(imageName); err != nil {
+		return err
+	}
+	if policy := strings.TrimSpace(input.RestartPolicy); policy != "" {
+		switch policy {
+		case application.ApplicationRestartPolicyNo,
+			application.ApplicationRestartPolicyAlways,
+			application.ApplicationRestartPolicyOnFailure,
+			application.ApplicationRestartPolicyUnlessStopped:
+		default:
+			return application.ErrApplicationRestartPolicyInvalid
+		}
+	}
+	return nil
+}
+
+func (s *fakeApplicationService) GetApplicationServiceConfig(_ context.Context, _ int64, _ string) (application.ApplicationServiceInput, error) {
+	if s.applicationContainerConfigErr != nil {
+		return application.ApplicationServiceInput{}, s.applicationContainerConfigErr
+	}
+	return s.applicationContainerConfig, nil
+}
+
+func (s *fakeApplicationService) UpdateApplicationService(_ context.Context, id int64, serviceName string, input application.ApplicationServiceInput) (application.Service, error) {
+	s.applicationContainerUpdateID = id
+	s.applicationContainerUpdateName = serviceName
+	s.applicationContainerUpdateInput = input
+	if s.applicationContainerUpdateErr != nil {
+		return application.Service{}, s.applicationContainerUpdateErr
+	}
+	if s.applicationContainerUpdated.Name != "" {
+		return s.applicationContainerUpdated, nil
+	}
+	return application.Service{ApplicationID: id, Name: serviceName, Type: application.ServiceTypeApplication, ImageName: input.ImageName}, nil
 }
 
 func (m *fakeSetupManager) NeedsSetup() (bool, error) {

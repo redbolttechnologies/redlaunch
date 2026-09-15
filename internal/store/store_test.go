@@ -482,6 +482,46 @@ func TestStoreCreatesApplicationContainerMetadata(t *testing.T) {
 	}
 }
 
+func TestStoreUpdatesServiceImageMetadata(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	created, err := database.Create(t.Context(), application.Application{Name: "Status page", FolderName: "status-page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := database.CreateService(t.Context(), application.Service{
+		ApplicationID: created.ID,
+		Name:          "web",
+		Type:          application.ServiceTypeApplication,
+		ImageName:     "localhost:5000/web:latest",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := database.UpdateServiceImage(t.Context(), created.ID, "web", "ghcr.io/example/web:v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != service.ID || updated.ImageName != "ghcr.io/example/web:v2" {
+		t.Fatalf("updated service = %#v, want image ghcr.io/example/web:v2", updated)
+	}
+	services, err := database.ListServices(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0].ImageName != "ghcr.io/example/web:v2" {
+		t.Fatalf("ListServices() after update = %#v, want updated image", services)
+	}
+	if _, err := database.UpdateServiceImage(t.Context(), created.ID, "missing", "ghcr.io/example/missing:v1"); !errors.Is(err, application.ErrServiceNotFound) {
+		t.Fatalf("UpdateServiceImage(missing) error = %v, want %v", err, application.ErrServiceNotFound)
+	}
+}
+
 func TestStoreDeletesServiceMetadataByApplicationAndName(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {

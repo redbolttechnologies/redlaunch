@@ -715,6 +715,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /applications/{id}/services/application/new", h.applicationContainerPage)
 	mux.HandleFunc("GET /applications/{id}/services/application/status", h.applicationContainerStatus)
 	mux.HandleFunc("POST /applications/{id}/services/application/new", h.createApplicationContainer)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/edit", h.editApplicationContainerPage)
+	mux.HandleFunc("POST /applications/{id}/services/{service}/edit", h.updateApplicationContainer)
 	mux.HandleFunc("POST /applications", h.createApplication)
 	mux.HandleFunc("GET /healthz", h.health)
 	static, err := fs.Sub(embeddedFiles, "static")
@@ -4786,6 +4788,7 @@ type applicationContainerPageData struct {
 	Services          []application.Service
 	CSRFToken         string
 	Error             string
+	IsEdit            bool
 	ServiceName       string
 	ImageName         string
 	UseDockerRegistry bool

@@ -532,17 +532,7 @@ func addApplicationService(contents, serviceName, imageName, containerName strin
 	})
 }
 
-func addApplicationServiceWithOptions(contents, serviceName, imageName, containerName string, input application.ApplicationServiceInput) (string, error) {
-	lines := strings.Split(contents, "\n")
-	servicesIndex, servicesValue, ok := findTopLevelYAMLKey(lines, "services")
-	if !ok {
-		return "", errors.New("Compose file does not define top-level services")
-	}
-	servicesEnd := topLevelBlockEnd(lines, servicesIndex)
-	if serviceExistsAtIndent(lines[servicesIndex+1:servicesEnd], serviceName, 2) {
-		return "", application.ErrServiceAlreadyExists
-	}
-
+func buildApplicationServiceBlock(serviceName, imageName, containerName string, input application.ApplicationServiceInput) []string {
 	restartPolicy := input.RestartPolicy
 	if restartPolicy == "" {
 		restartPolicy = application.ApplicationRestartPolicyUnlessStopped
@@ -613,6 +603,21 @@ func addApplicationServiceWithOptions(contents, serviceName, imageName, containe
 		"    labels:",
 		"      - \"redlaunch.managed=true\"",
 	)
+	return serviceBlock
+}
+
+func addApplicationServiceWithOptions(contents, serviceName, imageName, containerName string, input application.ApplicationServiceInput) (string, error) {
+	lines := strings.Split(contents, "\n")
+	servicesIndex, servicesValue, ok := findTopLevelYAMLKey(lines, "services")
+	if !ok {
+		return "", errors.New("Compose file does not define top-level services")
+	}
+	servicesEnd := topLevelBlockEnd(lines, servicesIndex)
+	if serviceExistsAtIndent(lines[servicesIndex+1:servicesEnd], serviceName, 2) {
+		return "", application.ErrServiceAlreadyExists
+	}
+
+	serviceBlock := buildApplicationServiceBlock(serviceName, imageName, containerName, input)
 
 	switch strings.TrimSpace(servicesValue) {
 	case "{}":
