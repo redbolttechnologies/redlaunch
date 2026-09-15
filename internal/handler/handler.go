@@ -2879,6 +2879,36 @@ func serviceActionIsPortConflict(err error) bool {
 
 const maxServiceActionDiagnosticLength = 2048
 
+func truncateDiagnosticTail(detail string, maxLength int) string {
+	// Docker Compose failures report the cause at the end of the output
+	// (after image-pull progress and layer downloads). Keeping the head
+	// hides that cause behind truncated progress logs, so retain the tail.
+	runes := []rune(detail)
+	if len(runes) > maxLength {
+		return "…" + string(runes[len(runes)-maxLength:])
+	}
+	return detail
+}
+
+func stripComposeOperationPrefix(detail string) string {
+	// Compose runner operations embed the service name
+	// (for example: run compose service "api": ... or
+	// run compose restart for service "db": ...). Strip any such
+	// operation prefix so the dialog shows the exit status and output.
+	for strings.HasPrefix(detail, "run compose ") {
+		separator := strings.Index(detail, ": ")
+		if separator < 0 {
+			break
+		}
+		next := strings.TrimSpace(detail[separator+2:])
+		if next == "" || next == detail {
+			break
+		}
+		detail = next
+	}
+	return detail
+}
+
 func serviceActionErrorDetail(err error) string {
 	if err == nil {
 		return "no additional details were provided"
@@ -2906,14 +2936,11 @@ func serviceActionErrorDetail(err error) string {
 		}
 	}
 	detail = redactServiceActionDiagnostics(detail)
+	detail = stripComposeOperationPrefix(detail)
 	if detail == "" {
 		return "no additional details were provided"
 	}
-	runes := []rune(detail)
-	if len(runes) > maxServiceActionDiagnosticLength {
-		return string(runes[:maxServiceActionDiagnosticLength]) + "…"
-	}
-	return detail
+	return truncateDiagnosticTail(detail, maxServiceActionDiagnosticLength)
 }
 
 func redactServiceActionDiagnostics(detail string) string {
@@ -4130,14 +4157,11 @@ func applicationContainerErrorDetail(err error) string {
 			break
 		}
 	}
+	detail = stripComposeOperationPrefix(detail)
 	if detail == "" {
 		return "no additional details were provided"
 	}
-	runes := []rune(detail)
-	if len(runes) > maxApplicationContainerDiagnosticLength {
-		return string(runes[:maxApplicationContainerDiagnosticLength]) + "…"
-	}
-	return detail
+	return truncateDiagnosticTail(detail, maxApplicationContainerDiagnosticLength)
 }
 
 const maxPostgreSQLDiagnosticLength = 2048
@@ -4240,14 +4264,11 @@ func redisErrorDetail(err error) string {
 	}
 
 	detail = redactRedisDiagnostics(detail)
+	detail = stripComposeOperationPrefix(detail)
 	if detail == "" {
 		return "no additional details were provided"
 	}
-	runes := []rune(detail)
-	if len(runes) > maxRedisDiagnosticLength {
-		return string(runes[:maxRedisDiagnosticLength]) + "…"
-	}
-	return detail
+	return truncateDiagnosticTail(detail, maxRedisDiagnosticLength)
 }
 
 func redactRedisDiagnostics(detail string) string {
@@ -4298,14 +4319,11 @@ func postgresErrorDetail(err error) string {
 	}
 
 	detail = redactPostgreSQLDiagnostics(detail)
+	detail = stripComposeOperationPrefix(detail)
 	if detail == "" {
 		return "no additional details were provided"
 	}
-	runes := []rune(detail)
-	if len(runes) > maxPostgreSQLDiagnosticLength {
-		return string(runes[:maxPostgreSQLDiagnosticLength]) + "…"
-	}
-	return detail
+	return truncateDiagnosticTail(detail, maxPostgreSQLDiagnosticLength)
 }
 
 func redactPostgreSQLDiagnostics(detail string) string {

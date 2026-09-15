@@ -3935,6 +3935,34 @@ func TestServiceActionErrorDetailRedactsSensitiveValues(t *testing.T) {
 	}
 }
 
+func TestServiceActionErrorDetailKeepsTailForLongPullOutput(t *testing.T) {
+	// Compose failures report the cause after image-pull progress. The
+	// dialog must keep that trailing cause instead of the leading progress.
+	progress := strings.Repeat("ccb86fd70cf1 Downloading [=====>] 2.5MB/5.9MB\n", 60)
+	cause := "Error response from daemon: pull access denied for api"
+	err := errors.New("start service: " + `run compose service "api": exit status 1: ` + progress + cause)
+	detail := serviceActionErrorDetail(err)
+	if !strings.Contains(detail, cause) {
+		t.Fatalf("service action detail hid the trailing cause: %q", detail)
+	}
+	if strings.Contains(detail, "run compose service") {
+		t.Fatalf("service action detail kept the compose operation prefix: %q", detail)
+	}
+	if !strings.HasPrefix(detail, "…") {
+		t.Fatalf("service action detail should indicate head truncation: %q", detail)
+	}
+}
+
+func TestApplicationContainerErrorDetailKeepsTailForLongPullOutput(t *testing.T) {
+	progress := strings.Repeat("444aafbc6058 Downloading [=====>] 5.2MB/50.5MB\n", 60)
+	cause := "failed to register layer: no space left on device"
+	err := errors.New("start application service: " + `run compose service "api": exit status 1: ` + progress + cause)
+	detail := applicationContainerErrorDetail(err)
+	if !strings.Contains(detail, cause) {
+		t.Fatalf("application container detail hid the trailing cause: %q", detail)
+	}
+}
+
 func TestDeleteServiceRequiresCSRFAndExactConfirmation(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once

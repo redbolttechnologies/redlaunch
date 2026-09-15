@@ -578,7 +578,7 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
 		return err
 	}
-	args := []string{"up", "-d"}
+	args := []string{"up", "-d", "--quiet-pull"}
 	args = append(args, options...)
 	operation := "run compose project"
 	if serviceName != "" {

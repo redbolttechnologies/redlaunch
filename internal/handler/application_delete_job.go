@@ -366,7 +366,7 @@ func deletionDiagnosticDetail(err error, prefixes []string) string {
 		return ""
 	}
 	if runes := []rune(detail); len(runes) > maxDeletionDiagnosticLength {
-		return string(runes[:maxDeletionDiagnosticLength]) + "…"
+		return "…" + string(runes[len(runes)-maxDeletionDiagnosticLength:])
 	}
 	return detail
 }

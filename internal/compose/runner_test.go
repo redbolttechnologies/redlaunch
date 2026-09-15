@@ -63,7 +63,7 @@ func TestCommandRunnerUpServiceUsesExplicitComposeArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := expectedComposeArguments(projectDir, "up", "-d", "db")
+	want := expectedComposeArguments(projectDir, "up", "-d", "--quiet-pull", "db")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
@@ -88,7 +88,7 @@ func TestCommandRunnerRestartProjectBuildsRecreatesAndWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := expectedComposeArguments(projectDir, "up", "-d", "--build", "--force-recreate", "--wait", "--wait-timeout", "30")
+	want := expectedComposeArguments(projectDir, "up", "-d", "--quiet-pull", "--build", "--force-recreate", "--wait", "--wait-timeout", "30")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
