@@ -83,6 +83,7 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 - Start, stop, restart, and remove managed services.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
 - Show container status, ports, logs, and explicitly scoped resource usage.
+- List the Docker images currently present on the host from the Registry page.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.

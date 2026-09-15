@@ -478,6 +478,10 @@ type composeProjectRemover interface {
 	Down(context.Context, string) error
 }
 
+type composeImageLister interface {
+	ListImages(context.Context) ([]compose.ImageRuntime, error)
+}
+
 // ApplicationsOptions contains deployment values that affect generated
 // configuration. The HTTP address is used only to derive the port Caddy uses
 // when proxying the management interface through the host gateway.
@@ -916,6 +920,39 @@ func proxyDomainsFromRoutings(routings []application.Routing, applicationNames m
 		})
 	}
 	return domains
+}
+
+// ListRegistryImages returns the Docker images currently present on the host
+// in a stable order for the Registry page.
+func (s *Applications) ListRegistryImages(ctx context.Context) ([]application.RegistryImage, error) {
+	lister, ok := s.runner.(composeImageLister)
+	if !ok {
+		return nil, errors.New("image inspection is not configured")
+	}
+	runtimeImages, err := lister.ListImages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	images := make([]application.RegistryImage, 0, len(runtimeImages))
+	for _, runtimeImage := range runtimeImages {
+		images = append(images, application.RegistryImage{
+			Repository: runtimeImage.Repository,
+			Tag:        runtimeImage.Tag,
+			ImageID:    runtimeImage.ID,
+			CreatedAt:  runtimeImage.CreatedAt,
+			Size:       runtimeImage.Size,
+		})
+	}
+	sort.Slice(images, func(left, right int) bool {
+		if images[left].Repository != images[right].Repository {
+			return images[left].Repository < images[right].Repository
+		}
+		if images[left].Tag != images[right].Tag {
+			return images[left].Tag < images[right].Tag
+		}
+		return images[left].ImageID < images[right].ImageID
+	})
+	return images, nil
 }
 
 // GetProxyFullLogs returns the managed proxy log history up to the Compose

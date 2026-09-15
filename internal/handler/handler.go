@@ -56,6 +56,7 @@ type Handler struct {
 	githubActionsJobs              *githubActionsJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
+	registryImages                 registryImageService
 	dashboardMetrics               dashboardMetricsService
 	authentication                 authenticationService
 	selfUpdater                    selfUpdateService
@@ -251,6 +252,10 @@ type proxyLogStreamService interface {
 	OpenProxyLogs(context.Context) (io.ReadCloser, error)
 }
 
+type registryImageService interface {
+	ListRegistryImages(context.Context) ([]application.RegistryImage, error)
+}
+
 type applicationContainerInputValidator interface {
 	ValidateApplicationServiceInput(application.ApplicationServiceInput) error
 }
@@ -346,6 +351,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	githubActions := githubActionsService(noGitHubActionsService{})
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
+	var registryImages registryImageService
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
 	var authentication authenticationService
 	var selfUpdater selfUpdateService
@@ -372,6 +378,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 				}
 				if proxyActionDependency, ok := dependency.(proxyActionService); ok {
 					proxyActions = proxyActionDependency
+				}
+				if registryDependency, ok := dependency.(registryImageService); ok {
+					registryImages = registryDependency
 				}
 				if applicationDeletionDependency, ok := dependency.(applicationDeletionService); ok {
 					applicationDeletion = applicationDeletionDependency
@@ -543,6 +552,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				proxyActions = dependency
 			}
+		case registryImageService:
+			if dependency != nil {
+				registryImages = dependency
+			}
 		case dashboardMetricsService:
 			if dependency != nil {
 				dashboardMetrics = dependency
@@ -612,6 +625,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		githubActions:                  githubActions,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
+		registryImages:                 registryImages,
 		dashboardMetrics:               dashboardMetrics,
 		authentication:                 authentication,
 		selfUpdater:                    selfUpdater,
@@ -650,6 +664,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /proxy/stop", h.stopProxy)
 	mux.HandleFunc("POST /proxy/restart", h.restartProxy)
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
+	mux.HandleFunc("GET /registry", h.registryPage)
 	mux.HandleFunc("GET /applications/{id}", h.applicationDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/import", h.importDockerComposeProject)
 	mux.HandleFunc("POST /applications/{id}/import/preview", h.previewDockerComposeProject)
@@ -4341,6 +4356,7 @@ type pageData struct {
 	ApplicationRoutingPage       *applicationRoutingPageData
 	ServiceDetailsPage           *serviceDetailsPageData
 	ProxyPage                    *proxyPageData
+	RegistryPage                 *registryPageData
 	PostgreSQLServicePage        *postgresqlServicePageData
 	RedisServicePage             *redisServicePageData
 	ApplicationContainerPage     *applicationContainerPageData
@@ -4574,6 +4590,11 @@ type serviceDetailsPageData struct {
 type proxyPageData struct {
 	Details   application.ProxyDetails
 	CSRFToken string
+}
+
+type registryPageData struct {
+	Images []application.RegistryImage
+	Error  string
 }
 
 type settingsPageData struct {

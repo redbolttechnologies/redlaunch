@@ -270,6 +270,15 @@ func TestDefaultApplicationImageName(t *testing.T) {
 	}
 }
 
+func TestRegistryImageReference(t *testing.T) {
+	if got := (RegistryImage{Repository: "caddy", Tag: "2.11.4-alpine"}).Reference(); got != "caddy:2.11.4-alpine" {
+		t.Fatalf("Reference() = %q, want caddy:2.11.4-alpine", got)
+	}
+	if got := (RegistryImage{}).Reference(); got != "<none>:<none>" {
+		t.Fatalf("Reference() = %q, want <none>:<none>", got)
+	}
+}
+
 func TestValidateGitHubActionsInput(t *testing.T) {
 	got, err := ValidateGitHubActionsInput(GitHubActionsInput{
 		Repository:   " Example/Status-page ",

@@ -201,6 +201,17 @@ func (s *fakeProxyService) RestartProxy(context.Context) error {
 	return s.proxyActionErr
 }
 
+type fakeRegistryService struct {
+	images []application.RegistryImage
+	err    error
+	calls  int
+}
+
+func (s *fakeRegistryService) ListRegistryImages(context.Context) ([]application.RegistryImage, error) {
+	s.calls++
+	return s.images, s.err
+}
+
 type fakeApplicationService struct {
 	applications                  []application.Application
 	services                      []application.Service
@@ -839,6 +850,9 @@ func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="/proxy"`) || !strings.Contains(body, ">Proxy</span>") {
 		t.Fatalf("GET / did not render the Proxy menu item: %s", body)
+	}
+	if !strings.Contains(body, `href="/registry"`) || !strings.Contains(body, ">Registry</span>") {
+		t.Fatalf("GET / did not render the Registry menu item: %s", body)
 	}
 	if !strings.Contains(body, `href="/settings"`) || !strings.Contains(body, ">Settings</span>") {
 		t.Fatalf("GET / did not render the Settings menu item: %s", body)
@@ -6270,5 +6284,103 @@ func TestRevokeGitHubActionsRequiresCSRFAndRedirects(t *testing.T) {
 	}
 	if strings.Contains(statusRecorder.Body.String(), "Open GitHub handoff") {
 		t.Fatal("completed revocation incorrectly offered a private-key handoff")
+	}
+}
+
+func TestRegistryRendersMenuAndPresentImages(t *testing.T) {
+	registry := &fakeRegistryService{images: []application.RegistryImage{
+		{Repository: "caddy", Tag: "2.11.4-alpine", ImageID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
+		{Repository: "<unsafe>", Tag: "latest", ImageID: "d21905ceb6c9", CreatedAt: "2026-09-12 21:44:36 +0200 CEST", Size: "187MB"},
+	}}
+	web, err := New(nil, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`<title>Redlaunch · Registry</title>`,
+		`<h1 id="page-title">Registry</h1>`,
+		`href="/registry"`,
+		`>Registry</span>`,
+		`class="side-menu-item side-menu-item-active"`,
+		`aria-current="page"`,
+		`<h2 id="registry-images-title">Images</h2>`,
+		`>Repository</th>`,
+		`>Tag</th>`,
+		`>Image ID</th>`,
+		`caddy`,
+		`2.11.4-alpine`,
+		`5f5c8640aae0`,
+		`84.9MB`,
+		`&lt;unsafe&gt;`,
+		`aria-labelledby="page-title"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET /registry did not render %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, "<unsafe>") {
+		t.Fatalf("GET /registry rendered an image name without escaping it: %s", body)
+	}
+	if registry.calls != 1 {
+		t.Fatalf("registry calls = %d, want one", registry.calls)
+	}
+	if recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("GET /registry Cache-Control = %q, want no-store", recorder.Header().Get("Cache-Control"))
+	}
+}
+
+func TestRegistryRendersEmptyState(t *testing.T) {
+	web, err := New(nil, &fakeRegistryService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "No images are present on this host.") {
+		t.Fatalf("GET /registry empty state missing: %s", body)
+	}
+}
+
+func TestRegistryShowsErrorWhenImagesAreUnavailable(t *testing.T) {
+	web, err := New(nil, &fakeRegistryService{err: errors.New("docker unavailable")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "The image list could not be read right now.") {
+		t.Fatalf("GET /registry error state missing: %s", body)
+	}
+}
+
+func TestRegistryRequiresImageService(t *testing.T) {
+	web, err := New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/registry", nil))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /registry status = %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
 }

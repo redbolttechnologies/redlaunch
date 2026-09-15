@@ -720,6 +720,36 @@ func (r CommandRunner) IsServiceRunning(ctx context.Context, projectDir, service
 	return false, nil
 }
 
+// ImageRuntime contains the Docker display fields shown for one image present
+// on the host. The fields intentionally retain Docker's display format so the
+// UI matches docker images output.
+type ImageRuntime struct {
+	Repository string
+	Tag        string
+	ID         string
+	CreatedAt  string
+	Size       string
+}
+
+// ListImages returns the images currently present on the host. The JSON
+// format gives the caller the same repository, tag, and size strings Docker
+// displays in docker images.
+func (r CommandRunner) ListImages(ctx context.Context) ([]ImageRuntime, error) {
+	ctx = normalizeContext(ctx)
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	command := exec.CommandContext(ctx, binary, "images", "--format", "json")
+	command.Env = composeProcessEnvironment(os.Environ(), nil)
+	output, err := runStructuredCommand(command, "list Docker images", "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeImageRuntimes(output)
+}
+
 // Logs returns the most recent log lines for one Compose service. The caller
 // chooses the tail size so the service layer can keep the dashboard bounded.
 func (r CommandRunner) Logs(ctx context.Context, projectDir, serviceName string, tail int) (string, error) {
@@ -1175,6 +1205,51 @@ func decodeServiceRuntimes(output []byte) ([]ServiceRuntime, error) {
 		})
 	}
 	return services, nil
+}
+
+type dockerImage struct {
+	Repository string `json:"Repository"`
+	Tag        string `json:"Tag"`
+	ID         string `json:"ID"`
+	CreatedAt  string `json:"CreatedAt"`
+	Size       string `json:"Size"`
+}
+
+func decodeImageRuntimes(output []byte) ([]ImageRuntime, error) {
+	output = bytes.TrimSpace(output)
+	if len(output) == 0 {
+		return nil, nil
+	}
+
+	var rows []dockerImage
+	if output[0] == '[' {
+		if err := json.Unmarshal(output, &rows); err != nil {
+			return nil, fmt.Errorf("decode Docker image list: %w", err)
+		}
+	} else {
+		decoder := json.NewDecoder(bytes.NewReader(output))
+		for {
+			var row dockerImage
+			if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("decode Docker image: %w", err)
+			}
+			rows = append(rows, row)
+		}
+	}
+
+	images := make([]ImageRuntime, 0, len(rows))
+	for _, row := range rows {
+		images = append(images, ImageRuntime{
+			Repository: strings.TrimSpace(row.Repository),
+			Tag:        strings.TrimSpace(row.Tag),
+			ID:         strings.TrimSpace(row.ID),
+			CreatedAt:  strings.TrimSpace(row.CreatedAt),
+			Size:       strings.TrimSpace(row.Size),
+		})
+	}
+	return images, nil
 }
 
 func parseDockerCreatedAt(value string) time.Time {

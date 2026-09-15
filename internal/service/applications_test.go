@@ -103,6 +103,8 @@ type serviceRuntimeRunner struct {
 	environmentCalls int
 	reloadErr        error
 	reloads          []string
+	images           []compose.ImageRuntime
+	imagesErr        error
 }
 
 type blockingServiceRuntimeRunner struct {
@@ -153,6 +155,10 @@ func (r *serviceRuntimeRunner) ReloadProxy(_ context.Context, projectDir string)
 func (r *serviceRuntimeRunner) ListServices(_ context.Context, projectDir string) ([]compose.ServiceRuntime, error) {
 	r.projectDir = projectDir
 	return r.runtime, nil
+}
+
+func (r *serviceRuntimeRunner) ListImages(context.Context) ([]compose.ImageRuntime, error) {
+	return r.images, r.imagesErr
 }
 
 func (r *serviceRuntimeRunner) Logs(_ context.Context, projectDir, _ string, tail int) (string, error) {
@@ -2424,6 +2430,45 @@ func TestApplicationsGetProxyDetailsIncludesRuntimeAndRoutedDomainMappings(t *te
 	wantDirectory := filepath.Join(root, coreDir, proxyDir)
 	if runner.projectDir != wantDirectory {
 		t.Fatalf("proxy runtime inspection directory = %q, want %q", runner.projectDir, wantDirectory)
+	}
+}
+
+func TestApplicationsListRegistryImagesReturnsSortedImages(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	runner := &serviceRuntimeRunner{images: []compose.ImageRuntime{
+		{Repository: "redis", Tag: "7", ID: "71da9275c5f3", CreatedAt: "2026-08-25 02:46:25 +0200 CEST", Size: "192MB"},
+		{Repository: "caddy", Tag: "2.11.4-alpine", ID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
+		{Repository: "caddy", Tag: "2-alpine", ID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
+	}}
+	applications, err := NewApplications(&applicationRepositoryStub{}, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := applications.ListRegistryImages(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []application.RegistryImage{
+		{Repository: "caddy", Tag: "2-alpine", ImageID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
+		{Repository: "caddy", Tag: "2.11.4-alpine", ImageID: "5f5c8640aae0", CreatedAt: "2026-06-22 22:12:24 +0200 CEST", Size: "84.9MB"},
+		{Repository: "redis", Tag: "7", ImageID: "71da9275c5f3", CreatedAt: "2026-08-25 02:46:25 +0200 CEST", Size: "192MB"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListRegistryImages() = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplicationsListRegistryImagesReportsRunnerErrors(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	runner := &serviceRuntimeRunner{imagesErr: errors.New("docker unavailable")}
+	applications, err := NewApplications(&applicationRepositoryStub{}, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := applications.ListRegistryImages(t.Context()); err == nil {
+		t.Fatal("ListRegistryImages() error = nil, want docker failure")
 	}
 }
 

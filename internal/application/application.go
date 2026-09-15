@@ -540,6 +540,31 @@ type ProxyDomain struct {
 	MappedPath      string
 }
 
+// RegistryImage is one Docker image present on the host. The fields retain
+// Docker's display format so the UI matches docker images output.
+type RegistryImage struct {
+	Repository string
+	Tag        string
+	ImageID    string
+	CreatedAt  string
+	Size       string
+}
+
+// Reference returns the repository and tag in the familiar repository:tag
+// form. Empty parts are kept visible so a <none> entry cannot be mistaken
+// for a named image.
+func (image RegistryImage) Reference() string {
+	repository := image.Repository
+	if repository == "" {
+		repository = "<none>"
+	}
+	tag := image.Tag
+	if tag == "" {
+		tag = "<none>"
+	}
+	return repository + ":" + tag
+}
+
 // BackupSchedule contains the persisted schedule and most recent backup
 // status for one database service. BackupLocation is derived by the service
 // layer from the configured backup root and is never user-editable.
