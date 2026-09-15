@@ -776,6 +776,8 @@
     </form>
   </div>
 </dialog>
+
+{{with .ApplicationDetailsPage.ServiceActionError}}{{template "service-action-error-dialog.html" .}}{{end}}
 {{end}}
 
 {{define "application-environment-panel"}}

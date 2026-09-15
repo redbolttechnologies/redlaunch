@@ -3800,6 +3800,102 @@ func TestServiceActionsCanReturnToServiceDetails(t *testing.T) {
 	}
 }
 
+func TestServiceActionFailureRendersErrorDialogOnApplicationPage(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications:     []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:         []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
+		serviceActionErr: errors.New("start service: Error response from daemon: driver failed programming external connectivity: port is already allocated"),
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"csrf_token": {web.csrfToken}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/services/db/start", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`data-service-action-error-dialog`,
+		`data-service-action-error-open`,
+		`The service could not be started`,
+		`port is already allocated`,
+		`Error details`,
+		`service-action-error-detail`,
+		`/static/service-action-error.js`,
+		`<h1 id="page-title">Status page</h1>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST start failure did not render %q: %s", expected, body)
+		}
+	}
+	if !strings.Contains(strings.ToLower(body), "already in use") {
+		t.Fatalf("POST start failure did not explain the port conflict: %s", body)
+	}
+	if strings.HasPrefix(strings.TrimSpace(body), "The service could not be started.") && !strings.Contains(body, "<html") {
+		t.Fatalf("POST start failure rendered a plain-text white screen: %s", body)
+	}
+}
+
+func TestServiceActionFailureRendersErrorDialogOnServiceDetailsPage(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
+		serviceDetails: application.ServiceDetails{
+			Service:       application.Service{ID: 1, ApplicationID: 7, Name: "db"},
+			LogsAvailable: false,
+		},
+		serviceActionErr: errors.New("start service: Error response from daemon: container failed to start"),
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"csrf_token": {web.csrfToken}, "return_to": {"service-details"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/services/db/start", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`data-service-action-error-dialog`,
+		`data-service-action-error-open`,
+		`The service could not be started`,
+		`container failed to start`,
+		`<h1 id="page-title">db</h1>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST start failure on service details did not render %q: %s", expected, body)
+		}
+	}
+}
+
+func TestServiceActionErrorDetailRedactsSensitiveValues(t *testing.T) {
+	detail := serviceActionErrorDetail(errors.New("start service: failed with password=super-secret-value"))
+	if strings.Contains(detail, "super-secret-value") {
+		t.Fatalf("service action detail exposed a secret: %q", detail)
+	}
+	if !strings.Contains(detail, "[sensitive details redacted]") {
+		t.Fatalf("service action detail did not redact sensitive output: %q", detail)
+	}
+	if strings.Contains(detail, "start service:") {
+		t.Fatalf("service action detail did not strip the operational prefix: %q", detail)
+	}
+}
+
 func TestDeleteServiceRequiresCSRFAndExactConfirmation(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once

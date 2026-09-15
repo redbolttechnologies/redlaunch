@@ -3559,6 +3559,42 @@ h1 {
   color: hsl(var(--destructive));
 }
 
+.service-action-error-body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.service-action-error-label {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.service-action-error-detail {
+  max-height: 12rem;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid hsl(var(--code) / 0.92);
+  border-radius: calc(var(--radius) - 0.125rem);
+  color: hsl(var(--code-foreground));
+  background: hsl(var(--code));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.service-action-error-detail code {
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
 .application-delete-dialog .application-dialog-header p {
   max-width: 28rem;
 }

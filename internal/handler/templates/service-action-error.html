@@ -1,0 +1,26 @@
+{{define "service-action-error-dialog.html"}}
+<dialog class="application-dialog service-action-error-dialog" id="service-action-error-dialog" data-service-action-error-dialog{{if .Open}} data-service-action-error-open{{end}} aria-modal="true" aria-labelledby="service-action-error-title" aria-describedby="service-action-error-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="service-action-error-title">{{.Title}}</h2>
+        <p id="service-action-error-description">{{.Message}}</p>
+      </div>
+      <button class="icon-button" type="button" data-service-action-error-close aria-label="Close service error dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="service-action-error-body">
+      <span class="service-action-error-label">Error details</span>
+      <pre class="service-action-error-detail" tabindex="0"><code>{{.Detail}}</code></pre>
+    </div>
+
+    <footer class="application-form-actions">
+      <button class="button button-secondary" type="button" data-service-action-error-close>Close</button>
+    </footer>
+  </div>
+</dialog>
+{{end}}

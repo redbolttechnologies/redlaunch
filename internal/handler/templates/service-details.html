@@ -115,6 +115,7 @@
   {{template "service-details-logs.html" .}}
   {{end}}
 </section>
+{{with .ServiceDetailsPage.ServiceActionError}}{{template "service-action-error-dialog.html" .}}{{end}}
 {{if .BackupProgress}}
 {{template "backup-progress.html" .}}
 {{end}}

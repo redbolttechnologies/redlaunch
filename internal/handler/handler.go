@@ -2765,7 +2765,7 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 			return
 		}
 		h.logger.Error("run service action", "application_id", id, "service", serviceName, "action", action, "error", actionErr)
-		http.Error(w, "The service could not be "+serviceActionPastTense(action)+".", http.StatusInternalServerError)
+		h.renderServiceActionError(w, r, id, serviceName, action, actionErr)
 		return
 	}
 	location := "/applications/" + strconv.FormatInt(id, 10)
@@ -2786,6 +2786,149 @@ func serviceActionPastTense(action string) string {
 	default:
 		return "changed"
 	}
+}
+
+func (h *Handler) renderServiceActionError(w http.ResponseWriter, r *http.Request, id int64, serviceName, action string, actionErr error) {
+	errData := newServiceActionError(action, serviceName, actionErr)
+	if r.Form.Get("return_to") == "service-details" {
+		item, err := h.applicationDetails.Get(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, application.ErrNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error("get application after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
+			http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
+			return
+		}
+		details, err := h.getServiceDetails(r.Context(), id, serviceName)
+		if err != nil {
+			if errors.Is(err, application.ErrNotFound) || errors.Is(err, application.ErrServiceNotFound) || errors.Is(err, application.ErrServiceNameRequired) || errors.Is(err, application.ErrServiceNameTooLong) || errors.Is(err, application.ErrServiceNameInvalid) {
+				http.NotFound(w, r)
+				return
+			}
+			h.logger.Error("get service details after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
+			http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
+			return
+		}
+		if h.backupManager != nil && application.IsDatabaseServiceType(details.Service.Type) {
+			backupDetails, backupErr := h.backupManager.GetBackupDetails(r.Context(), id, serviceName)
+			if backupErr != nil {
+				h.logger.Error("get service backup details after service action failure", "application_id", id, "service", serviceName, "error", backupErr)
+			} else {
+				details.Backup = &backupDetails
+			}
+		}
+		h.writeServiceDetailsPage(w, r, http.StatusInternalServerError, serviceDetailsPageData{
+			Application:        item,
+			Details:            details,
+			ServiceActionError: errData,
+		})
+		return
+	}
+
+	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, application.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		h.logger.Error("load application details after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
+		http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
+		return
+	}
+	data.ServiceActionError = errData
+	h.writeApplicationDetailsPage(w, r, http.StatusInternalServerError, data, nil, nil)
+}
+
+func newServiceActionError(action, serviceName string, err error) *serviceActionErrorData {
+	pastTense := serviceActionPastTense(action)
+	title := "The service could not be " + pastTense
+	name := strings.TrimSpace(serviceName)
+	if name == "" {
+		name = "service"
+	}
+	message := "Service \"" + name + "\" could not be " + pastTense + "."
+	if serviceActionIsPortConflict(err) {
+		message += " A required port is already in use. See the Docker Compose output below."
+	} else {
+		message += " See the Docker Compose output below."
+	}
+	return &serviceActionErrorData{
+		Open:        true,
+		Action:      action,
+		ServiceName: serviceName,
+		Title:       title,
+		Message:     message,
+		Detail:      serviceActionErrorDetail(err),
+	}
+}
+
+func serviceActionIsPortConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "port is already allocated") ||
+		strings.Contains(lower, "address already in use") ||
+		strings.Contains(lower, "failed to bind") ||
+		strings.Contains(lower, "bind for ")
+}
+
+const maxServiceActionDiagnosticLength = 2048
+
+func serviceActionErrorDetail(err error) string {
+	if err == nil {
+		return "no additional details were provided"
+	}
+	detail := strings.TrimSpace(err.Error())
+	prefixes := []string{
+		"start service: ",
+		"stop service: ",
+		"restart service: ",
+		"get application for service action: ",
+		"list services for service action: ",
+		"resolve application directory for service action: ",
+		"run compose project: ",
+	}
+	for {
+		previous := detail
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(detail, prefix) {
+				detail = strings.TrimSpace(strings.TrimPrefix(detail, prefix))
+				break
+			}
+		}
+		if detail == previous {
+			break
+		}
+	}
+	detail = redactServiceActionDiagnostics(detail)
+	if detail == "" {
+		return "no additional details were provided"
+	}
+	runes := []rune(detail)
+	if len(runes) > maxServiceActionDiagnosticLength {
+		return string(runes[:maxServiceActionDiagnosticLength]) + "…"
+	}
+	return detail
+}
+
+func redactServiceActionDiagnostics(detail string) string {
+	lines := strings.Split(detail, "\n")
+	for index, line := range lines {
+		lower := strings.ToLower(line)
+		markerIndex := -1
+		for _, marker := range []string{"postgres_password", "redis_password", "password=", "password:", "secret=", "token="} {
+			if candidate := strings.Index(lower, marker); candidate >= 0 && (markerIndex < 0 || candidate < markerIndex) {
+				markerIndex = candidate
+			}
+		}
+		if markerIndex >= 0 {
+			lines[index] = line[:markerIndex] + "[sensitive details redacted]"
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (h *Handler) postgreSQLServiceStatus(w http.ResponseWriter, r *http.Request) {
@@ -4474,6 +4617,7 @@ type applicationDetailsPageData struct {
 	SecretDelete                      *secretDeletePageData
 	ServiceDeleteProgress             *serviceDeleteProgressData
 	ApplicationDeleteProgress         *applicationDeleteProgressData
+	ServiceActionError                *serviceActionErrorData
 }
 
 type applicationRoutingPageData struct {
@@ -4581,10 +4725,20 @@ type secretDeletePageData struct {
 }
 
 type serviceDetailsPageData struct {
-	Application    application.Application
-	Details        application.ServiceDetails
-	CSRFToken      string
-	BackupProgress *backupProgressData
+	Application        application.Application
+	Details            application.ServiceDetails
+	CSRFToken          string
+	BackupProgress     *backupProgressData
+	ServiceActionError *serviceActionErrorData
+}
+
+type serviceActionErrorData struct {
+	Open        bool
+	Action      string
+	ServiceName string
+	Title       string
+	Message     string
+	Detail      string
 }
 
 type proxyPageData struct {
