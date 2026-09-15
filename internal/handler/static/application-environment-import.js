@@ -22,6 +22,7 @@
     const submitButton = dialog.querySelector("[data-environment-import-submit]");
     const closeButtons = dialog.querySelectorAll("[data-environment-import-close]");
     let returnFocus = null;
+    let backdropMouseDown = false;
 
     const setStatus = (message) => {
       if (!status) {
@@ -137,10 +138,15 @@
       button.addEventListener("click", closeDialog);
     });
 
+    dialog.addEventListener("mousedown", (event) => {
+      backdropMouseDown = event.target === dialog;
+    });
+
     dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) {
+      if (event.target === dialog && backdropMouseDown) {
         closeDialog();
       }
+      backdropMouseDown = false;
     });
 
     dialog.addEventListener("cancel", (event) => {
