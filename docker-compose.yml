@@ -76,9 +76,12 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "${REDLAUNCH_DIR:-${PWD}}:${REDLAUNCH_DIR:-${PWD}}"
       # Settings SSH keys tab: the manager installs keys for the dedicated
-      # redlaunch host user created by scripts/setup.sh. The mount keeps the
-      # inode stable so in-place authorized_keys updates apply on the host.
-      - "/home/redlaunch/.ssh/authorized_keys:/home/redlaunch/.ssh/authorized_keys"
+      # redlaunch host user created by scripts/setup.sh. This mounts the
+      # directory rather than the file because the manager runs with a
+      # read-only root filesystem and must manage the directory's permissions
+      # itself. In-place authorized_keys updates keep the inode stable so
+      # writes apply on the host.
+      - "/home/redlaunch/.ssh:/home/redlaunch/.ssh"
 
 volumes:
   app-data:

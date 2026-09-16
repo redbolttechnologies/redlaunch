@@ -42,11 +42,13 @@ id redlaunch
 sudo grep "redlaunch-ssh-key:" /home/redlaunch/.ssh/authorized_keys
 ```
 
-The manager container mounts the host file at the identical path:
+The manager container mounts the host `.ssh` directory at the identical path
+(the directory, not the file: the manager runs with a read-only root
+filesystem and manages the directory itself):
 
 ```yaml
 volumes:
-  - "/home/redlaunch/.ssh/authorized_keys:/home/redlaunch/.ssh/authorized_keys"
+  - "/home/redlaunch/.ssh:/home/redlaunch/.ssh"
 ```
 
 The manager preserves unmanaged lines and comments in the file and only
@@ -109,6 +111,13 @@ key from the external system separately.
 
 ## Troubleshooting
 
+- `set SSH directory permissions: ... read-only file system` in the container
+  logs means the stack still uses the old file mount instead of the directory
+  mount above. Pull the latest Compose file and recreate the container with
+  `docker compose up -d`. If `/home/redlaunch/.ssh/authorized_keys` on the
+  host is a directory (Docker creates one when the file is missing at first
+  start), stop the stack, remove that directory, create the real file per the
+  existing-installation steps, and start again.
 - A creation failure leaves no stored metadata; the database row is removed
   when the `authorized_keys` write fails.
 - A revoke failure keeps both the file and the metadata unchanged, except when
