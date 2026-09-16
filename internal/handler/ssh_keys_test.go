@@ -106,6 +106,7 @@ func TestSettingsPageRendersSSHKeysTab(t *testing.T) {
 		`/static/ssh-keys.js`,
 		`name="display_name"`,
 		`redlaunch`,
+		`service-widget-body settings-ssh-keys-body`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /settings did not render %q", expected)
@@ -308,6 +309,15 @@ func TestCreateServerSSHKeyRendersValidationError(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "Enter a display name") {
 		t.Fatalf("invalid SSH key did not render field error: %s", body)
+	}
+	if !strings.Contains(body, `application-alert application-dialog-alert`) {
+		t.Fatalf("SSH key error did not use the in-form alert pattern: %s", body)
+	}
+	alertIndex := strings.Index(body, `application-dialog-alert`)
+	formIndex := strings.Index(body, `action="/settings/ssh-keys"`)
+	fieldIndex := strings.Index(body, `id="ssh-key-display-name"`)
+	if alertIndex < 0 || formIndex < 0 || fieldIndex < 0 || !(formIndex < alertIndex && alertIndex < fieldIndex) {
+		t.Fatalf("SSH key error is not placed inside the form above its fields: %s", body)
 	}
 	if len(sshKeys.keys) != 0 {
 		t.Fatalf("invalid SSH key was stored: %#v", sshKeys.keys)

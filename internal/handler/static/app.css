@@ -3446,6 +3446,11 @@ h1 {
   gap: var(--space-6);
 }
 
+.settings-ssh-keys-body {
+  display: grid;
+  gap: var(--space-6);
+}
+
 .github-actions-handoff-section {
   display: grid;
   gap: var(--space-3);

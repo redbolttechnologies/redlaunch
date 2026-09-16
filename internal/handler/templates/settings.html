@@ -80,7 +80,7 @@
             <p>Create SSH keys for external automation, for example GitHub Actions, to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>. Each public key is added to the <code>redlaunch</code> user authorized keys and removed when the key is revoked.</p>
           </div>
         </header>
-        <div class="service-widget-body">
+        <div class="service-widget-body settings-ssh-keys-body">
           {{with .SettingsPage.SSHKeySetup}}
           <section class="service-widget github-actions-handoff" aria-labelledby="ssh-key-handoff-title">
             <header class="service-widget-header">
@@ -111,18 +111,17 @@
                 <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
               </div>
               {{end}}
-              </div>
             </div>
           </section>
           {{end}}
-          {{if .SettingsPage.SSHKeyError}}
-          <div class="application-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
-          {{end}}
-          {{if .SettingsPage.SSHKeyNotice}}
-          <div class="application-alert" role="status"><span>{{.SettingsPage.SSHKeyNotice}}</span></div>
-          {{end}}
           <form class="application-form" method="post" action="/settings/ssh-keys">
             <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+            {{if .SettingsPage.SSHKeyError}}
+            <div class="application-alert application-dialog-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
+            {{end}}
+            {{if .SettingsPage.SSHKeyNotice}}
+            <div class="application-alert application-dialog-alert" role="status"><span>{{.SettingsPage.SSHKeyNotice}}</span></div>
+            {{end}}
             <div class="field">
               <label for="ssh-key-display-name">Display name</label>
               <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
