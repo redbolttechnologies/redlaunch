@@ -45,6 +45,7 @@ const ServerSSHAuthorizedKeysPath = "/home/redlaunch/.ssh/authorized_keys"
 // authorized_keys file; private keys are returned transiently at creation.
 type ServerSSHKeyService struct {
 	authorizedKeysPath string
+	hostKeysDir        string
 	username           string
 	projectsRoot       string
 	repository         ServerSSHKeyRepository
@@ -62,7 +63,10 @@ func NewServerSSHKeyService(projectsRoot string, repository ServerSSHKeyReposito
 
 // NewServerSSHKeyServiceWithPath constructs the service with an explicit
 // authorized_keys location. Production code uses NewServerSSHKeyService; tests
-// use this to point at temporary files.
+// use this to point at temporary files. The host public keys directory
+// defaults to "<authorized_keys dir>/host_keys" (populated by scripts/setup.sh
+// with host /etc/ssh/*.pub copies); see NewServerSSHKeyServiceWithHostKeysDir
+// to override it.
 func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username, projectsRoot string, repository ServerSSHKeyRepository, applications ServerSSHKeyServiceCatalog, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
 	path := strings.TrimSpace(authorizedKeysPath)
 	if path == "" || !filepath.IsAbs(path) {
@@ -96,12 +100,34 @@ func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username, projectsRoot s
 	}
 	return &ServerSSHKeyService{
 		authorizedKeysPath: path,
+		hostKeysDir:        filepath.Join(filepath.Dir(path), "host_keys"),
 		username:           name,
 		projectsRoot:       root,
 		repository:         repository,
 		applications:       applications,
 		keyGenerator:       keyGenerator,
 	}, nil
+}
+
+// NewServerSSHKeyServiceWithHostKeysDir constructs the service with explicit
+// authorized_keys and host public keys locations. hostKeysDir holds copies of
+// the host /etc/ssh/*.pub files (public material only, never private keys).
+// An empty hostKeysDir disables host-key display; creation still succeeds.
+func NewServerSSHKeyServiceWithHostKeysDir(authorizedKeysPath, username, projectsRoot, hostKeysDir string, repository ServerSSHKeyRepository, applications ServerSSHKeyServiceCatalog, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
+	service, err := NewServerSSHKeyServiceWithPath(authorizedKeysPath, username, projectsRoot, repository, applications, keyGenerator)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(hostKeysDir)
+	if trimmed == "" {
+		service.hostKeysDir = ""
+		return service, nil
+	}
+	if !filepath.IsAbs(trimmed) {
+		return nil, errors.New("SSH host keys directory must be absolute")
+	}
+	service.hostKeysDir = filepath.Clean(trimmed)
+	return service, nil
 }
 
 // Username returns the OS login name these keys grant access to.
@@ -118,6 +144,27 @@ func (s *ServerSSHKeyService) AuthorizedKeysPath() string {
 		return ""
 	}
 	return s.authorizedKeysPath
+}
+
+// HostKeysDir returns the directory holding copies of the host sshd public
+// keys (*.pub only). An empty value disables host-key display.
+func (s *ServerSSHKeyService) HostKeysDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.hostKeysDir
+}
+
+// ListHostKeys returns the server's public sshd host keys for
+// SSH_KNOWN_HOSTS pinning. Missing directories yield no keys; only regular
+// non-symlink files with supported algorithms are returned, ordered with
+// Ed25519 first for CI use. Private key material is never read: the directory
+// must contain *.pub copies only (see scripts/setup.sh).
+func (s *ServerSSHKeyService) ListHostKeys() ([]application.SSHHostKey, error) {
+	if s == nil {
+		return nil, errors.New("SSH key service is not configured")
+	}
+	return readSSHHostKeysDir(s.hostKeysDir)
 }
 
 // List returns operator-managed host keys in creation order.
@@ -176,7 +223,14 @@ func (s *ServerSSHKeyService) Create(ctx context.Context, input application.Serv
 		_ = s.repository.DeleteServerSSHKey(context.Background(), saved.ID)
 		return application.ServerSSHKeySetup{}, err
 	}
-	return application.ServerSSHKeySetup{Key: saved, PrivateKey: privateKey}, nil
+	// Host keys are public and best-effort: a missing host_keys directory
+	// (local dev, older installs) must not fail key creation. The setup dialog
+	// falls back to ssh-keyscan instructions when no keys are available.
+	var hostKeys []application.SSHHostKey
+	if listed, err := readSSHHostKeysDir(s.hostKeysDir); err == nil {
+		hostKeys = listed
+	}
+	return application.ServerSSHKeySetup{Key: saved, PrivateKey: privateKey, HostKeys: hostKeys}, nil
 }
 
 // resolveRestriction validates an optional service restriction and returns
@@ -475,4 +529,131 @@ func ensureSSHKeysDirectory(path string) error {
 		return fmt.Errorf("set SSH directory permissions: %w", err)
 	}
 	return nil
+}
+
+const maxSSHHostKeyFileSize = 8192
+
+// sshHostKeyPreference orders host keys for CI display: Ed25519 first,
+// then ECDSA variants, then RSA. Unknown algorithms are never returned.
+func sshHostKeyPreference(algorithm string) int {
+	switch algorithm {
+	case "ssh-ed25519":
+		return 0
+	case "ecdsa-sha2-nistp256":
+		return 1
+	case "ecdsa-sha2-nistp384":
+		return 2
+	case "ecdsa-sha2-nistp521":
+		return 3
+	case "ssh-rsa":
+		return 4
+	default:
+		return 99
+	}
+}
+
+// readSSHHostKeysDir reads copies of host /etc/ssh/*.pub files from dir.
+// An empty dir returns no keys. The directory must not be a symlink and each
+// entry must be a regular non-symlink file; anything else is skipped. Files
+// containing private-key material or unsupported algorithms are skipped so one
+// bad file cannot hide the remaining host keys.
+func readSSHHostKeysDir(dir string) ([]application.SSHHostKey, error) {
+	trimmed := strings.TrimSpace(dir)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(trimmed) {
+		return nil, errors.New("SSH host keys directory must be absolute")
+	}
+	cleaned := filepath.Clean(trimmed)
+	info, err := os.Lstat(cleaned)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect SSH host keys directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("SSH host keys directory must not be a symlink")
+	}
+	if !info.IsDir() {
+		return nil, errors.New("SSH host keys path is not a directory")
+	}
+	entries, err := os.ReadDir(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("list SSH host keys: %w", err)
+	}
+	var keys []application.SSHHostKey
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(cleaned, entry.Name())
+		// Containment: entry names come from ReadDir and Join keeps them
+		// inside cleaned; still verify after Clean.
+		if relative, err := filepath.Rel(cleaned, filepath.Clean(path)); err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || strings.Contains(relative, string(filepath.Separator)) {
+			continue
+		}
+		key, ok := readSSHHostKeyFile(path)
+		if !ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		if preferenceLeft, preferenceRight := sshHostKeyPreference(keys[left].Algorithm), sshHostKeyPreference(keys[right].Algorithm); preferenceLeft != preferenceRight {
+			return preferenceLeft < preferenceRight
+		}
+		if keys[left].Algorithm != keys[right].Algorithm {
+			return keys[left].Algorithm < keys[right].Algorithm
+		}
+		return keys[left].Fingerprint < keys[right].Fingerprint
+	})
+	// Deduplicate identical public keys (for example copied twice).
+	deduplicated := keys[:0]
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if _, ok := seen[key.PublicKey]; ok {
+			continue
+		}
+		seen[key.PublicKey] = struct{}{}
+		deduplicated = append(deduplicated, key)
+	}
+	return deduplicated, nil
+}
+
+// readSSHHostKeyFile parses one host .pub copy. It reports false for any file
+// that must be ignored: symlinks, non-regular files, oversized files, private
+// key material, or unsupported algorithms.
+func readSSHHostKeyFile(path string) (application.SSHHostKey, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return application.SSHHostKey{}, false
+	}
+	if info.Size() <= 0 || info.Size() > maxSSHHostKeyFileSize {
+		return application.SSHHostKey{}, false
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return application.SSHHostKey{}, false
+	}
+	text := strings.TrimSpace(string(contents))
+	if text == "" || strings.Contains(text, "PRIVATE KEY") || strings.Contains(text, "PRIVATE") && strings.Contains(text, "BEGIN") {
+		return application.SSHHostKey{}, false
+	}
+	// Host .pub files are a single line; reject multi-line files outright
+	// rather than guessing which line to trust.
+	if strings.ContainsAny(text, "\r\n") {
+		return application.SSHHostKey{}, false
+	}
+	fields := strings.Fields(text)
+	if len(fields) < 2 || !isSupportedSSHPublicKeyAlgorithm(fields[0]) {
+		return application.SSHHostKey{}, false
+	}
+	canonical := fields[0] + " " + fields[1]
+	fingerprint, err := sshKeyFingerprint(canonical)
+	if err != nil {
+		return application.SSHHostKey{}, false
+	}
+	return application.SSHHostKey{Algorithm: fields[0], PublicKey: canonical, Fingerprint: fingerprint}, true
 }

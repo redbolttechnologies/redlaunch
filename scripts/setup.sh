@@ -148,6 +148,7 @@ unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SEC
 readonly redlaunch_ssh_user=redlaunch
 readonly redlaunch_ssh_dir=/home/redlaunch/.ssh
 readonly redlaunch_authorized_keys=/home/redlaunch/.ssh/authorized_keys
+readonly redlaunch_host_keys_dir=/home/redlaunch/.ssh/host_keys
 
 privileged() {
 	if [[ $EUID -eq 0 ]]; then
@@ -182,7 +183,37 @@ ensure_redlaunch_ssh_user() {
 		fail 'could not lock password login for the redlaunch user'
 }
 
+ensure_redlaunch_host_keys() {
+	# Publish the host sshd public keys (*.pub only, never private keys) where
+	# the manager can display them for SSH_KNOWN_HOSTS pinning. The manager
+	# already mounts /home/redlaunch/.ssh, so a host_keys subdirectory needs
+	# no additional privileged mount.
+	privileged install -d -m 700 -o "$redlaunch_ssh_user" -g "$redlaunch_ssh_user" "$redlaunch_host_keys_dir" ||
+		fail 'could not prepare /home/redlaunch/.ssh/host_keys'
+	if privileged test -L "$redlaunch_host_keys_dir"; then
+		fail '/home/redlaunch/.ssh/host_keys must not be a symlink'
+	fi
+	shopt -s nullglob
+	local host_pub_copied=0
+	local host_pub base
+	for host_pub in /etc/ssh/ssh_host_*_key.pub; do
+		# Only regular files; skip anything unexpected under /etc/ssh.
+		[[ -f $host_pub && ! -L $host_pub ]] || continue
+		base=${host_pub##*/}
+		# Refuse path escapes: only the expected basename form is copied.
+		[[ $base == ssh_host_*_key.pub ]] || continue
+		privileged install -m 600 -o "$redlaunch_ssh_user" -g "$redlaunch_ssh_user" "$host_pub" "$redlaunch_host_keys_dir/$base" ||
+			fail "could not publish $base for SSH_KNOWN_HOSTS display"
+		host_pub_copied=1
+	done
+	shopt -u nullglob
+	if [[ $host_pub_copied -eq 0 ]]; then
+		printf 'warning: no /etc/ssh/ssh_host_*_key.pub files found; SSH key creation will show ssh-keyscan instructions instead of host keys.\n' >&2
+	fi
+}
+
 ensure_redlaunch_ssh_user
+ensure_redlaunch_host_keys
 
 printf '\nEnsuring the persistent application data volume exists...\n' >&2
 docker volume create "$app_data_volume" >/dev/null

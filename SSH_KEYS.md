@@ -66,6 +66,14 @@ sudo chmod 600 /home/redlaunch/.ssh/authorized_keys
 sudo passwd -l redlaunch
 ```
 
+Existing installations from before host-key display existed also need the
+public host keys published once (public `*.pub` only, never private keys):
+
+```sh
+sudo install -d -m 700 -o redlaunch -g redlaunch /home/redlaunch/.ssh/host_keys
+sudo install -m 600 -o redlaunch -g redlaunch /etc/ssh/ssh_host_*_key.pub /home/redlaunch/.ssh/host_keys/
+```
+
 Then restart the stack so the new mount applies:
 
 ```sh
@@ -102,6 +110,63 @@ Verify the installed key on the server:
 grep "redlaunch-ssh-key:" /home/redlaunch/.ssh/authorized_keys
 ```
 
+## Use a key from CI
+
+The creation response shows both the private key and the server's public
+host keys for `SSH_KNOWN_HOSTS`. The known-hosts value is mandatory for
+non-interactive SSH with `StrictHostKeyChecking=yes` and `BatchMode=yes`:
+the private key authenticates CI to the server, while `known_hosts`
+authenticates the server to CI and blocks machine-in-the-middle attacks.
+Do not disable strict checking to work around a host-key error.
+
+1. Replace `YOUR_SERVER_HOST` in the displayed entry with the same IP or DNS
+   used as `SERVER_HOST` in CI (port 22, for example `87.229.84.149`).
+2. Save the resulting `YOUR_SERVER_HOST ssh-ed25519 ...` line as the CI
+   secret mapped to `SSH_KNOWN_HOSTS`.
+3. Save the complete private key, including the `BEGIN` and `END` lines, as
+   the CI secret mapped to `SSH_PRIVATE_KEY`.
+4. Verify the displayed fingerprint out of band before trusting it:
+
+```sh
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+A minimal CI step writes both secrets under `$RUNNER_TEMP` only and keeps
+strict checking enabled:
+
+```sh
+ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
+install -d -m 700 "$ssh_dir"
+printf '%s\n' "$SSH_PRIVATE_KEY" > "$ssh_dir/id_ed25519"
+printf '%s\n' "$SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+chmod 600 "$ssh_dir/id_ed25519"
+chmod 644 "$ssh_dir/known_hosts"
+ssh -p 22 -i "$ssh_dir/id_ed25519" \
+  -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
+  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
+  redlaunch@"$SERVER_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+set -euo pipefail
+# remote commands here
+REMOTE_SCRIPT
+```
+
+Shell commands such as `docker compose run --rm migrate` need an
+unrestricted key (the list shows `Full shell`). A tunnel-only key cannot
+open a shell by design.
+
+Do not reuse the GitHub Actions gateway entry (`[host]:2222 ssh-ed25519 ...`)
+for port 22 shell access. That entry belongs to the `redlaunch-deploy`
+gateway on port `2222` and never matches the system sshd on port `22`.
+`No ED25519 host key is known` with strict checking means the `known_hosts`
+content does not contain the system host key for the configured host.
+
+`make setup` copies host `/etc/ssh/ssh_host_*_key.pub` files (public only)
+into `/home/redlaunch/.ssh/host_keys/`, which the manager reads through its
+existing `.ssh` directory mount. No private host key ever enters the
+container. If the host keys change, re-copy them and rotate the CI secret.
+When no host keys are provisioned, creation shows `ssh-keyscan` fallback
+instructions instead.
+
 ## Revoke a key
 
 Select the delete action next to a key and confirm **Revoke key**. Redlaunch
@@ -111,6 +176,11 @@ key from the external system separately.
 
 ## Troubleshooting
 
+- `No ED25519 host key is known ... Host key verification failed` in CI means
+  `SSH_KNOWN_HOSTS` does not contain the system sshd key for the configured
+  `SERVER_HOST:22`. Re-check that the secret holds the `Settings → SSH keys`
+  host entry (plain `host ssh-ed25519 ...`), not the gateway `[host]:2222`
+  entry, and that the host string matches exactly.
 - `set SSH directory permissions: ... read-only file system` in the container
   logs means the stack still uses the old file mount instead of the directory
   mount above. Pull the latest Compose file and recreate the container with

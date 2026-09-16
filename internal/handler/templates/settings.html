@@ -296,6 +296,26 @@
       <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
     </div>
     {{end}}
+    {{if .HostKeys}}
+    <div class="field">
+      <label for="ssh-key-known-hosts-value">SSH known hosts for CI (SSH_KNOWN_HOSTS)</label>
+      <textarea id="ssh-key-known-hosts-value" class="github-actions-technical" rows="3" readonly autocomplete="off" spellcheck="false">{{range .HostKeys}}YOUR_SERVER_HOST {{.PublicKey}}
+{{end}}</textarea>
+      <div class="application-form-actions">
+        <button class="button button-secondary" type="button" data-copy-target="ssh-key-known-hosts-value"><span>Copy known hosts</span></button>
+      </div>
+      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Replace <code>YOUR_SERVER_HOST</code> with the same IP or DNS used as <code>SERVER_HOST</code> in CI (port 22), then save the result as the <code>SSH_KNOWN_HOSTS</code> secret. Verify before trusting:{{range .HostKeys}} <code>{{.Fingerprint}}</code> ({{.Algorithm}}){{end}}. Verify on the server with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Do not use the gateway <code>[host]:2222</code> entry here. Shell commands such as <code>docker compose run</code> need an unrestricted key.</span>
+    </div>
+    {{else}}
+    <div class="field">
+      <label for="ssh-key-known-hosts-fallback">SSH known hosts for CI (SSH_KNOWN_HOSTS)</label>
+      <textarea id="ssh-key-known-hosts-fallback" class="github-actions-technical" rows="3" readonly autocomplete="off" spellcheck="false">ssh-keyscan -t ed25519 YOUR_SERVER_HOST</textarea>
+      <div class="application-form-actions">
+        <button class="button button-secondary" type="button" data-copy-target="ssh-key-known-hosts-fallback"><span>Copy command</span></button>
+      </div>
+      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Run the command from a trusted network, verify the fingerprint with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the server, then save the <code>YOUR_SERVER_HOST ssh-ed25519 ...</code> line as the <code>SSH_KNOWN_HOSTS</code> secret. Do not use the gateway <code>[host]:2222</code> entry for port 22 shell access.</span>
+    </div>
+    {{end}}
     <footer class="application-form-actions">
       <button class="button button-primary" type="button" data-ssh-key-setup-close data-ssh-key-setup-done>Done</button>
     </footer>

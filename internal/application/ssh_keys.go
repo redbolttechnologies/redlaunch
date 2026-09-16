@@ -50,10 +50,43 @@ type ServerSSHKeyInput struct {
 }
 
 // ServerSSHKeySetup carries the one-time private key handoff. The private key
-// must never be persisted or logged.
+// must never be persisted or logged. HostKeys carries the server's public
+// OpenSSH host keys (for example Ed25519) so external automation can pin
+// SSH_KNOWN_HOSTS with StrictHostKeyChecking; it is public key material only
+// and may be empty when the host keys are not provisioned to the manager.
 type ServerSSHKeySetup struct {
 	Key        ServerSSHKey
 	PrivateKey string
+	HostKeys   []SSHHostKey
+}
+
+// SSHHostKey is one public host key of the server's own sshd (port 22). Only
+// the public half is ever exposed; the comment from the .pub file is stripped.
+// PublicKey holds the canonical "algorithm base64" form without a comment.
+type SSHHostKey struct {
+	Algorithm   string
+	PublicKey   string
+	Fingerprint string
+}
+
+// KnownHostsLine returns the known_hosts entry for this host key and the
+// caller-supplied server host (IP or DNS as used by CI). The host value is
+// validated to the same narrow set used for server hosts elsewhere.
+func (k SSHHostKey) KnownHostsLine(host string) (string, error) {
+	trimmed := strings.TrimSpace(host)
+	if trimmed == "" || len(trimmed) > 253 || strings.ContainsAny(trimmed, " \t\n\r\f\v/\\:@[];,&|$`\"'<>|*?") {
+		return "", errors.New("SSH host name is invalid")
+	}
+	for _, character := range trimmed {
+		if character < 0x20 || character == 0x7f {
+			return "", errors.New("SSH host name is invalid")
+		}
+	}
+	publicKey := strings.TrimSpace(k.PublicKey)
+	if publicKey == "" {
+		return "", errors.New("SSH host key is invalid")
+	}
+	return trimmed + " " + publicKey, nil
 }
 
 // ValidateSSHKeyDisplayName trims and validates the operator-supplied label

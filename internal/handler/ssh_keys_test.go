@@ -16,6 +16,7 @@ type fakeServerSSHKeyService struct {
 	keys        []application.ServerSSHKey
 	nextID      int64
 	privateKey  string
+	hostKeys    []application.SSHHostKey
 	createErr   error
 	createInput application.ServerSSHKeyInput
 	revokeID    int64
@@ -56,7 +57,7 @@ func (s *fakeServerSSHKeyService) Create(_ context.Context, input application.Se
 	if privateKey == "" {
 		privateKey = "private-key-material"
 	}
-	return application.ServerSSHKeySetup{Key: key, PrivateKey: privateKey}, nil
+	return application.ServerSSHKeySetup{Key: key, PrivateKey: privateKey, HostKeys: append([]application.SSHHostKey(nil), s.hostKeys...)}, nil
 }
 func (s *fakeServerSSHKeyService) Revoke(_ context.Context, id int64) error {
 	s.revokeID = id
@@ -197,6 +198,68 @@ func TestCreateServerSSHKeyShowsPrivateKeyOnce(t *testing.T) {
 	}
 	if strings.Contains(followUp.Body.String(), "private-key-one-time") {
 		t.Fatalf("private key persisted beyond the creation response")
+	}
+}
+
+func TestCreateServerSSHKeyShowsKnownHostsForCI(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	sshKeys.privateKey = "private-key-one-time"
+	sshKeys.hostKeys = []application.SSHHostKey{{
+		Algorithm:   "ssh-ed25519",
+		PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMhostkey",
+		Fingerprint: "SHA256:hostfingerprint",
+	}}
+	web := newSettingsHandlerWithSSH(t, &fakeApplicationService{}, sshKeys)
+
+	form := url.Values{"csrf_token": {web.csrfToken}, "display_name": {"CI access"}}
+	request := httptest.NewRequest(http.MethodPost, "/settings/ssh-keys", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /settings/ssh-keys status = %d, want %d", recorder.Code, http.StatusCreated)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`id="ssh-key-known-hosts-value"`,
+		`data-copy-target="ssh-key-known-hosts-value"`,
+		`SSH_KNOWN_HOSTS`,
+		`StrictHostKeyChecking`,
+		`YOUR_SERVER_HOST ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMhostkey`,
+		`SHA256:hostfingerprint`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST /settings/ssh-keys did not render known-hosts handoff %q", expected)
+		}
+	}
+}
+
+func TestCreateServerSSHKeyShowsKnownHostsFallback(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	sshKeys.privateKey = "private-key-one-time"
+	web := newSettingsHandlerWithSSH(t, &fakeApplicationService{}, sshKeys)
+
+	form := url.Values{"csrf_token": {web.csrfToken}, "display_name": {"CI access"}}
+	request := httptest.NewRequest(http.MethodPost, "/settings/ssh-keys", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /settings/ssh-keys status = %d, want %d", recorder.Code, http.StatusCreated)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`id="ssh-key-known-hosts-fallback"`,
+		`ssh-keyscan -t ed25519 YOUR_SERVER_HOST`,
+		`SSH_KNOWN_HOSTS`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST /settings/ssh-keys did not render known-hosts fallback %q", expected)
+		}
 	}
 }
 

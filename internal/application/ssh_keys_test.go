@@ -62,3 +62,23 @@ func TestValidateSSHKeyPermitOpen(t *testing.T) {
 		})
 	}
 }
+
+func TestSSHHostKeyKnownHostsLine(t *testing.T) {
+	key := SSHHostKey{Algorithm: "ssh-ed25519", PublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMhost", Fingerprint: "SHA256:x"}
+	line, err := key.KnownHostsLine("203.0.113.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "203.0.113.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMhost" {
+		t.Fatalf("KnownHostsLine = %q, want host-prefixed key", line)
+	}
+	for _, host := range []string{"", "bad host", "host;evil", "host\nname", strings.Repeat("a", 254)} {
+		if _, err := key.KnownHostsLine(host); err == nil {
+			t.Fatalf("KnownHostsLine(%q) succeeded, want error", host)
+		}
+	}
+	empty := SSHHostKey{}
+	if _, err := empty.KnownHostsLine("203.0.113.10"); err == nil {
+		t.Fatal("empty host key KnownHostsLine succeeded, want error")
+	}
+}

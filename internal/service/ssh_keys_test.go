@@ -385,3 +385,157 @@ func TestServerSSHKeyRejectsUnknownRestrictionService(t *testing.T) {
 		})
 	}
 }
+
+func writeSSHHostKeyFixture(t *testing.T, dir, name, algorithm string, raw []byte) string {
+	t.Helper()
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	contents := algorithm + " " + encoded + " root@test\n"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return algorithm + " " + encoded
+}
+
+func TestServerSSHKeyHostKeysDirDefaults(t *testing.T) {
+	authorizedKeys := filepath.Join(t.TempDir(), ".ssh", "authorized_keys")
+	service := newSSHKeyTestService(t, authorizedKeys, newFakeServerSSHKeyRepository(), nil)
+	want := filepath.Join(filepath.Dir(authorizedKeys), "host_keys")
+	if got := service.HostKeysDir(); got != want {
+		t.Fatalf("host keys dir = %q, want %q", got, want)
+	}
+}
+
+func TestServerSSHKeyListHostKeysMissingDir(t *testing.T) {
+	authorizedKeys := filepath.Join(t.TempDir(), ".ssh", "authorized_keys")
+	service := newSSHKeyTestService(t, authorizedKeys, newFakeServerSSHKeyRepository(), nil)
+	keys, err := service.ListHostKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("missing host keys dir returned %d keys, want 0", len(keys))
+	}
+}
+
+func TestServerSSHKeyListHostKeysReadsAndPrefersEd25519(t *testing.T) {
+	base := t.TempDir()
+	authorizedKeys := filepath.Join(base, ".ssh", "authorized_keys")
+	hostKeysDir := filepath.Join(base, ".ssh", "host_keys")
+	rsaPublic := writeSSHHostKeyFixture(t, hostKeysDir, "ssh_host_rsa_key.pub", "ssh-rsa", []byte{10, 11, 12, 13, 14, 15, 16, 17})
+	edPublic := writeSSHHostKeyFixture(t, hostKeysDir, "ssh_host_ed25519_key.pub", "ssh-ed25519", []byte{20, 21, 22, 23, 24, 25, 26, 27})
+	service, err := NewServerSSHKeyServiceWithHostKeysDir(authorizedKeys, "redlaunch", t.TempDir(), hostKeysDir, newFakeServerSSHKeyRepository(), &fakeSSHKeyApplications{}, &fakeServerSSHKeyGenerator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := service.ListHostKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("host keys = %d, want 2", len(keys))
+	}
+	if keys[0].Algorithm != "ssh-ed25519" || keys[0].PublicKey != edPublic {
+		t.Fatalf("first host key = %+v, want ed25519 %q", keys[0], edPublic)
+	}
+	if keys[1].Algorithm != "ssh-rsa" || keys[1].PublicKey != rsaPublic {
+		t.Fatalf("second host key = %+v, want rsa %q", keys[1], rsaPublic)
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key.Fingerprint, "SHA256:") {
+			t.Fatalf("host key fingerprint = %q, want SHA256:", key.Fingerprint)
+		}
+		line, err := application.SSHHostKey.KnownHostsLine(key, "203.0.113.10")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line != "203.0.113.10 "+key.PublicKey {
+			t.Fatalf("known_hosts line = %q, want host-prefixed key", line)
+		}
+	}
+}
+
+func TestServerSSHKeyListHostKeysSkipsUnsafeFiles(t *testing.T) {
+	base := t.TempDir()
+	authorizedKeys := filepath.Join(base, ".ssh", "authorized_keys")
+	hostKeysDir := filepath.Join(base, ".ssh", "host_keys")
+	edPublic := writeSSHHostKeyFixture(t, hostKeysDir, "ssh_host_ed25519_key.pub", "ssh-ed25519", []byte{30, 31, 32, 33, 34, 35, 36, 37})
+	if err := os.WriteFile(filepath.Join(hostKeysDir, "ssh_host_ed25519_key"), []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nprivate\n-----END OPENSSH PRIVATE KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostKeysDir, "bogus.pub"), []byte("ssh-unknown AAAAC3 comment\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostKeysDir, "multiline.pub"), []byte("ssh-ed25519 AAAAC3\nssh-ed25519 AAAAD3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(hostKeysDir, "real.pub")
+	if err := os.WriteFile(target, []byte(edPublic+" comment\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Symlinks must never be followed for host keys.
+	if err := os.Symlink(target, filepath.Join(hostKeysDir, "link.pub")); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServerSSHKeyServiceWithHostKeysDir(authorizedKeys, "redlaunch", t.TempDir(), hostKeysDir, newFakeServerSSHKeyRepository(), &fakeSSHKeyApplications{}, &fakeServerSSHKeyGenerator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := service.ListHostKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("host keys = %d, want 1 valid ed25519 key, got %#v", len(keys), keys)
+	}
+	if keys[0].PublicKey != edPublic {
+		t.Fatalf("host key = %q, want %q", keys[0].PublicKey, edPublic)
+	}
+}
+
+func TestServerSSHKeyCreateIncludesHostKeysBestEffort(t *testing.T) {
+	base := t.TempDir()
+	authorizedKeys := filepath.Join(base, ".ssh", "authorized_keys")
+	hostKeysDir := filepath.Join(base, ".ssh", "host_keys")
+	edPublic := writeSSHHostKeyFixture(t, hostKeysDir, "ssh_host_ed25519_key.pub", "ssh-ed25519", []byte{40, 41, 42, 43, 44, 45, 46, 47})
+	service, err := NewServerSSHKeyServiceWithHostKeysDir(authorizedKeys, "redlaunch", t.TempDir(), hostKeysDir, newFakeServerSSHKeyRepository(), &fakeSSHKeyApplications{}, &fakeServerSSHKeyGenerator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup, err := service.Create(t.Context(), application.ServerSSHKeyInput{DisplayName: "CI access"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(setup.HostKeys) != 1 || setup.HostKeys[0].PublicKey != edPublic {
+		t.Fatalf("setup host keys = %#v, want one %q", setup.HostKeys, edPublic)
+	}
+
+	missingAuthorized := filepath.Join(t.TempDir(), ".ssh", "authorized_keys")
+	missingService := newSSHKeyTestService(t, missingAuthorized, newFakeServerSSHKeyRepository(), nil)
+	missingSetup, err := missingService.Create(t.Context(), application.ServerSSHKeyInput{DisplayName: "CI access"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missingSetup.HostKeys) != 0 {
+		t.Fatalf("missing host keys dir should yield no host keys, got %#v", missingSetup.HostKeys)
+	}
+}
+
+func TestServerSSHKeyWithHostKeysDirValidation(t *testing.T) {
+	authorizedKeys := filepath.Join(t.TempDir(), ".ssh", "authorized_keys")
+	if _, err := NewServerSSHKeyServiceWithHostKeysDir(authorizedKeys, "redlaunch", t.TempDir(), "relative/host_keys", newFakeServerSSHKeyRepository(), &fakeSSHKeyApplications{}, nil); err == nil {
+		t.Fatal("relative host keys dir was accepted")
+	}
+	disabled, err := NewServerSSHKeyServiceWithHostKeysDir(authorizedKeys, "redlaunch", t.TempDir(), "", newFakeServerSSHKeyRepository(), &fakeSSHKeyApplications{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := disabled.HostKeysDir(); got != "" {
+		t.Fatalf("empty host keys dir = %q, want empty", got)
+	}
+	if keys, err := disabled.ListHostKeys(); err != nil || len(keys) != 0 {
+		t.Fatalf("disabled host keys = %v err=%v, want empty", keys, err)
+	}
+}

@@ -749,15 +749,35 @@ func readPublicKey(path string) (string, error) {
 
 func sshKeyFingerprint(publicKey string) (string, error) {
 	fields := strings.Fields(publicKey)
-	if len(fields) < 2 || fields[0] != "ssh-ed25519" {
-		return "", errors.New("public key is not an Ed25519 key")
+	if len(fields) < 2 || !isSupportedSSHPublicKeyAlgorithm(fields[0]) {
+		return "", errors.New("public key is not a supported SSH public key")
 	}
 	decoded, err := base64.StdEncoding.DecodeString(fields[1])
 	if err != nil {
 		return "", fmt.Errorf("decode public key: %w", err)
 	}
+	if len(decoded) == 0 || len(decoded) > 4096 {
+		return "", errors.New("public key has an invalid length")
+	}
 	sum := sha256.Sum256(decoded)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]), nil
+}
+
+// isSupportedSSHPublicKeyAlgorithm reports whether an OpenSSH public key
+// algorithm may appear in a host key. Client keys remain Ed25519-only at the
+// authorized_keys rendering layer; fingerprints accept the wider host set so
+// existing RSA/ECDSA host keys can be displayed for SSH_KNOWN_HOSTS pinning.
+func isSupportedSSHPublicKeyAlgorithm(algorithm string) bool {
+	switch algorithm {
+	case "ssh-ed25519",
+		"ecdsa-sha2-nistp256",
+		"ecdsa-sha2-nistp384",
+		"ecdsa-sha2-nistp521",
+		"ssh-rsa":
+		return true
+	default:
+		return false
+	}
 }
 
 func formatKnownHosts(host string, port int, publicKey string) string {
