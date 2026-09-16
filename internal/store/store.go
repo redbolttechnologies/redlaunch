@@ -1720,6 +1720,30 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record server SSH keys migration: %w", err)
 		}
 	}
+
+	var serverSSHKeyRestrictionMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 17`).Scan(&serverSSHKeyRestrictionMigrationApplied); err != nil {
+		return fmt.Errorf("check server SSH key restriction migration: %w", err)
+	}
+	if serverSSHKeyRestrictionMigrationApplied == 0 {
+		for _, statement := range []string{
+			`ALTER TABLE server_ssh_keys ADD COLUMN application_id INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE server_ssh_keys ADD COLUMN service_name TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE server_ssh_keys ADD COLUMN permit_open TEXT NOT NULL DEFAULT ''`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("add server SSH key restriction column: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (17, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record server SSH key restriction migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

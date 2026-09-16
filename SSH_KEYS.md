@@ -12,6 +12,27 @@ the private key once. Revoking a key removes its public key from
 Keys grant shell access as the dedicated `redlaunch` user. That user owns no
 Redlaunch files and has no sudo privileges. Treat keys like host credentials.
 
+## Restricting a key to one service
+
+The creation form offers an optional service restriction. A restricted key is
+tunnel-only: its `authorized_keys` line carries
+`no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc,permitopen="127.0.0.1:PORT"`,
+so it cannot open a shell and can only forward to the selected service's
+published host port. Unrestricted keys keep full shell access.
+
+The target is resolved when the key is created:
+
+- Redis services use their configured port (`127.0.0.1:<port>`).
+- Other services use the first TCP host port published in the application's
+  `compose.yml` (`127.0.0.1:<host port>`).
+- Services that publish no host port (for example Postgres, which is only
+  reachable inside its Compose network) cannot be restriction targets; the
+  form rejects them with an explanatory error.
+
+The restriction is a snapshot: if the service's published port changes later,
+or the service is removed, recreate the key. A stale target fails closed
+(the tunnel is refused) and never widens access.
+
 ## Prerequisites
 
 `make setup` creates the dedicated user with password login locked:
@@ -52,7 +73,8 @@ docker compose up -d
 ## Create a key
 
 1. Open **Settings → SSH keys**.
-2. Enter a display name and select **Create SSH key**.
+2. Enter a display name and select **Create SSH key**. Optionally pick a
+   service to restrict the key to tunnel-only access for that service.
 3. Copy the private key or use **Download private key**. The key is shown only
    in this response (`Cache-Control: no-store`) and is never stored by
    Redlaunch.
@@ -63,6 +85,14 @@ Use the private key from the external system:
 install -m 600 redlaunch-ssh-key-1.key ~/.ssh/redlaunch-key
 ssh -i ~/.ssh/redlaunch-key redlaunch@your-server
 ```
+
+A restricted key shows the exact tunnel command to use, for example:
+
+```sh
+ssh -N -L 127.0.0.1:5432:127.0.0.1:5432 -i ~/.ssh/redlaunch-key redlaunch@your-server
+```
+
+Use the destination verbatim: the key is limited to that `host:port`.
 
 Verify the installed key on the server:
 

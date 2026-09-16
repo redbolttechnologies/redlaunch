@@ -23,6 +23,13 @@ type ServerSSHKeyRepository interface {
 	DeleteServerSSHKey(context.Context, int64) error
 }
 
+// ServerSSHKeyServiceCatalog is the managed-application capability used to
+// resolve a service restriction to a host forwarding target.
+type ServerSSHKeyServiceCatalog interface {
+	Get(context.Context, int64) (application.Application, error)
+	ListServices(context.Context, int64) ([]application.Service, error)
+}
+
 // ServerSSHUsername is the dedicated login user for the Settings SSH keys
 // tab. The user is created by scripts/setup.sh with password login locked;
 // only keys installed through this service grant access.
@@ -39,7 +46,9 @@ const ServerSSHAuthorizedKeysPath = "/home/redlaunch/.ssh/authorized_keys"
 type ServerSSHKeyService struct {
 	authorizedKeysPath string
 	username           string
+	projectsRoot       string
 	repository         ServerSSHKeyRepository
+	applications       ServerSSHKeyServiceCatalog
 	keyGenerator       SSHKeyGenerator
 
 	mu sync.Mutex
@@ -47,14 +56,14 @@ type ServerSSHKeyService struct {
 
 // NewServerSSHKeyService constructs the host SSH key service for the
 // dedicated redlaunch user.
-func NewServerSSHKeyService(repository ServerSSHKeyRepository, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
-	return NewServerSSHKeyServiceWithPath(ServerSSHAuthorizedKeysPath, ServerSSHUsername, repository, keyGenerator)
+func NewServerSSHKeyService(projectsRoot string, repository ServerSSHKeyRepository, applications ServerSSHKeyServiceCatalog, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
+	return NewServerSSHKeyServiceWithPath(ServerSSHAuthorizedKeysPath, ServerSSHUsername, projectsRoot, repository, applications, keyGenerator)
 }
 
 // NewServerSSHKeyServiceWithPath constructs the service with an explicit
 // authorized_keys location. Production code uses NewServerSSHKeyService; tests
 // use this to point at temporary files.
-func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username string, repository ServerSSHKeyRepository, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
+func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username, projectsRoot string, repository ServerSSHKeyRepository, applications ServerSSHKeyServiceCatalog, keyGenerator SSHKeyGenerator) (*ServerSSHKeyService, error) {
 	path := strings.TrimSpace(authorizedKeysPath)
 	if path == "" || !filepath.IsAbs(path) {
 		return nil, errors.New("SSH authorized keys path must be absolute")
@@ -68,8 +77,19 @@ func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username string, reposit
 	if name == "" {
 		return nil, errors.New("SSH username is required")
 	}
-	if repository == nil {
-		return nil, errors.New("SSH key service repository is required")
+	if strings.TrimSpace(projectsRoot) == "" {
+		return nil, errors.New("projects root must not be empty")
+	}
+	root, err := filepath.Abs(projectsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve projects root: %w", err)
+	}
+	root = filepath.Clean(root)
+	if root == string(filepath.Separator) {
+		return nil, errors.New("projects root must not be the filesystem root")
+	}
+	if repository == nil || applications == nil {
+		return nil, errors.New("SSH key service dependencies are incomplete")
 	}
 	if keyGenerator == nil {
 		keyGenerator = CommandSSHKeyGenerator{}
@@ -77,7 +97,9 @@ func NewServerSSHKeyServiceWithPath(authorizedKeysPath, username string, reposit
 	return &ServerSSHKeyService{
 		authorizedKeysPath: path,
 		username:           name,
+		projectsRoot:       root,
 		repository:         repository,
+		applications:       applications,
 		keyGenerator:       keyGenerator,
 	}, nil
 }
@@ -105,11 +127,14 @@ func (s *ServerSSHKeyService) List(ctx context.Context) ([]application.ServerSSH
 
 // Create generates an Ed25519 pair, persists the public half, and installs it
 // in authorized_keys. The private half is returned once and never stored.
-func (s *ServerSSHKeyService) Create(ctx context.Context, displayName string) (application.ServerSSHKeySetup, error) {
-	if s == nil || s.repository == nil {
+// An input without a service restriction creates a full shell key; otherwise
+// the key is tunnel-only and OpenSSH limits forwarding to the resolved
+// service target.
+func (s *ServerSSHKeyService) Create(ctx context.Context, input application.ServerSSHKeyInput) (application.ServerSSHKeySetup, error) {
+	if s == nil || s.repository == nil || s.applications == nil {
 		return application.ServerSSHKeySetup{}, errors.New("SSH key service is not configured")
 	}
-	normalized, err := application.ValidateSSHKeyDisplayName(displayName)
+	normalized, err := application.ValidateSSHKeyDisplayName(input.DisplayName)
 	if err != nil {
 		return application.ServerSSHKeySetup{}, err
 	}
@@ -117,6 +142,10 @@ func (s *ServerSSHKeyService) Create(ctx context.Context, displayName string) (a
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	permitOpen, applicationID, serviceName, err := s.resolveRestriction(ctx, input)
+	if err != nil {
+		return application.ServerSSHKeySetup{}, err
+	}
 	privateKey, publicKey, err := s.keyGenerator.Generate(ctx, "redlaunch-ssh-key")
 	if err != nil {
 		return application.ServerSSHKeySetup{}, err
@@ -130,6 +159,9 @@ func (s *ServerSSHKeyService) Create(ctx context.Context, displayName string) (a
 		DisplayName:    normalized,
 		PublicKey:      strings.TrimSpace(publicKey),
 		KeyFingerprint: fingerprint,
+		ApplicationID:  applicationID,
+		ServiceName:    serviceName,
+		PermitOpen:     permitOpen,
 		CreatedAt:      now,
 	})
 	if err != nil {
@@ -145,6 +177,140 @@ func (s *ServerSSHKeyService) Create(ctx context.Context, displayName string) (a
 		return application.ServerSSHKeySetup{}, err
 	}
 	return application.ServerSSHKeySetup{Key: saved, PrivateKey: privateKey}, nil
+}
+
+// resolveRestriction validates an optional service restriction and returns
+// the enforced forwarding target with the referenced service. An input
+// without a restriction resolves to empty values and an unrestricted key.
+func (s *ServerSSHKeyService) resolveRestriction(ctx context.Context, input application.ServerSSHKeyInput) (permitOpen string, applicationID int64, serviceName string, err error) {
+	serviceName = strings.TrimSpace(input.ServiceName)
+	if input.ApplicationID == 0 && serviceName == "" {
+		return "", 0, "", nil
+	}
+	if input.ApplicationID < 1 || serviceName == "" {
+		return "", 0, "", application.ErrSSHKeyServiceRequired
+	}
+	serviceName, err = application.ValidateServiceName(serviceName)
+	if err != nil {
+		return "", 0, "", application.ErrSSHKeyServiceNotFound
+	}
+	item, err := s.applications.Get(ctx, input.ApplicationID)
+	if err != nil {
+		if errors.Is(err, application.ErrNotFound) {
+			return "", 0, "", application.ErrSSHKeyServiceNotFound
+		}
+		return "", 0, "", err
+	}
+	services, err := s.applications.ListServices(ctx, input.ApplicationID)
+	if err != nil {
+		return "", 0, "", err
+	}
+	var target *application.Service
+	for index := range services {
+		if services[index].Name == serviceName {
+			target = &services[index]
+			break
+		}
+	}
+	if target == nil {
+		return "", 0, "", application.ErrSSHKeyServiceNotFound
+	}
+	// Redis services publish their persisted port on loopback, so the target
+	// needs no Compose file access.
+	if target.Type == application.ServiceTypeRedis || strings.TrimSpace(target.RedisPort) != "" {
+		port := strings.TrimSpace(target.RedisPort)
+		if !validApplicationPort(port) {
+			return "", 0, "", fmt.Errorf("stored Redis port for service %q is invalid", serviceName)
+		}
+		return "127.0.0.1:" + port, item.ID, serviceName, nil
+	}
+	port, err := s.resolveServiceHostPort(ctx, item, serviceName)
+	if err != nil {
+		return "", 0, "", err
+	}
+	return "127.0.0.1:" + port, item.ID, serviceName, nil
+}
+
+// resolveServiceHostPort returns the first TCP host port published by one
+// managed service, canonicalized for a 127.0.0.1 target. Host sshd resolves
+// permitopen targets from the host network namespace, so only published host
+// ports qualify; container-private ports (notably Postgres) cannot be tunnel
+// targets. Redlaunch generates loopback or all-interface publishes, both
+// reachable via 127.0.0.1; a service bound to one specific public IP is out
+// of scope and its tunnel fails closed with connection refused.
+func (s *ServerSSHKeyService) resolveServiceHostPort(ctx context.Context, item application.Application, serviceName string) (string, error) {
+	directory, err := s.managedSSHKeyApplicationDirectory(item)
+	if err != nil {
+		return "", err
+	}
+	composePath, err := findApplicationComposeFile(directory)
+	if err != nil {
+		return "", fmt.Errorf("find application Compose file: %w", err)
+	}
+	if composePath == "" {
+		return "", fmt.Errorf("application Compose file does not exist for %q", item.Name)
+	}
+	snapshot, err := snapshotManagedFile(composePath)
+	if err != nil {
+		return "", fmt.Errorf("read application Compose file: %w", err)
+	}
+	if !snapshot.exists {
+		return "", fmt.Errorf("application Compose file does not exist for %q", item.Name)
+	}
+	config, err := parseApplicationServiceBlock(string(snapshot.contents), serviceName)
+	if err != nil {
+		if errors.Is(err, application.ErrServiceNotFound) {
+			return "", application.ErrSSHKeyServiceNotFound
+		}
+		return "", err
+	}
+	for _, mapping := range config.PortMappings {
+		if strings.ToLower(strings.TrimSpace(mapping.Protocol)) != "tcp" {
+			continue
+		}
+		// Port mappings are operator-controlled Compose text: re-validate
+		// the host port instead of trusting the parsed value.
+		hostPort := strings.TrimSpace(mapping.HostPort)
+		if !validApplicationPort(hostPort) {
+			continue
+		}
+		return hostPort, nil
+	}
+	return "", application.ErrSSHKeyServiceHasNoTargetPort
+}
+
+// managedSSHKeyApplicationDirectory locates one application's managed
+// directory with the same containment guarantees as the application service:
+// the stored folder name is validated and the result must stay inside the
+// managed applications directory without symlink escapes.
+func (s *ServerSSHKeyService) managedSSHKeyApplicationDirectory(item application.Application) (string, error) {
+	folderName, err := application.ValidateFolderName(item.FolderName)
+	if err != nil {
+		return "", fmt.Errorf("validate stored application folder: %w", err)
+	}
+	root := filepath.Join(s.projectsRoot, applicationsDir)
+	directory := filepath.Join(root, folderName)
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("application directory is outside the managed applications directory")
+	}
+	if err := checkManagedAncestors(root, directory); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", application.ErrSSHKeyServiceNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect application directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("application directory must not be a symlink")
+	}
+	if !info.IsDir() {
+		return "", errors.New("application path is not a directory")
+	}
+	return directory, nil
 }
 
 // Revoke removes one key from SQLite and from authorized_keys.
@@ -208,12 +374,27 @@ func isServerSSHKeyManagedLine(line string) bool {
 	return true
 }
 
+// serverSSHKeyTunnelOptions hardens restricted keys to tunnel-only use,
+// mirroring the GitHub Actions gateway convention: no PTY, agent, X11, or
+// user-rc processing, with forwarding re-enabled for exactly one target.
+const serverSSHKeyTunnelOptions = `no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc`
+
 func serverSSHKeyLine(key application.ServerSSHKey) (string, error) {
 	fields := strings.Fields(key.PublicKey)
 	if len(fields) < 2 || fields[0] != "ssh-ed25519" {
 		return "", fmt.Errorf("invalid public key for SSH key %d", key.ID)
 	}
-	return fields[0] + " " + fields[1] + " " + serverSSHKeyComment(key.ID), nil
+	base := fields[0] + " " + fields[1] + " " + serverSSHKeyComment(key.ID)
+	if strings.TrimSpace(key.PermitOpen) == "" {
+		return base, nil
+	}
+	// Fail closed on stored targets that no longer validate: never render a
+	// restricted key as an unrestricted line.
+	target, err := application.ValidateSSHKeyPermitOpen(key.PermitOpen)
+	if err != nil {
+		return "", fmt.Errorf("invalid forwarding target for SSH key %d: %w", key.ID, err)
+	}
+	return serverSSHKeyTunnelOptions + `,permitopen="` + target + `" ` + base, nil
 }
 
 func writeServerSSHKeysFile(path string, keys []application.ServerSSHKey) error {

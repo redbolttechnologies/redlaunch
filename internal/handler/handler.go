@@ -272,7 +272,7 @@ type githubActionsService interface {
 type serverSSHKeyService interface {
 	Username() string
 	List(context.Context) ([]application.ServerSSHKey, error)
-	Create(context.Context, string) (application.ServerSSHKeySetup, error)
+	Create(context.Context, application.ServerSSHKeyInput) (application.ServerSSHKeySetup, error)
 	Revoke(context.Context, int64) error
 }
 
@@ -4802,8 +4802,25 @@ type settingsPageData struct {
 	SSHKeyError     string
 	SSHKeyNotice    string
 	SSHKeyName      string
-	SSHKeyDelete    *sshKeyDeletePageData
-	SSHActive       bool
+	// SSHKeyServiceRef preserves the restriction picker selection
+	// ("<applicationID>/<service>") across creation validation failures.
+	SSHKeyServiceRef string
+	// SSHServiceOptions lists every managed service as a tunnel
+	// restriction candidate, grouped by application in the form.
+	SSHServiceOptions []sshServicePickerOption
+	// SSHApplicationNames resolves key restriction references for display.
+	SSHApplicationNames map[int64]string
+	SSHKeyDelete        *sshKeyDeletePageData
+	SSHActive           bool
+}
+
+// sshServicePickerOption is one managed service offered as an SSH key tunnel
+// restriction target. Value encodes the selection for the creation form.
+type sshServicePickerOption struct {
+	ApplicationID   int64
+	ApplicationName string
+	ServiceName     string
+	Value           string
 }
 
 type sshKeyDeletePageData struct {

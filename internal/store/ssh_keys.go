@@ -13,7 +13,8 @@ import (
 // ListServerSSHKeys returns operator-managed host keys in creation order.
 func (s *Store) ListServerSSHKeys(ctx context.Context) ([]application.ServerSSHKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, display_name, public_key, key_fingerprint, created_at
+		SELECT id, display_name, public_key, key_fingerprint, application_id,
+			service_name, permit_open, created_at
 		FROM server_ssh_keys
 		ORDER BY id ASC`)
 	if err != nil {
@@ -40,13 +41,17 @@ func (s *Store) GetServerSSHKey(ctx context.Context, id int64) (application.Serv
 	var item application.ServerSSHKey
 	var createdAt string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, display_name, public_key, key_fingerprint, created_at
+		SELECT id, display_name, public_key, key_fingerprint, application_id,
+			service_name, permit_open, created_at
 		FROM server_ssh_keys
 		WHERE id = ?`, id).Scan(
 		&item.ID,
 		&item.DisplayName,
 		&item.PublicKey,
 		&item.KeyFingerprint,
+		&item.ApplicationID,
+		&item.ServiceName,
+		&item.PermitOpen,
 		&createdAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -68,11 +73,15 @@ func (s *Store) CreateServerSSHKey(ctx context.Context, item application.ServerS
 		item.CreatedAt = time.Now().UTC()
 	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO server_ssh_keys (display_name, public_key, key_fingerprint, created_at)
-		VALUES (?, ?, ?, ?)`,
+		INSERT INTO server_ssh_keys (display_name, public_key, key_fingerprint,
+			application_id, service_name, permit_open, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		item.DisplayName,
 		item.PublicKey,
 		item.KeyFingerprint,
+		item.ApplicationID,
+		item.ServiceName,
+		item.PermitOpen,
 		item.CreatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -118,6 +127,9 @@ func scanServerSSHKey(scanner serverSSHKeyScanner) (application.ServerSSHKey, er
 		&item.DisplayName,
 		&item.PublicKey,
 		&item.KeyFingerprint,
+		&item.ApplicationID,
+		&item.ServiceName,
+		&item.PermitOpen,
 		&createdAt,
 	); err != nil {
 		return application.ServerSSHKey{}, fmt.Errorf("scan server SSH key: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"redlaunch/internal/application"
 )
@@ -50,6 +51,28 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 			return settingsPageData{}, err
 		}
 		data.SSHKeys = keys
+	}
+	if h.applicationManager != nil && h.applicationDetails != nil {
+		applications, err := h.applicationManager.List(ctx)
+		if err != nil {
+			return settingsPageData{}, err
+		}
+		data.SSHApplicationNames = make(map[int64]string, len(applications))
+		for _, item := range applications {
+			data.SSHApplicationNames[item.ID] = item.Name
+			services, err := h.applicationDetails.ListServices(ctx, item.ID)
+			if err != nil {
+				return settingsPageData{}, err
+			}
+			for _, service := range services {
+				data.SSHServiceOptions = append(data.SSHServiceOptions, sshServicePickerOption{
+					ApplicationID:   item.ID,
+					ApplicationName: item.Name,
+					ServiceName:     service.Name,
+					Value:           strconv.FormatInt(item.ID, 10) + "/" + service.Name,
+				})
+			}
+		}
 	}
 	return data, nil
 }

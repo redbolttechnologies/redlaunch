@@ -160,7 +160,9 @@ func run(ctx context.Context) error {
 	}
 
 	serverSSHKeys, err := service.NewServerSSHKeyService(
+		cfg.ProjectsRoot,
 		database,
+		applications,
 		service.CommandSSHKeyGenerator{},
 	)
 	if err != nil {

@@ -103,6 +103,15 @@
                 </div>
                 <span class="field-help">Fingerprint: <code>{{.Key.KeyFingerprint}}</code>. The matching public key is already installed on this server.</span>
               </div>
+              {{with .Key.PermitOpen}}
+              <div class="field">
+                <label for="ssh-key-tunnel-usage">Tunnel usage</label>
+                <textarea id="ssh-key-tunnel-usage" class="github-actions-technical" rows="2" readonly autocomplete="off" spellcheck="false">ssh -N -L {{.}}:{{.}} {{$.SettingsPage.SSHKeysUsername}}@your-server</textarea>
+                <button class="button button-secondary" type="button" data-copy-target="ssh-key-tunnel-usage">Copy tunnel command</button>
+                <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
+              </div>
+              {{end}}
+              </div>
             </div>
           </section>
           {{end}}
@@ -117,7 +126,17 @@
             <div class="field">
               <label for="ssh-key-display-name">Display name</label>
               <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
-              <span class="field-help">Only shown in this list. The key grants full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
+              <span class="field-help">Only shown in this list.</span>
+            </div>
+            <div class="field">
+              <label for="ssh-key-service">Restrict to service (optional)</label>
+              <select id="ssh-key-service" name="service_ref">
+                <option value="">Full shell access (unrestricted)</option>
+                {{range .SettingsPage.SSHServiceOptions}}
+                <option value="{{.Value}}"{{if eq .Value $.SettingsPage.SSHKeyServiceRef}} selected{{end}}>{{.ApplicationName}} / {{.ServiceName}}</option>
+                {{end}}
+              </select>
+              <span class="field-help">A restricted key is tunnel-only: it cannot open a shell and can only forward to the selected service's published host port. Unrestricted keys grant full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
             </div>
             <div class="application-form-actions">
               <button class="button button-primary" type="submit">Create SSH key</button>
@@ -130,6 +149,7 @@
               <thead>
                 <tr>
                   <th scope="col">Display name</th>
+                  <th scope="col">Access</th>
                   <th scope="col">Fingerprint</th>
                   <th scope="col">Created</th>
                   <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
@@ -139,6 +159,7 @@
                 {{range .SettingsPage.SSHKeys}}
                 <tr>
                   <th scope="row">{{.DisplayName}}</th>
+                  <td>{{if .PermitOpen}}Tunnel only: <code>{{.PermitOpen}}</code>{{if .ServiceName}} ({{with index $.SettingsPage.SSHApplicationNames .ApplicationID}}{{.}} / {{end}}{{.ServiceName}}){{end}}{{else}}Full shell{{end}}</td>
                   <td><code>{{.KeyFingerprint}}</code></td>
                   <td><time datetime="{{backupAtISO .CreatedAt}}">{{backupAt .CreatedAt}}</time></td>
                   <td class="application-environment-actions">

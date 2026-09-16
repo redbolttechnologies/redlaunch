@@ -13,13 +13,13 @@ import (
 )
 
 type fakeServerSSHKeyService struct {
-	keys       []application.ServerSSHKey
-	nextID     int64
-	privateKey string
-	createErr  error
-	createName string
-	revokeID   int64
-	revokeErr  error
+	keys        []application.ServerSSHKey
+	nextID      int64
+	privateKey  string
+	createErr   error
+	createInput application.ServerSSHKeyInput
+	revokeID    int64
+	revokeErr   error
 }
 
 func newFakeServerSSHKeyService() *fakeServerSSHKeyService {
@@ -30,12 +30,12 @@ func (s *fakeServerSSHKeyService) Username() string { return "redlaunch" }
 func (s *fakeServerSSHKeyService) List(context.Context) ([]application.ServerSSHKey, error) {
 	return append([]application.ServerSSHKey(nil), s.keys...), nil
 }
-func (s *fakeServerSSHKeyService) Create(_ context.Context, displayName string) (application.ServerSSHKeySetup, error) {
-	s.createName = displayName
+func (s *fakeServerSSHKeyService) Create(_ context.Context, input application.ServerSSHKeyInput) (application.ServerSSHKeySetup, error) {
+	s.createInput = input
 	if s.createErr != nil {
 		return application.ServerSSHKeySetup{}, s.createErr
 	}
-	normalized, err := application.ValidateSSHKeyDisplayName(displayName)
+	normalized, err := application.ValidateSSHKeyDisplayName(input.DisplayName)
 	if err != nil {
 		return application.ServerSSHKeySetup{}, err
 	}
@@ -44,6 +44,11 @@ func (s *fakeServerSSHKeyService) Create(_ context.Context, displayName string) 
 		DisplayName:    normalized,
 		PublicKey:      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMfake redlaunch-ssh-key",
 		KeyFingerprint: "SHA256:fake",
+		ApplicationID:  input.ApplicationID,
+		ServiceName:    input.ServiceName,
+	}
+	if input.ApplicationID != 0 {
+		key.PermitOpen = "127.0.0.1:5432"
 	}
 	s.nextID++
 	s.keys = append(s.keys, key)
@@ -113,6 +118,33 @@ func TestSettingsPageRendersSSHKeysTab(t *testing.T) {
 	}
 }
 
+func TestSettingsPageRendersServiceRestrictionPicker(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "db"}, {ID: 10, ApplicationID: 7, Name: "web"}},
+	}
+	web := newSettingsHandlerWithSSH(t, applications, sshKeys)
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /settings status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`name="service_ref"`,
+		`Full shell access (unrestricted)`,
+		`value="7/db"`,
+		`Status page / db`,
+		`Status page / web`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET /settings did not render service picker %q", expected)
+		}
+	}
+}
+
 func TestCreateServerSSHKeyShowsPrivateKeyOnce(t *testing.T) {
 	sshKeys := newFakeServerSSHKeyService()
 	sshKeys.privateKey = "private-key-one-time"
@@ -141,8 +173,11 @@ func TestCreateServerSSHKeyShowsPrivateKeyOnce(t *testing.T) {
 			t.Fatalf("POST /settings/ssh-keys did not render one-time handoff %q", expected)
 		}
 	}
-	if sshKeys.createName != "GHA migrator workflow access" {
-		t.Fatalf("create display name = %q, want raw input", sshKeys.createName)
+	if sshKeys.createInput.DisplayName != "GHA migrator workflow access" {
+		t.Fatalf("create display name = %q, want raw input", sshKeys.createInput.DisplayName)
+	}
+	if sshKeys.createInput.ApplicationID != 0 || sshKeys.createInput.ServiceName != "" {
+		t.Fatalf("unrestricted create input = %+v, want no restriction", sshKeys.createInput)
 	}
 	if recorder.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("SSH key handoff Cache-Control = %q, want no-store", recorder.Header().Get("Cache-Control"))
@@ -155,6 +190,104 @@ func TestCreateServerSSHKeyShowsPrivateKeyOnce(t *testing.T) {
 	}
 	if strings.Contains(followUp.Body.String(), "private-key-one-time") {
 		t.Fatalf("private key persisted beyond the creation response")
+	}
+}
+
+func TestCreateServerSSHKeyWithServiceRestriction(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "db"}},
+	}
+	web := newSettingsHandlerWithSSH(t, applications, sshKeys)
+
+	form := url.Values{
+		"csrf_token":   {web.csrfToken},
+		"display_name": {"migrator access"},
+		"service_ref":  {"7/db"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/settings/ssh-keys", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /settings/ssh-keys status = %d, want %d", recorder.Code, http.StatusCreated)
+	}
+	if sshKeys.createInput.ApplicationID != 7 || sshKeys.createInput.ServiceName != "db" {
+		t.Fatalf("create restriction = %+v, want application 7 service db", sshKeys.createInput)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`id="ssh-key-tunnel-usage"`,
+		`ssh -N -L 127.0.0.1:5432:127.0.0.1:5432`,
+		`Tunnel only:`,
+		`127.0.0.1:5432`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("restricted key handoff did not render %q", expected)
+		}
+	}
+}
+
+func TestCreateServerSSHKeyRejectsMalformedServiceRef(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	web := newSettingsHandlerWithSSH(t, &fakeApplicationService{}, sshKeys)
+
+	form := url.Values{
+		"csrf_token":   {web.csrfToken},
+		"display_name": {"migrator access"},
+		"service_ref":  {"bogus"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/settings/ssh-keys", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST malformed service_ref status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "Select a service") {
+		t.Fatalf("malformed service_ref did not render picker error: %s", body)
+	}
+	if len(sshKeys.keys) != 0 {
+		t.Fatalf("malformed service_ref reached the key service")
+	}
+}
+
+func TestCreateServerSSHKeyRendersNoTargetPortError(t *testing.T) {
+	sshKeys := newFakeServerSSHKeyService()
+	sshKeys.createErr = application.ErrSSHKeyServiceHasNoTargetPort
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 9, ApplicationID: 7, Name: "db"}},
+	}
+	web := newSettingsHandlerWithSSH(t, applications, sshKeys)
+
+	form := url.Values{
+		"csrf_token":   {web.csrfToken},
+		"display_name": {"migrator access"},
+		"service_ref":  {"7/db"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/settings/ssh-keys", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("POST unrestrictable service status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		"publishes no host port",
+		`value="7/db" selected`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("unrestrictable service did not render %q", expected)
+		}
 	}
 }
 
