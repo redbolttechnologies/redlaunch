@@ -3973,6 +3973,10 @@ h1 {
   max-width: 44rem;
 }
 
+.ssh-key-setup-dialog {
+  width: min(calc(100% - var(--space-8)), 40rem);
+}
+
 .compose-import-preview-container:empty {
   display: none;
 }

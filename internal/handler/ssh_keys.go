@@ -152,6 +152,7 @@ func (h *Handler) renderSSHKeyError(w http.ResponseWriter, r *http.Request, name
 		http.Error(w, "The settings could not be read.", http.StatusInternalServerError)
 		return
 	}
+	data.SSHKeyCreateOpen = true
 	data.SSHKeyError = message
 	data.SSHKeyName = name
 	data.SSHKeyServiceRef = serviceRef

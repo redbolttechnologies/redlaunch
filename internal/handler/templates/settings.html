@@ -79,68 +79,14 @@
             <h2 id="ssh-keys-title">SSH keys</h2>
             <p>Create SSH keys for external automation, for example GitHub Actions, to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>. Each public key is added to the <code>redlaunch</code> user authorized keys and removed when the key is revoked.</p>
           </div>
+          <button class="button button-primary" type="button" data-ssh-key-add aria-controls="ssh-key-create-dialog" aria-haspopup="dialog" aria-expanded="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+            <span>Create SSH key</span>
+          </button>
         </header>
         <div class="service-widget-body settings-ssh-keys-body">
-          {{with .SettingsPage.SSHKeySetup}}
-          <section class="service-widget github-actions-handoff" aria-labelledby="ssh-key-handoff-title">
-            <header class="service-widget-header">
-              <div class="service-widget-heading">
-                <h3 id="ssh-key-handoff-title">Store this private key now</h3>
-                <p>Key <strong>{{.Key.DisplayName}}</strong> was created. This private key will not be shown again.</p>
-              </div>
-            </header>
-            <div class="service-widget-body github-actions-handoff-body">
-              <div class="application-alert application-alert-warning" role="alert">
-                <strong>Store the private key safely.</strong>
-                <span>It will not be displayed again. Add it to the external system, for example as a GitHub Actions secret, then keep a secure backup.</span>
-              </div>
-              <div class="field">
-                <label for="ssh-key-private-value">Private key for {{.Key.DisplayName}}</label>
-                <textarea id="ssh-key-private-value" class="github-actions-secret" rows="12" readonly autocomplete="off" spellcheck="false">{{.PrivateKey}}</textarea>
-                <div class="application-form-actions">
-                  <button class="button button-secondary" type="button" data-copy-target="ssh-key-private-value"><span>Copy private key</span></button>
-                  <button class="button button-secondary" type="button" data-ssh-key-download data-ssh-key-source="ssh-key-private-value" data-ssh-key-filename="redlaunch-ssh-key-{{.Key.ID}}.key"><span>Download private key</span></button>
-                </div>
-                <span class="field-help">Fingerprint: <code>{{.Key.KeyFingerprint}}</code>. The matching public key is already installed on this server.</span>
-              </div>
-              {{with .Key.PermitOpen}}
-              <div class="field">
-                <label for="ssh-key-tunnel-usage">Tunnel usage</label>
-                <textarea id="ssh-key-tunnel-usage" class="github-actions-technical" rows="2" readonly autocomplete="off" spellcheck="false">ssh -N -L {{.}}:{{.}} {{$.SettingsPage.SSHKeysUsername}}@your-server</textarea>
-                <button class="button button-secondary" type="button" data-copy-target="ssh-key-tunnel-usage">Copy tunnel command</button>
-                <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
-              </div>
-              {{end}}
-            </div>
-          </section>
-          {{end}}
-          <form class="application-form" method="post" action="/settings/ssh-keys">
-            <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
-            {{if .SettingsPage.SSHKeyError}}
-            <div class="application-alert application-dialog-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
-            {{end}}
-            {{if .SettingsPage.SSHKeyNotice}}
-            <div class="application-alert application-dialog-alert" role="status"><span>{{.SettingsPage.SSHKeyNotice}}</span></div>
-            {{end}}
-            <div class="field">
-              <label for="ssh-key-display-name">Display name</label>
-              <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
-              <span class="field-help">Only shown in this list.</span>
-            </div>
-            <div class="field">
-              <label for="ssh-key-service">Restrict to service (optional)</label>
-              <select id="ssh-key-service" name="service_ref">
-                <option value="">Full shell access (unrestricted)</option>
-                {{range .SettingsPage.SSHServiceOptions}}
-                <option value="{{.Value}}"{{if eq .Value $.SettingsPage.SSHKeyServiceRef}} selected{{end}}>{{.ApplicationName}} / {{.ServiceName}}</option>
-                {{end}}
-              </select>
-              <span class="field-help">A restricted key is tunnel-only: it cannot open a shell and can only forward to the selected service's published host port. Unrestricted keys grant full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
-            </div>
-            <div class="application-form-actions">
-              <button class="button button-primary" type="submit">Create SSH key</button>
-            </div>
-          </form>
           {{if .SettingsPage.SSHKeys}}
           <div class="service-environment-table-wrap">
             <table class="service-environment-table">
@@ -178,11 +124,9 @@
             </table>
           </div>
           {{else}}
-          {{if .SettingsPage.SSHKeySetup}}{{else}}
           <div class="service-widget-empty" role="status">
             <p>No SSH keys are installed on this server.</p>
           </div>
-          {{end}}
           {{end}}
         </div>
       </section>
@@ -270,6 +214,94 @@
     </form>
   </div>
 </dialog>
+
+<dialog class="application-dialog ssh-key-create-dialog" id="ssh-key-create-dialog" data-ssh-key-create-dialog{{if .SettingsPage.SSHKeyCreateOpen}} data-ssh-key-create-open{{end}} aria-modal="true" aria-labelledby="ssh-key-create-dialog-title" aria-describedby="ssh-key-create-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="ssh-key-create-dialog-title">Create SSH key</h2>
+        <p id="ssh-key-create-dialog-description">Create an SSH key for external automation to access this server as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</p>
+      </div>
+      <button class="icon-button" type="button" data-ssh-key-create-close aria-label="Close create SSH key dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/ssh-keys">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      {{if .SettingsPage.SSHKeyError}}
+      <div class="application-alert application-dialog-alert" role="alert"><span>{{.SettingsPage.SSHKeyError}}</span></div>
+      {{end}}
+      {{if .SettingsPage.SSHKeyNotice}}
+      <div class="application-alert application-dialog-alert" role="status"><span>{{.SettingsPage.SSHKeyNotice}}</span></div>
+      {{end}}
+      <div class="field">
+        <label for="ssh-key-display-name">Display name</label>
+        <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
+        <span class="field-help">Only shown in this list.</span>
+      </div>
+      <div class="field">
+        <label for="ssh-key-service">Restrict to service (optional)</label>
+        <select id="ssh-key-service" name="service_ref">
+          <option value="">Full shell access (unrestricted)</option>
+          {{range .SettingsPage.SSHServiceOptions}}
+          <option value="{{.Value}}"{{if eq .Value $.SettingsPage.SSHKeyServiceRef}} selected{{end}}>{{.ApplicationName}} / {{.ServiceName}}</option>
+          {{end}}
+        </select>
+        <span class="field-help">A restricted key is tunnel-only: it cannot open a shell and can only forward to the selected service's published host port. Unrestricted keys grant full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-ssh-key-create-close data-ssh-key-create-cancel>Cancel</button>
+        <button class="button button-primary" type="submit" data-ssh-key-create-submit>Create SSH key</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+{{with .SettingsPage.SSHKeySetup}}
+<dialog class="application-dialog ssh-key-setup-dialog" id="ssh-key-setup-dialog" data-ssh-key-setup-dialog data-ssh-key-setup-open aria-modal="true" aria-labelledby="ssh-key-setup-dialog-title" aria-describedby="ssh-key-setup-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="ssh-key-setup-dialog-title">Store this private key now</h2>
+        <p id="ssh-key-setup-dialog-description">Key <strong>{{.Key.DisplayName}}</strong> was created. This private key will not be shown again.</p>
+      </div>
+      <button class="icon-button" type="button" data-ssh-key-setup-close aria-label="Close private key dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="application-alert application-alert-warning application-dialog-alert" role="alert">
+      <strong>Store the private key safely.</strong>
+      <span>It will not be displayed again. Add it to the external system, for example as a GitHub Actions secret, then keep a secure backup.</span>
+    </div>
+    <div class="field">
+      <label for="ssh-key-private-value">Private key for {{.Key.DisplayName}}</label>
+      <textarea id="ssh-key-private-value" class="github-actions-secret" rows="12" readonly autocomplete="off" spellcheck="false">{{.PrivateKey}}</textarea>
+      <div class="application-form-actions">
+        <button class="button button-secondary" type="button" data-copy-target="ssh-key-private-value"><span>Copy private key</span></button>
+        <button class="button button-secondary" type="button" data-ssh-key-download data-ssh-key-source="ssh-key-private-value" data-ssh-key-filename="redlaunch-ssh-key-{{.Key.ID}}.key"><span>Download private key</span></button>
+      </div>
+      <span class="field-help">Fingerprint: <code>{{.Key.KeyFingerprint}}</code>. The matching public key is already installed on this server.</span>
+    </div>
+    {{with .Key.PermitOpen}}
+    <div class="field">
+      <label for="ssh-key-tunnel-usage">Tunnel usage</label>
+      <textarea id="ssh-key-tunnel-usage" class="github-actions-technical" rows="2" readonly autocomplete="off" spellcheck="false">ssh -N -L {{.}}:{{.}} {{$.SettingsPage.SSHKeysUsername}}@your-server</textarea>
+      <button class="button button-secondary" type="button" data-copy-target="ssh-key-tunnel-usage">Copy tunnel command</button>
+      <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
+    </div>
+    {{end}}
+    <footer class="application-form-actions">
+      <button class="button button-primary" type="button" data-ssh-key-setup-close data-ssh-key-setup-done>Done</button>
+    </footer>
+  </div>
+</dialog>
+{{end}}
 
 <dialog class="application-dialog ssh-key-delete-dialog" id="ssh-key-delete-dialog" data-ssh-key-delete-dialog{{with .SettingsPage.SSHKeyDelete}}{{if .Open}} data-ssh-key-delete-open{{end}}{{end}} aria-modal="true" aria-labelledby="ssh-key-delete-dialog-title" aria-describedby="ssh-key-delete-dialog-description">
   <div class="application-dialog-panel">

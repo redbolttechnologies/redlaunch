@@ -99,6 +99,9 @@ func TestSettingsPageRendersSSHKeysTab(t *testing.T) {
 	for _, expected := range []string{
 		`id="ssh-keys-tab"`,
 		`id="ssh-keys-panel"`,
+		`data-ssh-key-add`,
+		`id="ssh-key-create-dialog"`,
+		`data-ssh-key-create-dialog`,
 		`action="/settings/ssh-keys"`,
 		`action="/settings/ssh-keys/delete"`,
 		`GHA migrator workflow access`,
@@ -165,6 +168,9 @@ func TestCreateServerSSHKeyShowsPrivateKeyOnce(t *testing.T) {
 	for _, expected := range []string{
 		"will not be shown again",
 		"private-key-one-time",
+		`id="ssh-key-setup-dialog"`,
+		`data-ssh-key-setup-dialog`,
+		`data-ssh-key-setup-open`,
 		`id="ssh-key-private-value"`,
 		`data-copy-target="ssh-key-private-value"`,
 		`data-ssh-key-download`,
@@ -313,11 +319,21 @@ func TestCreateServerSSHKeyRendersValidationError(t *testing.T) {
 	if !strings.Contains(body, `application-alert application-dialog-alert`) {
 		t.Fatalf("SSH key error did not use the in-form alert pattern: %s", body)
 	}
+	for _, expected := range []string{
+		`id="ssh-key-create-dialog"`,
+		`data-ssh-key-create-dialog`,
+		`data-ssh-key-create-open`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("SSH key error did not reopen the create dialog %q: %s", expected, body)
+		}
+	}
 	alertIndex := strings.Index(body, `application-dialog-alert`)
 	formIndex := strings.Index(body, `action="/settings/ssh-keys"`)
 	fieldIndex := strings.Index(body, `id="ssh-key-display-name"`)
-	if alertIndex < 0 || formIndex < 0 || fieldIndex < 0 || !(formIndex < alertIndex && alertIndex < fieldIndex) {
-		t.Fatalf("SSH key error is not placed inside the form above its fields: %s", body)
+	dialogIndex := strings.Index(body, `data-ssh-key-create-dialog`)
+	if alertIndex < 0 || formIndex < 0 || fieldIndex < 0 || dialogIndex < 0 || !(dialogIndex < formIndex && formIndex < alertIndex && alertIndex < fieldIndex) {
+		t.Fatalf("SSH key error is not placed inside the create dialog form above its fields: %s", body)
 	}
 	if len(sshKeys.keys) != 0 {
 		t.Fatalf("invalid SSH key was stored: %#v", sshKeys.keys)

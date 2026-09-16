@@ -4796,12 +4796,13 @@ type settingsPageData struct {
 	DomainEdit   *domainEditPageData
 	DomainDelete *domainDeletePageData
 
-	SSHKeys         []application.ServerSSHKey
-	SSHKeysUsername string
-	SSHKeySetup     *application.ServerSSHKeySetup
-	SSHKeyError     string
-	SSHKeyNotice    string
-	SSHKeyName      string
+	SSHKeys          []application.ServerSSHKey
+	SSHKeysUsername  string
+	SSHKeySetup      *application.ServerSSHKeySetup
+	SSHKeyCreateOpen bool
+	SSHKeyError      string
+	SSHKeyNotice     string
+	SSHKeyName       string
 	// SSHKeyServiceRef preserves the restriction picker selection
 	// ("<applicationID>/<service>") across creation validation failures.
 	SSHKeyServiceRef string

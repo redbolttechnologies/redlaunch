@@ -1,4 +1,156 @@
 (() => {
+  const dialog = document.querySelector("[data-ssh-key-create-dialog]");
+  if (dialog) {
+    const nameInput = dialog.querySelector("#ssh-key-display-name");
+    const serviceInput = dialog.querySelector("#ssh-key-service");
+    const form = dialog.querySelector("form");
+    const submitButton = dialog.querySelector("[data-ssh-key-create-submit]");
+    const closeButtons = dialog.querySelectorAll("[data-ssh-key-create-close]");
+    let returnFocus = null;
+
+    const cleanup = () => {
+      document.body.classList.remove("dialog-open");
+      if (returnFocus && document.body.contains(returnFocus)) {
+        returnFocus.setAttribute("aria-expanded", "false");
+        returnFocus.focus();
+      }
+      returnFocus = null;
+    };
+
+    const closeDialog = () => {
+      if (typeof dialog.close === "function" && dialog.open) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute("open");
+        cleanup();
+      }
+    };
+
+    const showDialog = () => {
+      if (typeof dialog.showModal === "function") {
+        if (!dialog.open) {
+          dialog.showModal();
+        }
+      } else {
+        dialog.setAttribute("open", "");
+      }
+      document.body.classList.add("dialog-open");
+      if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+      }
+    };
+
+    const openDialog = (button) => {
+      returnFocus = button;
+      if (button) {
+        button.setAttribute("aria-expanded", "true");
+      }
+      if (nameInput) {
+        nameInput.value = "";
+      }
+      if (serviceInput) {
+        serviceInput.value = "";
+      }
+      showDialog();
+    };
+
+    document.querySelectorAll("[data-ssh-key-add]").forEach((button) => {
+      button.addEventListener("click", () => openDialog(button));
+    });
+
+    closeButtons.forEach((button) => {
+      button.addEventListener("click", closeDialog);
+    });
+
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        closeDialog();
+      }
+    });
+
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeDialog();
+    });
+
+    dialog.addEventListener("close", cleanup);
+
+    if (form) {
+      form.addEventListener("submit", () => {
+        if (submitButton) {
+          submitButton.disabled = true;
+          submitButton.textContent = "Creating…";
+        }
+      });
+    }
+
+    if (dialog.hasAttribute("data-ssh-key-create-open")) {
+      showDialog();
+    }
+  }
+})();
+
+(() => {
+  const dialog = document.querySelector("[data-ssh-key-setup-dialog]");
+  if (dialog) {
+    const doneButton = dialog.querySelector("[data-ssh-key-setup-done]");
+    const copyButton = dialog.querySelector("[data-copy-target]");
+    const closeButtons = dialog.querySelectorAll("[data-ssh-key-setup-close]");
+
+    const cleanup = () => {
+      document.body.classList.remove("dialog-open");
+    };
+
+    const closeDialog = () => {
+      if (typeof dialog.close === "function" && dialog.open) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute("open");
+        cleanup();
+      }
+    };
+
+    const showDialog = () => {
+      if (typeof dialog.showModal === "function") {
+        if (!dialog.open) {
+          dialog.showModal();
+        }
+      } else {
+        dialog.setAttribute("open", "");
+      }
+      document.body.classList.add("dialog-open");
+      if (copyButton) {
+        copyButton.focus();
+      } else if (doneButton) {
+        doneButton.focus();
+      }
+    };
+
+    closeButtons.forEach((button) => {
+      button.addEventListener("click", closeDialog);
+    });
+
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        closeDialog();
+      }
+    });
+
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeDialog();
+    });
+
+    dialog.addEventListener("close", cleanup);
+
+    if (dialog.hasAttribute("data-ssh-key-setup-open")) {
+      showDialog();
+    }
+  }
+})();
+
+(() => {
   const dialog = document.querySelector("[data-ssh-key-delete-dialog]");
   if (dialog) {
     const idInput = dialog.querySelector("[data-ssh-key-delete-id-input]");
