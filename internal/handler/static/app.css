@@ -834,6 +834,11 @@ h1 {
   background: hsl(var(--warning) / 0.08);
 }
 
+.application-alert-stacked {
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
 .application-dialog-alert {
   margin-top: 0;
 }
