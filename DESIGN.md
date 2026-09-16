@@ -71,6 +71,7 @@ Required semantic tokens include:
 * accent
 * accent-foreground
 * success
+* warning
 * destructive
 * destructive-foreground
 * code
