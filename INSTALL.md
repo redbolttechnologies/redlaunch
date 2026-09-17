@@ -505,8 +505,8 @@ the public hostname.
 7. Enter the **Service path**, normally <code>/</code>, then click **Save**.
 
 For example, this route sends all requests for <code>api.example.com</code> to
-the application's <code>api</code> service and rewrites the request path to
-<code>/</code> before proxying:
+the application's <code>api</code> service, preserving subpaths such as
+<code>/_app/immutable/app.js</code> when proxying:
 
 | Field | Value |
 | --- | --- |

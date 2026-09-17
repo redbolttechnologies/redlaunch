@@ -1117,13 +1117,16 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 	caddy := readServiceFile(t, caddyPath)
 	for _, expected := range []string{
 		"api.example.com {",
-		"path /register",
-		"rewrite * /",
+		"path /register /register/*",
+		"uri strip_prefix /register",
 		"reverse_proxy redbolt-7-identity:3000",
 	} {
 		if !strings.Contains(caddy, expected) {
 			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, caddy)
 		}
+	}
+	if strings.Contains(caddy, "rewrite * /") {
+		t.Fatalf("Caddyfile rewrites subpaths to / instead of preserving them:\n%s", caddy)
 	}
 
 	if err := applications.UpdateRouting(t.Context(), 7, 1, created.ID, application.RoutingInput{
@@ -1138,7 +1141,7 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 		t.Fatalf("Caddy reloads after update = %d, want 2", len(runner.reloads))
 	}
 	caddy = readServiceFile(t, caddyPath)
-	for _, expected := range []string{"example.com {", "path /", "rewrite * /app", "reverse_proxy redbolt-7-frontend:8080"} {
+	for _, expected := range []string{"example.com {", "path /*", "rewrite * /app{uri}", "reverse_proxy redbolt-7-frontend:8080"} {
 		if !strings.Contains(caddy, expected) {
 			t.Fatalf("updated Caddyfile does not contain %q:\n%s", expected, caddy)
 		}
@@ -1155,6 +1158,40 @@ func TestApplicationsCreateUpdateAndDeleteRoutingRefreshesCaddy(t *testing.T) {
 	}
 	if caddy := readServiceFile(t, caddyPath); caddy != "# Routes managed by Redlaunch.\n" {
 		t.Fatalf("Caddyfile after delete = %q, want managed header only", caddy)
+	}
+}
+
+func TestRenderCaddyfileUsesPrefixMatchers(t *testing.T) {
+	routings := []application.Routing{
+		{ID: 1, DomainName: "example.com", Path: "/", ServiceName: "web", ServicePort: 80, ServicePath: "/"},
+		{ID: 2, DomainName: "example.com", Path: "/api", ServiceName: "api", ServicePort: 3000, ServicePath: "/"},
+		{ID: 3, DomainName: "example.com", Path: "/app", ServiceName: "frontend", ServicePort: 8080, ServicePath: "/app"},
+	}
+	got := renderCaddyfile(routings, nil)
+
+	// The site-root route must match subpaths such as /_app/immutable/*.js
+	// and proxy them unchanged instead of returning an empty unmatched handle.
+	if !strings.Contains(got, "@redlaunch_route_1 path /*\n") {
+		t.Fatalf("root routing does not use a prefix matcher:\n%s", got)
+	}
+	routeOne := got[strings.Index(got, "@redlaunch_route_1"):]
+	routeOne = routeOne[:strings.Index(routeOne, "}\n")]
+	if strings.Contains(routeOne, "rewrite") || strings.Contains(routeOne, "uri ") {
+		t.Fatalf("root identity routing must not rewrite the path:\n%s", routeOne)
+	}
+
+	for _, expected := range []string{
+		"@redlaunch_route_2 path /api /api/*",
+		"uri strip_prefix /api",
+		"@redlaunch_route_3 path /app /app/*",
+		`uri path_regexp ^/app($|/) /app$1`,
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("Caddyfile does not contain %q:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "rewrite * /app\n") || strings.Contains(got, "rewrite * /\n") {
+		t.Fatalf("Caddyfile discards routing subpaths instead of preserving them:\n%s", got)
 	}
 }
 

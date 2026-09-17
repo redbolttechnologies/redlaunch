@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,8 +286,63 @@ func managementUpstream(port int) string {
 // renderCaddyfile creates the complete Caddy configuration for all persisted
 // mappings. Host blocks are grouped so mappings for the same host share one
 // Caddy site, and longer path matchers are evaluated first.
+//
+// Request paths are prefix routes: a request path of "/" matches every path
+// on the host, while "/api" matches "/api" and "/api/*" but not "/apifoo".
+// Caddy's path matcher is exact by default, so each prefix expands to an
+// exact matcher plus a "/*" subpath matcher. Rewrites preserve the matched
+// suffix: "/api/foo" with service path "/app" proxies to "/app/foo".
 func renderCaddyfile(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain) string {
 	return renderCaddyfileWithManagementPort(routings, redlaunchDomains, defaultManagementPort)
+}
+
+// caddyPathMatchers expands a persisted request path into Caddy path matcher
+// tokens. Plain prefixes become an exact token plus a subpath wildcard.
+// Paths already containing "*" are used as-is so explicit wildcard routes
+// keep their configured matching.
+func caddyPathMatchers(requestPath string) []string {
+	if strings.Contains(requestPath, "*") {
+		return []string{requestPath}
+	}
+	if requestPath == "/" {
+		return []string{"/*"}
+	}
+	trimmed := strings.TrimSuffix(requestPath, "/")
+	if trimmed == "" {
+		return []string{"/*"}
+	}
+	return []string{requestPath, trimmed + "/*"}
+}
+
+// caddyRequestBase strips wildcard and trailing-slash decoration from a
+// request path for prefix manipulation. Empty means the site root.
+func caddyRequestBase(requestPath string) string {
+	base := requestPath
+	if index := strings.Index(base, "*"); index >= 0 {
+		base = base[:index]
+	}
+	return strings.TrimSuffix(base, "/")
+}
+
+// caddyRewriteDirectives returns the Caddy directives that map a request
+// prefix to a service prefix while preserving the remaining suffix and query
+// string. A nil result means no rewrite is needed (identity proxy).
+func caddyRewriteDirectives(requestPath, servicePath string) []string {
+	requestBase := caddyRequestBase(requestPath)
+	serviceTrimmed := strings.TrimSuffix(servicePath, "/")
+
+	if serviceTrimmed == "" {
+		if requestBase == "" {
+			return nil
+		}
+		return []string{"uri strip_prefix " + requestBase}
+	}
+	if requestBase == "" {
+		return []string{"rewrite * " + serviceTrimmed + "{uri}"}
+	}
+	pattern := "^" + regexp.QuoteMeta(requestBase) + "($|/)"
+	replacement := strings.ReplaceAll(serviceTrimmed, "$", "$$") + "$1"
+	return []string{"uri path_regexp " + pattern + " " + replacement}
 }
 
 func renderCaddyfileWithManagementPort(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain, managementPort int) string {
@@ -335,14 +391,16 @@ func renderCaddyfileWithManagementPort(routings []application.Routing, redlaunch
 			builder.WriteString("    @")
 			builder.WriteString(matcher)
 			builder.WriteString(" path ")
-			builder.WriteString(item.Path)
+			builder.WriteString(strings.Join(caddyPathMatchers(item.Path), " "))
 			builder.WriteString("\n")
 			builder.WriteString("    handle @")
 			builder.WriteString(matcher)
 			builder.WriteString(" {\n")
-			builder.WriteString("        rewrite * ")
-			builder.WriteString(item.ServicePath)
-			builder.WriteString("\n")
+			for _, directive := range caddyRewriteDirectives(item.Path, item.ServicePath) {
+				builder.WriteString("        ")
+				builder.WriteString(directive)
+				builder.WriteString("\n")
+			}
 			builder.WriteString("        reverse_proxy ")
 			builder.WriteString(routingUpstream(item))
 			builder.WriteString("\n")
