@@ -19,9 +19,13 @@ wget https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/inst
 bash install.sh
 ```
 
-The installer clones Redlaunch to `~/redlaunch`, asks for the Google OAuth
-settings and first authorized email address, then builds and starts the
-application. It will not overwrite an existing installation or `.env` file.
+The installer asks for the installation directory (default `/opt/redlaunch`,
+so the checkout is accessible to multiple users), clones Redlaunch there,
+then asks for the Google OAuth settings and first authorized email address
+and builds and starts the application. It will not overwrite an existing
+installation or `.env` file. System locations such as `/opt/redlaunch` use
+`sudo` only to create the directory; the checkout itself is owned by the
+invoking user.
 
 See the [installation guide](INSTALL.md) for prerequisites, Google OAuth setup,
 networking, alternative installation options, and the complete first-run

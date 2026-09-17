@@ -192,15 +192,20 @@ callback URL instead.
 
 ## 3. Install Redlaunch and run <code>make setup</code>
 
-The one-step installer clones Redlaunch into <code>~/redlaunch</code> and runs
-<code>make setup</code>:
+The one-step installer asks for the installation directory (default
+<code>/opt/redlaunch</code>, so the checkout is accessible to multiple users)
+and runs <code>make setup</code>:
 
 ~~~sh
 wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh | bash
 ~~~
 
-To install somewhere else, set <code>REDLAUNCH_INSTALL_DIR</code> on the Bash
-side of the pipeline:
+Press Enter to accept the default, or type an absolute path. System locations
+such as the default use <code>sudo</code> only to create the directory; the
+checkout itself is owned by the invoking user.
+
+To skip the prompt in automation, set <code>REDLAUNCH_INSTALL_DIR</code> on
+the Bash side of the pipeline:
 
 ~~~sh
 wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh \
@@ -732,13 +737,13 @@ projects-root path stable: it is part of the installation-scoped identity.
   daemon, then recreate Redlaunch and start the proxy again:
 
   ~~~sh
-  cd ~/redlaunch
+  cd /opt/redlaunch
   git pull
   docker compose up -d --build
   docker compose -f projects/core/proxy/compose.yml up -d --force-recreate
   ~~~
 
-  Replace <code>~/redlaunch</code> with the installation directory when needed.
+  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
 - **<code>make setup</code> cannot run Docker**: reconnect after adding the SSH
   user to the <code>docker</code> group, or verify the Docker daemon with
   <code>docker info</code>.
@@ -752,13 +757,13 @@ projects-root path stable: it is part of the installation-scoped identity.
   the fix:
 
   ~~~sh
-  cd ~/redlaunch
+  cd /opt/redlaunch
   docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)
   git pull
   docker compose up -d --build
   ~~~
 
-  Replace <code>~/redlaunch</code> with the installation directory when needed.
+  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
   Later Settings updates refuse to start while a rebuild is already running
   instead of piling up concurrent helpers.
 - **Scheduled backups report “unavailable” or `systemctl: executable file not
@@ -771,13 +776,13 @@ projects-root path stable: it is part of the installation-scoped identity.
   corrected environment applies:
 
   ~~~sh
-  cd ~/redlaunch
+  cd /opt/redlaunch
   git pull
   docker compose up -d --build
   docker compose logs --tail=50 app | grep -i systemd
   ~~~
 
-  Replace <code>~/redlaunch</code> with the installation directory when needed.
+  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
   Do not set <code>SYSTEMD_BINARY=systemctl</code> inside the Alpine manager
   container; that binary only exists on the host. When running outside Docker,
   ensure the configured <code>SYSTEMD_BINARY</code> exists in
