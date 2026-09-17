@@ -592,20 +592,24 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 	return nil
 }
 
+// ProxyContainerName is the fixed container name of the managed Caddy
+// reverse proxy. The reload targets this container directly.
+const ProxyContainerName = "redbolt-proxy"
+
 // ReloadProxy asks the running Caddy container to load its mounted Caddyfile.
-// The command is executed through Compose so the HTTP/service layer never
-// needs to construct a Docker command itself.
+// The reload uses `docker exec` against the fixed proxy container name so it
+// does not depend on Compose project-name resolution; projectDir only scopes
+// process execution and diagnostic redaction.
 func (r CommandRunner) ReloadProxy(ctx context.Context, projectDir string) error {
+	ctx = normalizeContext(ctx)
 	binary := r.Binary
 	if binary == "" {
 		binary = "docker"
 	}
 
-	composeFile, err := findComposeFile(projectDir)
-	if err != nil {
-		return fmt.Errorf("find Compose file: %w", err)
-	}
-	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+	command := exec.CommandContext(ctx, binary, "exec", ProxyContainerName, "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+	command.Dir = projectDir
+	command.Env = composeProcessEnvironment(os.Environ(), nil)
 	if err := runDiagnosticCommand(command, "reload Caddy proxy", projectDir); err != nil {
 		return err
 	}

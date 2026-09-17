@@ -429,11 +429,8 @@ func TestConfiguredVolumeNamesMatchRealComposeResolution(t *testing.T) {
 	}
 }
 
-func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
+func TestCommandRunnerReloadProxyUsesDockerExec(t *testing.T) {
 	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
@@ -447,7 +444,7 @@ func TestCommandRunnerReloadProxyUsesCaddyComposeExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := expectedComposeArguments(projectDir, "exec", "-T", "proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
+	want := []string{"exec", ProxyContainerName, "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("ReloadProxy() arguments = %#v, want %#v", got, want)
 	}
