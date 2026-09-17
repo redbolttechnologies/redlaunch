@@ -304,7 +304,7 @@
       <div class="application-form-actions">
         <button class="button button-secondary" type="button" data-copy-target="ssh-key-known-hosts-value"><span>Copy known hosts</span></button>
       </div>
-      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Replace <code>YOUR_SERVER_HOST</code> with the same IP or DNS used as <code>SERVER_HOST</code> in CI (port 22), then save the result as the <code>SSH_KNOWN_HOSTS</code> secret. Verify before trusting:{{range .HostKeys}} <code>{{.Fingerprint}}</code> ({{.Algorithm}}){{end}}. Verify on the server with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Do not use the gateway <code>[host]:2222</code> entry here. Shell commands such as <code>docker compose run</code> need an unrestricted key.</span>
+      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Replace <code>YOUR_SERVER_HOST</code> with the same IP or DNS used as <code>SERVER_HOST</code> in CI (port 22), then save the result as the <code>SSH_KNOWN_HOSTS</code> secret. Verify before trusting:{{range .HostKeys}} <code>{{.Fingerprint}}</code> ({{.Algorithm}}){{end}}. Verify on the server with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Do not use the gateway <code>[host]:2222</code> entry here. Shell commands such as <code>docker compose run</code> need an unrestricted key and the managed <code>--project-name</code> from the SSH keys guide; a bare <code>docker compose run</code> uses the wrong project and fails on container and volume names.</span>
     </div>
     {{else}}
     <div class="field">

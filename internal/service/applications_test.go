@@ -505,6 +505,84 @@ func TestApplicationsImportDockerComposeProjectRegistersManagedServices(t *testi
 	}
 }
 
+func TestApplicationsImportDockerComposeProjectAttachesSharedNetwork(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		contents string
+	}{
+		{
+			name:     "no networks section",
+			contents: "services:\n  web:\n    image: nginx:1.27\n",
+		},
+		{
+			name:     "isolated default without name",
+			contents: "services:\n  web:\n    image: nginx:1.27\n\nnetworks:\n  default:\n    external: true\n",
+		},
+		{
+			name:     "isolated default driver",
+			contents: "services:\n  web:\n    image: nginx:1.27\n\nnetworks:\n  default:\n    driver: bridge\n",
+		},
+		{
+			name:     "unused custom network with services on default",
+			contents: "services:\n  web:\n    image: nginx:1.27\n    networks:\n      - default\n  db:\n    image: postgres:17\n    networks:\n      - default\n\nnetworks:\n  internal:\n    driver: bridge\n",
+		},
+		{
+			name: "service on custom network only",
+			contents: "services:\n  web:\n    image: nginx:1.27\n    networks:\n      - frontend\n\nnetworks:\n  frontend:\n    driver: bridge\n",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "projects")
+			runner := &serviceRuntimeRunner{
+				configured: []compose.ConfiguredService{{Name: "web", Image: "nginx:1.27"}},
+			}
+			// The unused-custom fixture declares web and db, so the stub must
+			// report both services for metadata setup to match.
+			contents := testCase.contents
+			if strings.Contains(testCase.name, "unused custom") {
+				runner.configured = []compose.ConfiguredService{
+					{Name: "web", Image: "nginx:1.27"},
+					{Name: "db", Image: "postgres:17"},
+				}
+			}
+			applications, err := NewApplications(&applicationRepositoryStub{}, root, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			createdApplication, err := applications.Create(t.Context(), "Status", "status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := applications.ImportDockerComposeProject(t.Context(), createdApplication.ID, []byte(contents)); err != nil {
+				t.Fatal(err)
+			}
+			composeContents := readServiceFile(t, filepath.Join(root, applicationsDir, "status", "compose.yml"))
+			for _, expected := range []string{
+				"networks:",
+				"  default:",
+				"    external: true",
+				"    name: redlaunch-common",
+				"      - default",
+			} {
+				if !strings.Contains(composeContents, expected) {
+					t.Fatalf("imported Compose is missing %q:\n%s", expected, composeContents)
+				}
+			}
+			if strings.Contains(testCase.name, "custom network only") && !strings.Contains(composeContents, "- frontend") {
+				t.Fatalf("imported Compose lost the custom network:\n%s", composeContents)
+			}
+			if strings.Contains(testCase.name, "unused custom") {
+				if !strings.Contains(composeContents, "internal:") {
+					t.Fatalf("imported Compose lost the custom network:\n%s", composeContents)
+				}
+				if strings.Contains(composeContents, "talenthunt_default") {
+					t.Fatalf("imported Compose still references an isolated network:\n%s", composeContents)
+				}
+			}
+		})
+	}
+}
+
 func TestApplicationsImportDockerComposeProjectCreatesMissingReferencedEnvFiles(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	repository := &applicationRepositoryStub{}

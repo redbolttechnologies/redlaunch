@@ -154,6 +154,60 @@ Shell commands such as `docker compose run --rm migrate` need an
 unrestricted key (the list shows `Full shell`). A tunnel-only key cannot
 open a shell by design.
 
+## Run one-off Compose commands (migrations)
+
+A bare `docker compose run --rm migrate` inside
+`projects/applications/<name>/` fails against a managed project with:
+
+- `volume "redbolt-<id>-..." already exists but was created for project
+  "redlaunch-app-<name>-<hash>" (expected "<name>")`,
+- a new `<name>_default` network being created, and
+- `Conflict. The container name "/redbolt-<id>-..." is already in use`.
+
+The bare command defaults the Compose project to the directory basename
+(`talenthunt`), while Redlaunch always runs with its derived identity
+(`--project-name redlaunch-app-<name>-<hash>`) and interpolation files
+(`--env-file .env --env-file vars.env --env-file secrets.env`). The second
+identity tries to recreate the explicitly named containers and volumes that
+already belong to the managed project.
+
+Resolve the managed identity on the server with the bundled helper and pass
+the same flags Redlaunch uses. The helper runs inside the manager container,
+so the calling host user only needs `docker exec`/`docker compose` access
+and no direct read access to `secrets.env`:
+
+```sh
+set -euo pipefail
+cd "$DEPLOY_DIR"
+if [ -f compose.yml ]; then
+  compose_file="compose.yml"
+elif [ -f compose.yaml ]; then
+  compose_file="compose.yaml"
+else
+  echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+  exit 1
+fi
+project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
+test -n "$project_name"
+env_args=()
+for name in .env vars.env secrets.env; do
+  if [ -f "$name" ] && [ ! -L "$name" ]; then
+    env_args+=(--env-file "$name")
+  fi
+done
+if [ "${#env_args[@]}" -eq 0 ]; then
+  env_args=(--env-file /dev/null)
+fi
+docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm migrate
+```
+
+Check for the Compose file, not for `.env`: managed projects may have only
+`vars.env`/`secrets.env`, and the `/dev/null` fallback preserves Redlaunch's
+isolation when none of the interpolation files exist. Keep the explicit
+`--project-name` on every manual `docker compose` invocation in a managed
+directory (`up`, `run`, `exec`, `logs`); omitting it recreates the duplicate
+project described above.
+
 Do not reuse the GitHub Actions gateway entry (`[host]:2222 ssh-ed25519 ...`)
 for port 22 shell access. That entry belongs to the `redlaunch-deploy`
 gateway on port `2222` and never matches the system sshd on port `22`.

@@ -300,9 +300,162 @@ func addManagedFieldsToImportedCompose(contents string, services []importedCompo
 		block = ensureImportedContainerName(block, managedContainerNamePrefix+strconv.FormatInt(applicationID, 10)+"-"+service.name)
 		block = ensureImportedEnvFiles(block)
 		block = ensureImportedManagedLabel(block)
+		var err error
+		block, err = ensureImportedServiceNetworks(block, service.name)
+		if err != nil {
+			return "", err
+		}
 		lines = replaceImportedYAMLLines(lines, service.start, service.end, block)
 	}
+	lines = ensureImportedSharedNetwork(lines)
 	return strings.Join(lines, "\n"), nil
+}
+
+// ensureImportedServiceNetworks attaches one imported service to the shared
+// application network in addition to any custom networks it already uses.
+// The Caddy proxy resolves routable containers through redlaunch-common, so a
+// service without an explicit default attachment would be unreachable after
+// import even though `docker compose up` succeeds on its isolated network.
+func ensureImportedServiceNetworks(block []string, serviceName string) ([]string, error) {
+	fieldIndex, fieldEnd, value, ok := importedYAMLField(block, "networks")
+	if !ok {
+		return insertImportedServiceField(block, []string{
+			"    networks:",
+			"      - default",
+		}), nil
+	}
+
+	trimmed := strings.TrimSpace(importedYAMLValueWithoutComment(value))
+	if strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "&") {
+		return nil, fmt.Errorf("%w: service %q uses an unsupported YAML alias or anchor for networks", application.ErrComposeFileInvalid, serviceName)
+	}
+	if trimmed != "" {
+		if trimmed == "{}" || trimmed == "[]" {
+			return replaceImportedYAMLLines(block, fieldIndex, fieldEnd, []string{
+				"    networks:",
+				"      - default",
+			}), nil
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			entries := splitImportedInlineValues(trimmed)
+			for _, entry := range entries {
+				entry = strings.TrimSpace(entry)
+				if strings.HasPrefix(entry, "*") || strings.HasPrefix(entry, "&") || strings.Contains(entry, "{") || strings.Contains(entry, "}") {
+					return nil, fmt.Errorf("%w: service %q uses an unsupported YAML alias or flow mapping for networks", application.ErrComposeFileInvalid, serviceName)
+				}
+				if normalizeImportedYAMLScalar(entry) == "default" {
+					return block, nil
+				}
+			}
+			replacement := []string{"    networks:"}
+			for _, entry := range entries {
+				if entry = strings.TrimSpace(entry); entry != "" {
+					replacement = append(replacement, "      - "+entry)
+				}
+			}
+			replacement = append(replacement, "      - default")
+			return replaceImportedYAMLLines(block, fieldIndex, fieldEnd, replacement), nil
+		}
+		if strings.Contains(trimmed, "{") || strings.Contains(trimmed, "}") {
+			return nil, fmt.Errorf("%w: service %q uses an unsupported flow mapping for networks", application.ErrComposeFileInvalid, serviceName)
+		}
+		if normalizeImportedYAMLScalar(trimmed) == "default" {
+			return replaceImportedYAMLLines(block, fieldIndex, fieldEnd, []string{
+				"    networks:",
+				"      - default",
+			}), nil
+		}
+		return replaceImportedYAMLLines(block, fieldIndex, fieldEnd, []string{
+			"    networks:",
+			"      - " + trimmed,
+			"      - default",
+		}), nil
+	}
+
+	hasList := false
+	hasMapping := false
+	for _, line := range block[fieldIndex+1 : fieldEnd] {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmedLine, "-") {
+			hasList = true
+			entry := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "-"))
+			entry = importedYAMLValueWithoutComment(entry)
+			if strings.HasPrefix(entry, "*") || strings.HasPrefix(entry, "&") {
+				return nil, fmt.Errorf("%w: service %q uses an unsupported YAML alias or anchor for networks", application.ErrComposeFileInvalid, serviceName)
+			}
+			if separator := strings.IndexByte(entry, ':'); separator >= 0 {
+				entry = strings.TrimSpace(entry[:separator])
+			}
+			if normalizeImportedYAMLScalar(entry) == "default" {
+				return block, nil
+			}
+			continue
+		}
+		if key, value, ok := yamlKeyAtIndentWithValue(line, 6); ok {
+			hasMapping = true
+			if normalizeImportedYAMLKey(key) == "default" {
+				return block, nil
+			}
+			if trimmedValue := strings.TrimSpace(value); strings.HasPrefix(trimmedValue, "*") || strings.HasPrefix(trimmedValue, "&") {
+				return nil, fmt.Errorf("%w: service %q uses an unsupported YAML alias or anchor for networks", application.ErrComposeFileInvalid, serviceName)
+			}
+			continue
+		}
+	}
+	if !hasList && !hasMapping {
+		return replaceImportedYAMLLines(block, fieldIndex, fieldEnd, []string{
+			"    networks:",
+			"      - default",
+		}), nil
+	}
+	if hasMapping && !hasList {
+		return insertImportedYAMLLines(block, importedYAMLAppendIndex(block, fieldIndex, fieldEnd), []string{"      default: {}"}), nil
+	}
+	return insertImportedYAMLLines(block, importedYAMLAppendIndex(block, fieldIndex, fieldEnd), []string{"      - default"}), nil
+}
+
+// ensureImportedSharedNetwork points the top-level default network at the
+// shared redlaunch-common bridge and preserves every custom network. Without
+// this an imported project keeps Compose's isolated per-project default
+// network, so the proxy's Docker DNS lookup for redbolt-<id>-<service> fails
+// with "server misbehaving" even while the container is running.
+func ensureImportedSharedNetwork(lines []string) []string {
+	shared := []string{
+		"  default:",
+		"    external: true",
+		"    name: " + applicationNetworkName,
+	}
+	sectionIndex, sectionValue, ok := findImportedTopLevelYAMLKey(lines, "networks")
+	if !ok {
+		return appendYAMLBlock(lines, append([]string{"networks:"}, shared...))
+	}
+	sectionEnd := topLevelBlockEnd(lines, sectionIndex)
+	switch importedYAMLValueWithoutComment(sectionValue) {
+	case "", "{}", "[]":
+		if importedYAMLValueWithoutComment(sectionValue) != "" {
+			return replaceImportedYAMLLines(lines, sectionIndex, sectionEnd, append([]string{"networks:"}, shared...))
+		}
+	default:
+		return replaceImportedYAMLLines(lines, sectionIndex, sectionEnd, append([]string{"networks:"}, shared...))
+	}
+	for index := sectionIndex + 1; index < sectionEnd; index++ {
+		key, _, ok := yamlKeyAtIndentWithValue(lines[index], 2)
+		if !ok || normalizeImportedYAMLKey(key) != "default" {
+			continue
+		}
+		defaultEnd := sectionEnd
+		for next := index + 1; next < sectionEnd; next++ {
+			if _, ok := yamlKeyAtIndent(lines[next], 2); ok {
+				defaultEnd = next
+				break
+			}
+		}
+		return replaceImportedYAMLLines(lines, index, defaultEnd, shared)
+	}
+	return insertImportedYAMLLines(lines, importedYAMLAppendIndex(lines, sectionIndex, sectionEnd), shared)
 }
 
 func rejectImportedManagedFieldAliases(lines []string, serviceName string) error {
