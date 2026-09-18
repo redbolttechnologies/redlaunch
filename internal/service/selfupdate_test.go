@@ -63,8 +63,18 @@ func TestSelfUpdateRunsGitPullThenComposeRebuild(t *testing.T) {
 	}
 
 	gitCalls, gitDir := readSelfUpdateCalls(t, "git")
-	if !strings.HasSuffix(gitCalls, "git pull --ff-only") {
-		t.Fatalf("git invocation = %q, want suffix %q", gitCalls, "git pull --ff-only")
+	if !strings.Contains(gitCalls, "pull --ff-only") {
+		t.Fatalf("git invocation = %q, want it to contain %q", gitCalls, "pull --ff-only")
+	}
+	// The checkout must be marked as a Git safe.directory per invocation so
+	// ownership mismatches after moving the checkout (for example to
+	// /opt/redlaunch) do not fail with "detected dubious ownership".
+	wantSafeDirectory, err := filepath.Abs(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gitCalls, "safe.directory="+wantSafeDirectory) {
+		t.Fatalf("git invocation = %q, want it to contain %q", gitCalls, "safe.directory="+wantSafeDirectory)
 	}
 	wantDirectory, err := filepath.EvalSymlinks(directory)
 	if err != nil {
@@ -126,6 +136,66 @@ func TestNewSelfUpdateServiceWithOptionsRejectsInvalidImageAndSocket(t *testing.
 	}
 }
 
+func TestSelfUpdateGitPullMarksCheckoutSafe(t *testing.T) {
+	directory := writeSelfUpdateFixture(t, "exit 0", "exit 0")
+
+	service, err := NewSelfUpdateService(directory, "git", "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Update(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	gitCalls, _ := readSelfUpdateCalls(t, "git")
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gitCalls, "-c safe.directory="+absolute) {
+		t.Fatalf("git invocation = %q, want it to contain %q", gitCalls, "-c safe.directory="+absolute)
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil && resolved != absolute {
+		if !strings.Contains(gitCalls, "-c safe.directory="+resolved) {
+			t.Fatalf("git invocation = %q, want it to contain resolved symlink %q", gitCalls, "-c safe.directory="+resolved)
+		}
+	}
+}
+
+func TestSelfUpdateSafeDirectoriesResolvesSymlinks(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "linked-checkout")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+	directories := selfUpdateSafeDirectories(link)
+	if len(directories) == 0 {
+		t.Fatal("selfUpdateSafeDirectories() returned no directories")
+	}
+	absolute, err := filepath.Abs(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directories[0] != absolute {
+		t.Fatalf("selfUpdateSafeDirectories()[0] = %q, want %q", directories[0], absolute)
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == absolute {
+		t.Skip("symlink resolved to itself, nothing further to assert")
+	}
+	found := false
+	for _, directory := range directories[1:] {
+		if directory == resolved {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("selfUpdateSafeDirectories(%q) = %q, want it to contain resolved %q", link, directories, resolved)
+	}
+}
+
 func TestQueueUpdatePullsThenStartsDetachedHelper(t *testing.T) {
 	directory := writeSelfUpdateFixture(t, "exit 0", "exit 0")
 
@@ -144,8 +214,11 @@ func TestQueueUpdatePullsThenStartsDetachedHelper(t *testing.T) {
 	}
 
 	gitCalls, _ := readSelfUpdateCalls(t, "git")
-	if !strings.HasSuffix(gitCalls, "git pull --ff-only") {
-		t.Fatalf("git invocation = %q, want suffix %q", gitCalls, "git pull --ff-only")
+	if !strings.Contains(gitCalls, "pull --ff-only") {
+		t.Fatalf("git invocation = %q, want it to contain %q", gitCalls, "pull --ff-only")
+	}
+	if !strings.Contains(gitCalls, "safe.directory=") {
+		t.Fatalf("git invocation = %q, want it to mark the checkout as safe.directory", gitCalls)
 	}
 	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
 	// The rebuild must leave the manager via a detached helper (`docker

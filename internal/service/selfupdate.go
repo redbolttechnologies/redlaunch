@@ -252,7 +252,23 @@ func (s *SelfUpdateService) validatedDirectory() (string, error) {
 func (s *SelfUpdateService) runGitPull(ctx context.Context, directory string) error {
 	// Explicit arguments only; the directory is server-configured and
 	// validated, never user-controlled. No shell is involved.
-	command := exec.CommandContext(ctx, s.gitBinary, "pull", "--ff-only")
+	//
+	// The pull runs inside the manager container (usually as root) against a
+	// host-mounted checkout that is typically owned by a different UID (for
+	// example after moving the checkout to /opt/redlaunch with plain `mv`/`cp`
+	// preserving the old owner). Since Git 2.35.2 such ownership mismatches
+	// fail with "detected dubious ownership in repository". Marking the
+	// validated checkout as safe per-invocation keeps the Settings update
+	// working regardless of host ownership. A `-c` flag is used instead of
+	// `git config --global --add safe.directory` because the container's
+	// global gitconfig is ephemeral (and the root filesystem is read-only),
+	// while the host's gitconfig is invisible to git inside the container.
+	args := make([]string, 0, 6)
+	for _, safeDirectory := range selfUpdateSafeDirectories(directory) {
+		args = append(args, "-c", "safe.directory="+safeDirectory)
+	}
+	args = append(args, "pull", "--ff-only")
+	command := exec.CommandContext(ctx, s.gitBinary, args...)
 	command.Dir = directory
 	// Git needs the operator's environment (HOME for SSH configuration,
 	// PATH, GIT_* settings) to reach GitHub the same way `make update` does.
@@ -266,6 +282,33 @@ func (s *SelfUpdateService) runGitPull(ctx context.Context, directory string) er
 		return fmt.Errorf("pull Redlaunch update: %w: %s", err, strings.TrimSpace(string(output.Bytes())))
 	}
 	return nil
+}
+
+// selfUpdateSafeDirectories returns the absolute checkout path (plus its
+// symlink-resolved form when different) so runGitPull can mark the validated
+// directory as a Git safe.directory per invocation. Git compares the
+// discovered repository path after resolving symlinks (for example /tmp on
+// macOS or distributions linking TMPDIR elsewhere), so advertising both forms
+// keeps the in-container `git pull` working after the checkout is moved or
+// bind-mounted under a symlinked parent.
+func selfUpdateSafeDirectories(directory string) []string {
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		absolute = filepath.Clean(directory)
+	} else {
+		absolute = filepath.Clean(absolute)
+	}
+	if absolute == "." || absolute == "" {
+		return nil
+	}
+	directories := []string{absolute}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		cleaned := filepath.Clean(resolved)
+		if cleaned != "" && cleaned != absolute {
+			directories = append(directories, cleaned)
+		}
+	}
+	return directories
 }
 
 func (s *SelfUpdateService) runComposeRebuild(ctx context.Context, directory string) error {
