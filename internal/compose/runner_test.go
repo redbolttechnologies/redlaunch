@@ -69,6 +69,43 @@ func TestCommandRunnerUpServiceUsesExplicitComposeArguments(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerRunOneOffUsesExplicitComposeArguments(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "migrate"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	want := expectedComposeArguments(projectDir, "run", "--rm", "--quiet-pull", "-T", "migrate")
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerRunOneOffRequiresServiceName(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "missing-docker")
+	if err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "  "); err == nil {
+		t.Fatal("RunOneOff() error = nil, want service name required")
+	}
+}
+
 func TestCommandRunnerRestartProjectBuildsRecreatesAndWaits(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {

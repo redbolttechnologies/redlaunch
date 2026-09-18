@@ -90,6 +90,9 @@ For host shell access from external automation, see the
   dependencies, port mappings, and volumes.
 - Import an existing Compose project.
 - Start, stop, restart, and remove managed services.
+- Run a managed service once as a one-off task (for example a database
+  migration) with `docker compose run --rm` semantics; the container is
+  removed afterwards and secrets stay on the server.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
 - Show container status, ports, logs, and explicitly scoped resource usage.
 - List the images previously pushed to the local registry from the Registry page.

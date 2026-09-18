@@ -381,6 +381,36 @@ func (r CommandRunner) UpService(ctx context.Context, projectDir, serviceName st
 	return r.runComposeUp(ctx, projectDir, serviceName)
 }
 
+// RunOneOff executes one Compose service as a one-off task and removes its
+// container afterwards (docker compose run --rm). It runs the service's
+// configured image and command with the managed environment files, so
+// database migrations and other single-shot tasks execute server-side without
+// exposing secrets or the Docker socket to the caller. The service name is
+// passed as a single exec argument, never through a shell.
+func (r CommandRunner) RunOneOff(ctx context.Context, projectDir, serviceName string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return errors.New("Compose service name is required")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
+		return err
+	}
+	command := composeCommand(ctx, binary, projectDir, composeFile, "run", "--rm", "--quiet-pull", "-T", serviceName)
+	if err := runDiagnosticCommand(command, fmt.Sprintf("run compose one-off service %q", serviceName), projectDir); err != nil {
+		return err
+	}
+	return nil
+}
+
 // EnsureNetwork creates the shared application network through the Docker
 // adapter and verifies the ownership labels when it already exists. Compose
 // projects consume this network as external infrastructure; optional core

@@ -470,6 +470,10 @@ type composeServiceStarter interface {
 	UpService(context.Context, string, string) error
 }
 
+type composeOneOffRunner interface {
+	RunOneOff(context.Context, string, string) error
+}
+
 type composeServiceRemover interface {
 	Remove(context.Context, string, string) error
 }
@@ -1161,6 +1165,58 @@ func (s *Applications) RestartService(ctx context.Context, applicationID int64, 
 	return s.runServiceAction(ctx, applicationID, serviceName, "restart", func(controller composeServiceController, directory, name string) error {
 		return controller.Restart(ctx, directory, name)
 	})
+}
+
+// RunServiceOnce executes one registered service as a one-off task (for
+// example a database migration) and removes its container afterwards. Unlike
+// StartService it does not leave a long-running container behind, and unlike
+// RestartService it also works when the service is currently stopped. The
+// managed environment files are resolved server-side; secrets never leave the
+// host.
+func (s *Applications) RunServiceOnce(ctx context.Context, applicationID int64, serviceName string) error {
+	if s.detailsRepository == nil {
+		return errors.New("application details repository is not configured")
+	}
+	serviceName, err := application.ValidateServiceName(serviceName)
+	if err != nil {
+		return err
+	}
+	runner, ok := s.runner.(composeOneOffRunner)
+	if !ok {
+		return errors.New("compose one-off runner is not configured")
+	}
+	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+
+	item, err := s.detailsRepository.Get(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("get application for service action: %w", err)
+	}
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		return fmt.Errorf("list services for service action: %w", err)
+	}
+	registered := false
+	for _, service := range services {
+		if service.Name == serviceName {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		return application.ErrServiceNotFound
+	}
+	directory, err := s.managedApplicationDirectory(item)
+	if err != nil {
+		return fmt.Errorf("resolve application directory for service action: %w", err)
+	}
+	if err := runner.RunOneOff(ctx, directory, serviceName); err != nil {
+		return fmt.Errorf("run service: %w", err)
+	}
+	return nil
 }
 
 // DeleteService stops and removes one registered service container, removes

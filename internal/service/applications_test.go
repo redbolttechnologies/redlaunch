@@ -208,6 +208,14 @@ func (r *serviceRuntimeRunner) Restart(_ context.Context, projectDir, serviceNam
 	return r.actionErr
 }
 
+func (r *serviceRuntimeRunner) RunOneOff(_ context.Context, projectDir, serviceName string) error {
+	r.action = "run"
+	r.actions = append(r.actions, "run")
+	r.projectDir = projectDir
+	r.service = serviceName
+	return r.actionErr
+}
+
 func (r *serviceRuntimeRunner) Remove(_ context.Context, projectDir, serviceName string) error {
 	r.action = "remove"
 	r.actions = append(r.actions, "remove")
@@ -2772,6 +2780,9 @@ func TestApplicationsControlsRegisteredServices(t *testing.T) {
 		{name: "restart", action: "restart", run: func(applications *Applications) error {
 			return applications.RestartService(context.Background(), 7, "db")
 		}},
+		{name: "run once", action: "run", run: func(applications *Applications) error {
+			return applications.RunServiceOnce(context.Background(), 7, "db")
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "projects")
@@ -2831,6 +2842,34 @@ func TestApplicationsStartFallsBackToStartWithoutUpService(t *testing.T) {
 	}
 }
 
+func TestApplicationsRunServiceOnceRequiresOneOffRunner(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+	}
+	inner := &serviceRuntimeRunner{}
+	runner := struct {
+		composeServiceControllerAdapter
+	}{
+		composeServiceControllerAdapter{runner: inner},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := applications.RunServiceOnce(context.Background(), 7, "migrate"); err == nil {
+		t.Fatal("RunServiceOnce() error = nil, want one-off runner not configured")
+	}
+	if inner.action != "" {
+		t.Fatalf("run-once action = %q, want no action", inner.action)
+	}
+}
+
 type composeServiceControllerAdapter struct {
 	runner *serviceRuntimeRunner
 }
@@ -2885,6 +2924,9 @@ func TestApplicationsRejectsUnregisteredServiceActions(t *testing.T) {
 	if err := applications.StartService(context.Background(), 7, "web"); !errors.Is(err, application.ErrServiceNotFound) {
 		t.Fatalf("StartService(unregistered) error = %v, want %v", err, application.ErrServiceNotFound)
 	}
+	if err := applications.RunServiceOnce(context.Background(), 7, "web"); !errors.Is(err, application.ErrServiceNotFound) {
+		t.Fatalf("RunServiceOnce(unregistered) error = %v, want %v", err, application.ErrServiceNotFound)
+	}
 	if err := applications.DeleteService(context.Background(), 7, "web"); !errors.Is(err, application.ErrServiceNotFound) {
 		t.Fatalf("DeleteService(unregistered) error = %v, want %v", err, application.ErrServiceNotFound)
 	}
@@ -2893,6 +2935,9 @@ func TestApplicationsRejectsUnregisteredServiceActions(t *testing.T) {
 	}
 	if err := applications.StartService(context.Background(), 7, "../outside"); !errors.Is(err, application.ErrServiceNameInvalid) {
 		t.Fatalf("StartService(traversal) error = %v, want %v", err, application.ErrServiceNameInvalid)
+	}
+	if err := applications.RunServiceOnce(context.Background(), 7, "../outside"); !errors.Is(err, application.ErrServiceNameInvalid) {
+		t.Fatalf("RunServiceOnce(traversal) error = %v, want %v", err, application.ErrServiceNameInvalid)
 	}
 }
 

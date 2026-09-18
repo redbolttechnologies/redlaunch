@@ -196,6 +196,7 @@ type serviceActionService interface {
 	StartService(context.Context, int64, string) error
 	StopService(context.Context, int64, string) error
 	RestartService(context.Context, int64, string) error
+	RunServiceOnce(context.Context, int64, string) error
 }
 
 type serviceDeletionService interface {
@@ -713,6 +714,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/start", h.startService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/stop", h.stopService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/restart", h.restartService)
+	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/logs/download", h.downloadServiceLogs)
@@ -2603,6 +2605,10 @@ func (h *Handler) restartService(w http.ResponseWriter, r *http.Request) {
 	h.serviceAction(w, r, "restart")
 }
 
+func (h *Handler) runServiceOnce(w http.ResponseWriter, r *http.Request) {
+	h.serviceAction(w, r, "run")
+}
+
 func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 	needsSetup, err := h.setupManager.NeedsSetup()
 	if err != nil {
@@ -2769,6 +2775,8 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 		actionErr = h.serviceActions.StopService(r.Context(), id, serviceName)
 	case "restart":
 		actionErr = h.serviceActions.RestartService(r.Context(), id, serviceName)
+	case "run":
+		actionErr = h.serviceActions.RunServiceOnce(r.Context(), id, serviceName)
 	default:
 		http.NotFound(w, r)
 		return
@@ -2801,6 +2809,8 @@ func serviceActionPastTense(action string) string {
 		return "stopped"
 	case "restart":
 		return "restarted"
+	case "run":
+		return "run"
 	default:
 		return "changed"
 	}
@@ -2934,6 +2944,7 @@ func serviceActionErrorDetail(err error) string {
 		"start service: ",
 		"stop service: ",
 		"restart service: ",
+		"run service: ",
 		"get application for service action: ",
 		"list services for service action: ",
 		"resolve application directory for service action: ",
@@ -5030,6 +5041,10 @@ func (noApplicationService) StopService(context.Context, int64, string) error {
 }
 
 func (noApplicationService) RestartService(context.Context, int64, string) error {
+	return errors.New("application service is not configured")
+}
+
+func (noApplicationService) RunServiceOnce(context.Context, int64, string) error {
 	return errors.New("application service is not configured")
 }
 

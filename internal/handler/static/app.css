@@ -1588,6 +1588,10 @@ h1 {
   color: hsl(var(--muted-foreground));
 }
 
+.service-actions-item-run svg {
+  color: hsl(var(--muted-foreground));
+}
+
 .service-actions-separator {
   margin-top: var(--space-1);
   padding-top: var(--space-1);
@@ -1933,6 +1937,10 @@ h1 {
 }
 
 .service-details-action-restart svg {
+  color: hsl(var(--muted-foreground));
+}
+
+.service-details-action-run svg {
   color: hsl(var(--muted-foreground));
 }
 

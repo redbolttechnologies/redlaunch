@@ -624,6 +624,13 @@ func (s *fakeApplicationService) RestartService(_ context.Context, id int64, ser
 	return s.serviceActionErr
 }
 
+func (s *fakeApplicationService) RunServiceOnce(_ context.Context, id int64, serviceName string) error {
+	s.serviceAction = "run"
+	s.serviceActionID = id
+	s.serviceActionName = serviceName
+	return s.serviceActionErr
+}
+
 func (s *fakeApplicationService) DeleteService(_ context.Context, id int64, serviceName string) error {
 	s.serviceDeleteID = id
 	s.serviceDeleteName = serviceName
@@ -2537,13 +2544,16 @@ func TestApplicationDetailsRendersServicesTable(t *testing.T) {
 		`action="/applications/7/services/db/start"`,
 		`action="/applications/7/services/db/stop"`,
 		`action="/applications/7/services/db/restart"`,
+		`action="/applications/7/services/db/run"`,
 		`name="csrf_token"`,
 		`>Start service</span>`,
 		`>Stop service</span>`,
 		`>Restart service</span>`,
+		`>Run once</span>`,
 		`class="service-actions-item service-actions-item-start"`,
 		`class="service-actions-item service-actions-item-stop"`,
 		`class="service-actions-item service-actions-item-restart"`,
+		`class="service-actions-item service-actions-item-run"`,
 		`data-service-delete-open`,
 		`id="service-delete-dialog-1"`,
 		`name="confirmation"`,
@@ -2559,7 +2569,7 @@ func TestApplicationDetailsRendersServicesTable(t *testing.T) {
 	if got := strings.Count(body, `class="service-actions-menu"`); got != len(applications.services) {
 		t.Fatalf("GET /applications/7 rendered %d service action menus, want %d: %s", got, len(applications.services), body)
 	}
-	if got := strings.Count(body, `class="service-actions-form"`); got != len(applications.services)*3 {
+	if got := strings.Count(body, `class="service-actions-form"`); got != len(applications.services)*4 {
 		t.Fatalf("GET /applications/7 rendered %d service action forms, want %d: %s", got, len(applications.services)*3, body)
 	}
 	if strings.Contains(body, `class="services-list"`) || strings.Contains(body, "applications/status-page") {
@@ -3561,9 +3571,11 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 		`action="/applications/7/services/db/start"`,
 		`action="/applications/7/services/db/stop"`,
 		`action="/applications/7/services/db/restart"`,
+		`action="/applications/7/services/db/run"`,
 		`>Start</span>`,
 		`>Stop</span>`,
 		`>Restart</span>`,
+		`>Run</span>`,
 		`General information`,
 		`Service Name`,
 		`redbolt-7-db`,
@@ -3589,11 +3601,11 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 			t.Fatalf("GET /applications/7/services/db did not render %q: %s", expected, body)
 		}
 	}
-	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 3 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 3", got)
+	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 4 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 4", got)
 	}
-	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 3 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 3", got)
+	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 4 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 4", got)
 	}
 	for _, unexpected := range []string{
 		"Environment variables",
@@ -3765,6 +3777,7 @@ func TestServiceActionsRequireCSRFAndRedirect(t *testing.T) {
 		{name: "start", path: "/applications/7/services/db/start", action: "start"},
 		{name: "stop", path: "/applications/7/services/db/stop", action: "stop"},
 		{name: "restart", path: "/applications/7/services/db/restart", action: "restart"},
+		{name: "run", path: "/applications/7/services/db/run", action: "run"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
@@ -3811,6 +3824,7 @@ func TestServiceActionsCanReturnToServiceDetails(t *testing.T) {
 		{name: "start", path: "/applications/7/services/db/start", action: "start"},
 		{name: "stop", path: "/applications/7/services/db/stop", action: "stop"},
 		{name: "restart", path: "/applications/7/services/db/restart", action: "restart"},
+		{name: "run", path: "/applications/7/services/db/run", action: "run"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
@@ -3919,6 +3933,47 @@ func TestServiceActionFailureRendersErrorDialogOnServiceDetailsPage(t *testing.T
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST start failure on service details did not render %q: %s", expected, body)
 		}
+	}
+}
+
+func TestRunServiceOnceFailureRendersErrorDialog(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+		serviceDetails: application.ServiceDetails{
+			Service:       application.Service{ID: 1, ApplicationID: 7, Name: "migrate"},
+			LogsAvailable: false,
+		},
+		serviceActionErr: errors.New("run service: migration failed: relation does not exist"),
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"csrf_token": {web.csrfToken}, "return_to": {"service-details"}}
+	request := httptest.NewRequest(http.MethodPost, "/applications/7/services/migrate/run", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("POST run failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`data-service-action-error-dialog`,
+		`The service could not be run`,
+		`relation does not exist`,
+		`<h1 id="page-title">migrate</h1>`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("POST run failure did not render %q: %s", expected, body)
+		}
+	}
+	if applications.serviceAction != "run" || applications.serviceActionName != "migrate" {
+		t.Fatalf("service action = (%q, %q), want (run, migrate)", applications.serviceAction, applications.serviceActionName)
 	}
 }
 

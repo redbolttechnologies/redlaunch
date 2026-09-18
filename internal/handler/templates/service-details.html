@@ -84,6 +84,17 @@
           <span>Restart</span>
         </button>
       </form>
+      <form class="service-details-action-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/run">
+        <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+        <input type="hidden" name="return_to" value="service-details">
+        <button class="button button-secondary service-details-action service-details-action-run" type="submit" title="Run once as a one-off task (for example a database migration)">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m5 7 5 5-5 5"></path>
+            <path d="M12 19h7"></path>
+          </svg>
+          <span>Run</span>
+        </button>
+      </form>
       {{if eq .ServiceDetailsPage.Details.Service.Type "application"}}
       <a class="button button-secondary service-details-action" href="/applications/{{.ServiceDetailsPage.Application.ID}}/services/{{.ServiceDetailsPage.Details.Service.Name}}/edit">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
