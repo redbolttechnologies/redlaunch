@@ -10,7 +10,10 @@ the private key once. Revoking a key removes its public key from
 `authorized_keys`.
 
 Keys grant shell access as the dedicated `redlaunch` user. That user owns no
-Redlaunch files and has no sudo privileges. Treat keys like host credentials.
+Redlaunch files and has no sudo privileges. `make setup` adds the user to
+the `docker` group so one-off Compose commands can run through
+`docker exec redbolt-redlaunch ...`. The `docker` group is root-equivalent:
+treat unrestricted keys as full host administrator credentials.
 
 ## Restricting a key to one service
 
@@ -35,11 +38,27 @@ or the service is removed, recreate the key. A stale target fails closed
 
 ## Prerequisites
 
-`make setup` creates the dedicated user with password login locked:
+`make setup` creates the dedicated user with password login locked and adds
+it to the `docker` group:
 
 ```sh
 id redlaunch
 sudo grep "redlaunch-ssh-key:" /home/redlaunch/.ssh/authorized_keys
+```
+
+`id redlaunch` must list the `docker` group. Group membership applies to
+new SSH sessions only: reconnect after the user is added. Installations from
+before this grant need it once:
+
+```sh
+sudo usermod -aG docker redlaunch
+id redlaunch
+```
+
+Then reconnect and verify `docker exec` works before running migrations:
+
+```sh
+ssh -i ~/.ssh/redlaunch-key redlaunch@your-server 'docker exec redbolt-redlaunch true'
 ```
 
 The manager container mounts the host `.ssh` directory at the identical path
@@ -171,17 +190,22 @@ The bare command defaults the Compose project to the directory basename
 identity tries to recreate the explicitly named containers and volumes that
 already belong to the managed project.
 
-Resolve the managed identity on the server with the bundled helper and pass
-the same flags Redlaunch uses. The helper runs inside the manager container,
-so the calling host user only needs `docker exec`/`docker compose` access
-and no direct read access to `secrets.env`:
+Resolve the managed identity on the server with the bundled helper and run
+Compose inside the manager container, where the 0600 `vars.env`/`secrets.env`
+files are readable as root. The calling host user only needs `docker exec`
+access (the `docker` group) and no direct read access to `secrets.env`.
+Direct host-side `docker compose --env-file secrets.env` fails as the
+`redlaunch` user because those files are `0600` owned by root.
 
 ```sh
 set -euo pipefail
-cd "$DEPLOY_DIR"
-if [ -f compose.yml ]; then
+DEPLOY_DIR=/opt/redlaunch/projects/applications/<name>
+# DEPLOY_DIR must be the absolute managed application directory: the manager
+# mounts the projects root at the identical host path, so this path resolves
+# both on the host and inside the manager container.
+if [ -f "$DEPLOY_DIR/compose.yml" ]; then
   compose_file="compose.yml"
-elif [ -f compose.yaml ]; then
+elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
   compose_file="compose.yaml"
 else
   echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
@@ -189,24 +213,23 @@ else
 fi
 project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
 test -n "$project_name"
+# Managed projects always contain vars.env and secrets.env; .env exists only
+# for some imported projects. Existence of .env is checked inside the manager
+# container so no host-side secrets read is needed.
 env_args=()
-for name in .env vars.env secrets.env; do
-  if [ -f "$name" ] && [ ! -L "$name" ]; then
-    env_args+=(--env-file "$name")
-  fi
-done
-if [ "${#env_args[@]}" -eq 0 ]; then
-  env_args=(--env-file /dev/null)
+if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/.env"; then
+  env_args+=(--env-file .env)
 fi
-docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm migrate
+env_args+=(--env-file vars.env --env-file secrets.env)
+docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm migrate
 ```
 
-Check for the Compose file, not for `.env`: managed projects may have only
-`vars.env`/`secrets.env`, and the `/dev/null` fallback preserves Redlaunch's
-isolation when none of the interpolation files exist. Keep the explicit
-`--project-name` on every manual `docker compose` invocation in a managed
-directory (`up`, `run`, `exec`, `logs`); omitting it recreates the duplicate
-project described above.
+Check for the Compose file by absolute path: the Compose file is world-readable
+while `vars.env`/`secrets.env` intentionally stay `0600`. Keep the explicit
+`--project-name` on every manual Compose invocation in a managed directory
+(`up`, `run`, `exec`, `logs`), whether run on the host or through
+`docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose ...`;
+omitting it recreates the duplicate project described above.
 
 Do not reuse the GitHub Actions gateway entry (`[host]:2222 ssh-ed25519 ...`)
 for port 22 shell access. That entry belongs to the `redlaunch-deploy`

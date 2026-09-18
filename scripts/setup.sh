@@ -145,6 +145,10 @@ unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SEC
 # (for example GitHub Actions) logs in as this user; it owns no Redlaunch
 # files and has no sudo privileges. Password login stays disabled: only keys
 # installed through the SSH keys tab grant access.
+# The user is added to the docker group so one-off Compose commands can run
+# through `docker exec redbolt-redlaunch ...` without direct host reads of
+# 0600 secrets files. The docker group is root-equivalent: treat unrestricted
+# keys as full host administrator credentials.
 readonly redlaunch_ssh_user=redlaunch
 readonly redlaunch_ssh_dir=/home/redlaunch/.ssh
 readonly redlaunch_authorized_keys=/home/redlaunch/.ssh/authorized_keys
@@ -181,6 +185,15 @@ ensure_redlaunch_ssh_user() {
 		fail 'could not set permissions on /home/redlaunch/.ssh/authorized_keys'
 	privileged passwd -l "$redlaunch_ssh_user" >/dev/null ||
 		fail 'could not lock password login for the redlaunch user'
+	# One-off Compose commands run inside the manager container through
+	# `docker exec`, so this user needs Docker daemon access. New group
+	# membership applies to new SSH sessions only.
+	if getent group docker >/dev/null 2>&1; then
+		privileged usermod -aG docker "$redlaunch_ssh_user" ||
+			fail 'could not add the redlaunch user to the docker group'
+	else
+		printf 'warning: docker group not found; add the redlaunch user to the Docker group before using SSH-key migrations.\n' >&2
+	fi
 }
 
 ensure_redlaunch_host_keys() {

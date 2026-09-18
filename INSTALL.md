@@ -235,7 +235,9 @@ The setup script asks for:
 - creates the dedicated <code>redlaunch</code> SSH user with password login
   locked and an empty <code>/home/redlaunch/.ssh/authorized_keys</code> file
   for the Settings SSH keys tab (uses <code>sudo</code> unless run as root;
-  existing keys are never overwritten);
+  existing keys are never overwritten), and adds that user to the
+  <code>docker</code> group for <code>docker exec</code>-based migrations
+  (the <code>docker</code> group is root-equivalent);
 - creates the external <code>redlaunch_app-data</code> Docker volume for the
   SQLite database;
 - adds the first email address to Redlaunch's SQLite login allowlist; and
