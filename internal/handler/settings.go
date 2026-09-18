@@ -58,8 +58,11 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 			return settingsPageData{}, err
 		}
 		data.SSHApplicationNames = make(map[int64]string, len(applications))
+		data.APITokenApplications = applications
+		data.APITokenApplicationNames = make(map[int64]string, len(applications))
 		for _, item := range applications {
 			data.SSHApplicationNames[item.ID] = item.Name
+			data.APITokenApplicationNames[item.ID] = item.Name
 			services, err := h.applicationDetails.ListServices(ctx, item.ID)
 			if err != nil {
 				return settingsPageData{}, err
@@ -73,6 +76,13 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 				})
 			}
 		}
+	}
+	if h.apiTokens != nil {
+		tokens, err := h.apiTokens.List(ctx)
+		if err != nil {
+			return settingsPageData{}, err
+		}
+		data.APITokens = tokens
 	}
 	return data, nil
 }

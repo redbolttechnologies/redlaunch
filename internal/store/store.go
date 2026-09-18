@@ -1744,6 +1744,41 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record server SSH key restriction migration: %w", err)
 		}
 	}
+
+	var apiTokensMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 18`).Scan(&apiTokensMigrationApplied); err != nil {
+		return fmt.Errorf("check API tokens migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS api_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			display_name TEXT NOT NULL,
+			prefix TEXT NOT NULL,
+			token_hash BLOB NOT NULL UNIQUE,
+			application_id INTEGER NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+			scope TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			expires_at TEXT,
+			last_used_at TEXT,
+			FOREIGN KEY (application_id) REFERENCES applications (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create API tokens table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_api_tokens_application_id
+		ON api_tokens (application_id)`); err != nil {
+		return fmt.Errorf("create API tokens application index: %w", err)
+	}
+	if apiTokensMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (18, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record API tokens migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

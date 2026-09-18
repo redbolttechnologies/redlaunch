@@ -54,6 +54,8 @@ type Handler struct {
 	applicationContainerManager    applicationContainerService
 	githubActions                  githubActionsService
 	serverSSHKeys                  serverSSHKeyService
+	apiTokens                      apiTokenService
+	apiRunJobs                     *apiRunJobStore
 	githubActionsJobs              *githubActionsJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
@@ -359,6 +361,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	applicationContainer := applicationContainerService(noApplicationService{})
 	githubActions := githubActionsService(noGitHubActionsService{})
 	var serverSSHKeys serverSSHKeyService
+	var apiTokens apiTokenService
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
 	var registryImages registryImageService
@@ -555,6 +558,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				serverSSHKeys = dependency
 			}
+		case apiTokenService:
+			if dependency != nil {
+				apiTokens = dependency
+			}
 		case proxyDetailsService:
 			if dependency != nil {
 				proxy = dependency
@@ -604,6 +611,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	backupJobs := newBackupJobStore()
 	githubActionsJobs := newGitHubActionsJobStore()
 	selfUpdateJobs := newSelfUpdateJobStore()
+	apiRunJobs := newAPIRunJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
 	jobs.registerCleanup(setupJobs.expire)
 	jobs.registerCleanup(postgresJobs.expire)
@@ -614,6 +622,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(backupJobs.expire)
 	jobs.registerCleanup(githubActionsJobs.expire)
 	jobs.registerCleanup(selfUpdateJobs.expire)
+	jobs.registerCleanup(apiRunJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -638,6 +647,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationContainerManager:    applicationContainer,
 		githubActions:                  githubActions,
 		serverSSHKeys:                  serverSSHKeys,
+		apiTokens:                      apiTokens,
+		apiRunJobs:                     apiRunJobs,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
@@ -703,6 +714,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/domains/delete", h.deleteRedlaunchDomain)
 	mux.HandleFunc("POST /settings/ssh-keys", h.createServerSSHKey)
 	mux.HandleFunc("POST /settings/ssh-keys/delete", h.revokeServerSSHKey)
+	mux.HandleFunc("POST /settings/api-tokens", h.createAPIToken)
+	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
@@ -737,6 +750,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/edit", h.updateApplicationContainer)
 	mux.HandleFunc("POST /applications", h.createApplication)
 	mux.HandleFunc("GET /healthz", h.health)
+	mux.HandleFunc("POST /api/v1/applications/{id}/services/{service}/run", h.runServiceViaAPI)
+	mux.HandleFunc("GET /api/v1/applications/{id}/services/{service}/run/status", h.apiRunJobStatus)
 	static, err := fs.Sub(embeddedFiles, "static")
 	if err == nil {
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
@@ -4824,6 +4839,25 @@ type settingsPageData struct {
 	SSHApplicationNames map[int64]string
 	SSHKeyDelete        *sshKeyDeletePageData
 	SSHActive           bool
+
+	APITokens          []application.APIToken
+	APITokenSetup      *application.APITokenSetup
+	APITokenCreateOpen bool
+	APITokenError      string
+	APITokenName       string
+	// APITokenApplicationRef preserves the application picker selection
+	// across creation validation failures.
+	APITokenApplicationRef string
+	// APITokenExpiryRef preserves the expiry picker selection across
+	// creation validation failures.
+	APITokenExpiryRef string
+	// APITokenApplications lists every managed application as a token scope
+	// candidate in the creation form.
+	APITokenApplications []application.Application
+	// APITokenApplicationNames resolves token scopes for display.
+	APITokenApplicationNames map[int64]string
+	APITokenDelete           *apiTokenDeletePageData
+	APITokensActive          bool
 }
 
 // sshServicePickerOption is one managed service offered as an SSH key tunnel
@@ -4836,6 +4870,13 @@ type sshServicePickerOption struct {
 }
 
 type sshKeyDeletePageData struct {
+	Open        bool
+	ID          int64
+	DisplayName string
+	Error       string
+}
+
+type apiTokenDeletePageData struct {
 	Open        bool
 	ID          int64
 	DisplayName string

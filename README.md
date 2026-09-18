@@ -82,6 +82,9 @@ see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
 For host shell access from external automation, see the
 [server SSH keys guide](SSH_KEYS.md).
 
+For machine-triggered one-off runs (for example database migrations from
+GitHub Actions), see the [API tokens guide](API_TOKENS.md).
+
 ## What it can do
 
 - Create and manage Docker Compose applications.
@@ -102,6 +105,8 @@ For host shell access from external automation, see the
 - Configure repository-specific GitHub Actions image builds through a restricted
   SSH tunnel to the local registry.
 - Create and revoke server SSH keys for external automation from Settings.
+- Create and revoke per-application API tokens from Settings for
+  machine-triggered one-off service runs.
 - Limit access to an allowlist of Google accounts.
 
 ## First steps

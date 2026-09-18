@@ -26,6 +26,14 @@ func (h *Handler) withAuthentication(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Machine API endpoints carry their own Bearer authentication (see
+		// api.go); redirecting them to the browser login would break machine
+		// callers and leak nothing, since the API handler answers 401 JSON
+		// without a valid token.
+		if isAPITokenPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		cookie, err := r.Cookie(sessionCookieName)
 		if err != nil {

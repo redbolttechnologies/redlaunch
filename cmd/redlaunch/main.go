@@ -170,6 +170,11 @@ func run(ctx context.Context) error {
 	}
 	logger.Info("SSH keys managed", "username", serverSSHKeys.Username(), "authorized_keys", serverSSHKeys.AuthorizedKeysPath())
 
+	apiTokens, err := service.NewAPITokenService(database, applications)
+	if err != nil {
+		return fmt.Errorf("create API token service: %w", err)
+	}
+
 	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
 		Directory:    cfg.RedlaunchDir,
 		UpdaterImage: cfg.RedlaunchImage,
@@ -195,6 +200,7 @@ func run(ctx context.Context) error {
 		Backups:       backupManager,
 		GitHubActions: githubActions,
 		ServerSSHKeys: serverSSHKeys,
+		APITokens:     apiTokens,
 		Registry:      registry,
 		SelfUpdate:    selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{

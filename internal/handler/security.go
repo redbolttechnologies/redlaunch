@@ -27,6 +27,15 @@ func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Machine API endpoints authenticate with a Bearer token instead of
+		// ambient cookies, so the cookie-presence check does not apply below
+		// the API prefix. Browsers cannot set the Authorization header from
+		// cross-site contexts, so exempting the prefix does not weaken CSRF
+		// protection for session-authenticated routes.
+		if isAPITokenPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		cookie, err := r.Cookie(csrfCookieName)
 		if err != nil || !validCSRFTokenFormat(cookie.Value) {
 			w.Header().Set("Cache-Control", "no-store")

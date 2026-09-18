@@ -13,12 +13,13 @@
 
   <div class="application-tabs settings-tabs" data-application-tabs>
     <div class="application-tablist settings-tablist" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
-      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="{{if .SettingsPage.SSHActive}}false{{else}}true{{end}}" tabindex="{{if .SettingsPage.SSHActive}}-1{{else}}0{{end}}" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive}}false{{else}}true{{end}}" tabindex="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive}}-1{{else}}0{{end}}" data-application-tab="domains-panel">Domains</button>
       <button class="application-tab" id="ssh-keys-tab" type="button" role="tab" aria-controls="ssh-keys-panel" aria-selected="{{if .SettingsPage.SSHActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.SSHActive}}0{{else}}-1{{end}}" data-application-tab="ssh-keys-panel">SSH keys</button>
+      <button class="application-tab" id="api-tokens-tab" type="button" role="tab" aria-controls="api-tokens-panel" aria-selected="{{if .SettingsPage.APITokensActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.APITokensActive}}0{{else}}-1{{end}}" data-application-tab="api-tokens-panel">API tokens</button>
       <button class="application-tab" id="software-update-tab" type="button" role="tab" aria-controls="software-update-panel" aria-selected="false" tabindex="-1" data-application-tab="software-update-panel">Software update</button>
     </div>
 
-    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if .SettingsPage.SSHActive}} hidden{{end}}>
+    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive}} hidden{{end}}>
       <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">
@@ -126,6 +127,68 @@
           {{else}}
           <div class="service-widget-empty" role="status">
             <p>No SSH keys are installed on this server.</p>
+          </div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="api-tokens-panel" role="tabpanel" aria-labelledby="api-tokens-tab" tabindex="0"{{if .SettingsPage.APITokensActive}}{{else}} hidden{{end}}>
+      <section class="service-widget settings-api-tokens" aria-labelledby="api-tokens-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="api-tokens-title">API tokens</h2>
+            <p>Create API tokens for external automation, for example GitHub Actions, to run services once in one application. A token can only start one-off runs in its application; it cannot read environment files or reach other applications. Only the token prefix is shown here: copy the full token when it is created, it will not be shown again.</p>
+          </div>
+          <button class="button button-primary" type="button" data-api-token-add aria-controls="api-token-create-dialog" aria-haspopup="dialog" aria-expanded="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+            <span>Create API token</span>
+          </button>
+        </header>
+        <div class="service-widget-body settings-api-tokens-body">
+          {{if .SettingsPage.APITokens}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <caption class="sr-only">API tokens for external automation</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Display name</th>
+                  <th scope="col">Scope</th>
+                  <th scope="col">Token</th>
+                  <th scope="col">Expires</th>
+                  <th scope="col">Last used</th>
+                  <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {{range .SettingsPage.APITokens}}
+                <tr>
+                  <th scope="row">{{.DisplayName}}</th>
+                  <td>Run services in {{with index $.SettingsPage.APITokenApplicationNames .ApplicationID}}{{.}}{{else}}a removed application{{end}}</td>
+                  <td><code>{{.Prefix}}…</code></td>
+                  <td>{{with .ExpiresAt}}<time datetime="{{backupAtISO .}}">{{backupAt .}}</time>{{else}}Never{{end}}</td>
+                  <td>{{with .LastUsedAt}}<time datetime="{{backupAtISO .}}">{{backupAt .}}</time>{{else}}—{{end}}</td>
+                  <td class="application-environment-actions">
+                    <div class="application-environment-action-group">
+                      <button class="application-environment-delete" type="button" data-api-token-revoke data-api-token-id="{{.ID}}" data-api-token-name="{{.DisplayName}}" aria-controls="api-token-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Revoke API token {{.DisplayName}}">
+                        <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M3 6h18"></path>
+                          <path d="M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+                          <path d="M10 11v5M14 11v5"></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="service-widget-empty" role="status">
+            <p>No API tokens are configured.</p>
           </div>
           {{end}}
         </div>
@@ -348,6 +411,123 @@
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-ssh-key-delete-close data-ssh-key-delete-cancel>Cancel</button>
         <button class="button button-destructive" type="submit" data-ssh-key-delete-submit>Revoke key</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog api-token-create-dialog" id="api-token-create-dialog" data-api-token-create-dialog{{if .SettingsPage.APITokenCreateOpen}} data-api-token-create-open{{end}} aria-modal="true" aria-labelledby="api-token-create-dialog-title" aria-describedby="api-token-create-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="api-token-create-dialog-title">Create API token</h2>
+        <p id="api-token-create-dialog-description">Create an API token for external automation to run services once in one application.</p>
+      </div>
+      <button class="icon-button" type="button" data-api-token-create-close aria-label="Close create API token dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/api-tokens">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      {{if .SettingsPage.APITokenError}}
+      <div class="application-alert application-dialog-alert" role="alert"><span>{{.SettingsPage.APITokenError}}</span></div>
+      {{end}}
+      <div class="field">
+        <label for="api-token-display-name">Display name</label>
+        <input id="api-token-display-name" name="display_name" type="text" value="{{.SettingsPage.APITokenName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="talenthunt migrate via GHA" required>
+        <span class="field-help">Only shown in this list.</span>
+      </div>
+      <div class="field">
+        <label for="api-token-application">Application</label>
+        <select id="api-token-application" name="application_id" required>
+          <option value="">Select an application</option>
+          {{range .SettingsPage.APITokenApplications}}
+          <option value="{{.ID}}"{{if eq (printf "%d" .ID) $.SettingsPage.APITokenApplicationRef}} selected{{end}}>{{.Name}}</option>
+          {{end}}
+        </select>
+        <span class="field-help">The token can run any service in this application once per request. It cannot reach other applications.</span>
+      </div>
+      <div class="field">
+        <label for="api-token-expiry">Expiry</label>
+        <select id="api-token-expiry" name="expires">
+          <option value="90"{{if or (eq $.SettingsPage.APITokenExpiryRef "90") (eq $.SettingsPage.APITokenExpiryRef "")}} selected{{end}}>90 days</option>
+          <option value="30"{{if eq $.SettingsPage.APITokenExpiryRef "30"}} selected{{end}}>30 days</option>
+          <option value="180"{{if eq $.SettingsPage.APITokenExpiryRef "180"}} selected{{end}}>180 days</option>
+          <option value="365"{{if eq $.SettingsPage.APITokenExpiryRef "365"}} selected{{end}}>365 days</option>
+          <option value="never"{{if eq $.SettingsPage.APITokenExpiryRef "never"}} selected{{end}}>Never expires</option>
+        </select>
+        <span class="field-help">Expired tokens are rejected. Prefer the shortest lifetime the automation tolerates; rotate with a replacement token before expiry.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-api-token-create-close data-api-token-create-cancel>Cancel</button>
+        <button class="button button-primary" type="submit" data-api-token-create-submit>Create API token</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+{{with .SettingsPage.APITokenSetup}}
+<dialog class="application-dialog api-token-setup-dialog" id="api-token-setup-dialog" data-api-token-setup-dialog data-api-token-setup-open aria-modal="true" aria-labelledby="api-token-setup-dialog-title" aria-describedby="api-token-setup-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="api-token-setup-dialog-title">Store this token now</h2>
+        <p id="api-token-setup-dialog-description">Token <strong>{{.Token.DisplayName}}</strong> was created. This token will not be shown again.</p>
+      </div>
+      <button class="icon-button" type="button" data-api-token-setup-close aria-label="Close API token dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="application-alert application-alert-warning application-dialog-alert application-alert-stacked" role="alert">
+      <strong>Store the token safely.</strong>
+      <span>It will not be displayed again. Add it to the external system as a secret, for example <code>REDLAUNCH_RUN_TOKEN</code> in GitHub Actions, then keep a secure backup.</span>
+    </div>
+    <div class="field">
+      <label for="api-token-plaintext-value">API token for {{.Token.DisplayName}}</label>
+      <textarea id="api-token-plaintext-value" class="github-actions-secret" rows="2" readonly autocomplete="off" spellcheck="false">{{.Plaintext}}</textarea>
+      <div class="application-form-actions">
+        <button class="button button-secondary" type="button" data-copy-target="api-token-plaintext-value"><span>Copy token</span></button>
+      </div>
+      <span class="field-help">Use it as a <code>Bearer</code> credential against <code>/api/v1/applications/{{.Token.ApplicationID}}/services/&lt;service&gt;/run</code>. Expires {{with .Token.ExpiresAt}}{{.}}{{else}}never{{end}}. See the API tokens guide for the dispatch-and-poll workflow.</span>
+    </div>
+    <footer class="application-form-actions">
+      <button class="button button-primary" type="button" data-api-token-setup-close data-api-token-setup-done>Done</button>
+    </footer>
+  </div>
+</dialog>
+{{end}}
+
+<dialog class="application-dialog api-token-delete-dialog" id="api-token-delete-dialog" data-api-token-delete-dialog{{with .SettingsPage.APITokenDelete}}{{if .Open}} data-api-token-delete-open{{end}}{{end}} aria-modal="true" aria-labelledby="api-token-delete-dialog-title" aria-describedby="api-token-delete-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="api-token-delete-dialog-title">Revoke API token</h2>
+        <p id="api-token-delete-dialog-description">Revoke <code data-api-token-delete-name-display>{{with .SettingsPage.APITokenDelete}}{{.DisplayName}}{{end}}</code>? External systems using this token will lose access immediately. This action cannot be undone.</p>
+      </div>
+      <button class="icon-button" type="button" data-api-token-delete-close aria-label="Close revoke API token dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/settings/api-tokens/delete">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      <input type="hidden" name="id" value="{{with .SettingsPage.APITokenDelete}}{{.ID}}{{end}}" data-api-token-delete-id-input>
+      {{with .SettingsPage.APITokenDelete}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-api-token-delete-close data-api-token-delete-cancel>Cancel</button>
+        <button class="button button-destructive" type="submit" data-api-token-delete-submit>Revoke token</button>
       </footer>
     </form>
   </div>
