@@ -60,6 +60,10 @@ General rules applied by every workflow below:
 - Never construct remote shell commands by concatenating untrusted input.
   Service names, image names, and directories are validated in Redlaunch;
   workflows pass them as fixed values or validated `vars.*`.
+- Variables marked **optional** in the tables below fall back to Redlaunch
+  defaults inside the scripts (`${VAR:-default}`), so define them only to
+  override. Required variables have no safe default; the workflows fail early
+  with a message naming the missing variable.
 
 ---
 
@@ -132,11 +136,11 @@ exposed publicly. The gateway can only forward to `registry:5000`.
 
    Variables:
 
-   | Variable | Value |
-   | --- | --- |
-   | `REDLAUNCH_SERVER_HOST` | Public host entered in the wizard |
-   | `REDLAUNCH_SERVER_USERNAME` | `redlaunch-deploy` |
-   | `REDLAUNCH_SERVER_SSH_PORT` | `2222` |
+    | Variable | Value |
+    | --- | --- |
+    | `REDLAUNCH_SERVER_HOST` | Public host entered in the wizard (required) |
+    | `REDLAUNCH_SERVER_USERNAME` | `redlaunch-deploy` (optional, defaults to this) |
+    | `REDLAUNCH_SERVER_SSH_PORT` | `2222` (optional, defaults to this) |
 
    Secrets (paste complete values, including `BEGIN`/`END` lines for the key):
 
@@ -166,9 +170,9 @@ Create these additional repository variables for reuse:
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
-| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` | Registry repository, no `localhost:5000`, no tag |
-| `REDLAUNCH_DOCKERFILE` | `Dockerfile` | Dockerfile path in the repository |
-| `REDLAUNCH_BUILD_CONTEXT` | `.` | Build context in the repository |
+| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` | Registry repository, no `localhost:5000`, no tag (required) |
+| `REDLAUNCH_DOCKERFILE` | `Dockerfile` | Dockerfile path in the repository (optional, defaults to `Dockerfile`) |
+| `REDLAUNCH_BUILD_CONTEXT` | `.` | Build context in the repository (optional, defaults to `.`) |
 
 ```yaml
 name: Build and push Redlaunch image
@@ -197,9 +201,9 @@ jobs:
       - name: Build image
         run: |
           set -euo pipefail
-          test -n "$IMAGE_REPOSITORY"
-          test -n "$DOCKERFILE"
-          test -n "$BUILD_CONTEXT"
+          DOCKERFILE="${DOCKERFILE:-Dockerfile}"
+          BUILD_CONTEXT="${BUILD_CONTEXT:-.}"
+          test -n "$IMAGE_REPOSITORY" || { echo "REDLAUNCH_IMAGE_REPOSITORY is not set" >&2; exit 1; }
           IMAGE="localhost:5000/${IMAGE_REPOSITORY}:${GITHUB_SHA}"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
           docker build --file "$DOCKERFILE" --tag "$IMAGE" "$BUILD_CONTEXT"
@@ -215,9 +219,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Redlaunch defaults; override via repository variables when needed.
+          SERVER_USERNAME="${SERVER_USERNAME:-redlaunch-deploy}"
+          SSH_PORT="${SSH_PORT:-2222}"
+
           test -n "$SERVER_HOST" || { echo "REDLAUNCH_SERVER_HOST is not set" >&2; exit 1; }
-          test -n "$SERVER_USERNAME" || { echo "REDLAUNCH_SERVER_USERNAME is not set" >&2; exit 1; }
-          test -n "$SSH_PORT" || { echo "REDLAUNCH_SERVER_SSH_PORT is not set" >&2; exit 1; }
           test -n "$SSH_PRIVATE_KEY" || { echo "REDLAUNCH_DEPLOY_SSH_KEY is not set" >&2; exit 1; }
           test -n "$SSH_KNOWN_HOSTS" || { echo "REDLAUNCH_DEPLOY_KNOWN_HOSTS is not set" >&2; exit 1; }
           [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || { echo "REDLAUNCH_SERVER_SSH_PORT is invalid" >&2; exit 1; }
@@ -284,6 +290,11 @@ Notes:
   work around a host-key error by disabling checking.
 - The tunnel is closed by the `trap` after `docker push` completes. Key files
   exist only under `$RUNNER_TEMP`.
+- Defaults used by the workflow: SSH user `redlaunch-deploy`, SSH port
+  `2222`, Dockerfile `Dockerfile`, build context `.`. Set the corresponding
+  `REDLAUNCH_*` repository variables only to override them;
+  `REDLAUNCH_SERVER_HOST` and `REDLAUNCH_IMAGE_REPOSITORY` are always
+  required.
 
 ### 1.3 Verify and rotate
 
@@ -388,12 +399,13 @@ Set these as workflow or job environment values:
 
 ```text
 APPLICATION_ID: "7"
-SERVICE_NAME: migrate
+SERVICE_NAME: ${{ vars.MIGRATE_SERVICE_NAME }}  # optional, defaults to "migrate"
 ```
 
 Find the numeric application ID in the Redlaunch URL
-(`/applications/<id>`) or inventory. Use the exact Compose service name
-(`migrate`).
+(`/applications/<id>`) or inventory. `SERVICE_NAME` is the exact Compose
+service name; when the `MIGRATE_SERVICE_NAME` variable is unset or empty the
+workflow below falls back to `migrate`.
 
 If Redlaunch is SSH-only (loopback bind), GitHub cannot reach the API
 directly. Either publish Redlaunch through the managed Caddy proxy
@@ -423,7 +435,7 @@ jobs:
     env:
       REDLAUNCH_URL: ${{ vars.REDLAUNCH_URL }}
       APPLICATION_ID: "7"
-      SERVICE_NAME: migrate
+      SERVICE_NAME: ${{ vars.MIGRATE_SERVICE_NAME }}
     steps:
       - name: Dispatch migration run
         id: dispatch
@@ -432,6 +444,7 @@ jobs:
           REDLAUNCH_RUN_TOKEN: ${{ secrets.REDLAUNCH_RUN_TOKEN }}
         run: |
           set -euo pipefail
+          SERVICE_NAME="${SERVICE_NAME:-migrate}"
           response=$(curl --fail --silent --show-error --max-time 30 -X POST \
             -H "Authorization: Bearer $REDLAUNCH_RUN_TOKEN" \
             "$REDLAUNCH_URL/api/v1/applications/$APPLICATION_ID/services/$SERVICE_NAME/run")
@@ -491,10 +504,12 @@ HTTPS.
 
 4. In GitHub, create:
 
-   | Variable | Example |
-   | --- | --- |
-   | `SERVER_HOST` | `203.0.113.10` |
-   | `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` |
+    | Variable | Example |
+    | --- | --- |
+    | `SERVER_HOST` | `203.0.113.10` (required) |
+    | `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
+    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
+    | `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`) |
 
    | Secret | Value |
    | --- | --- |
@@ -528,6 +543,8 @@ jobs:
     env:
       SERVER_HOST: ${{ vars.SERVER_HOST }}
       DEPLOY_DIR: ${{ vars.REDLAUNCH_APP_DIR }}
+      DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+      MIGRATE_SERVICE: ${{ vars.MIGRATE_SERVICE_NAME }}
     steps:
       - name: Run Drizzle migration on server
         shell: bash
@@ -536,10 +553,12 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          test -n "$SERVER_HOST"
-          test -n "$DEPLOY_DIR"
-          test -n "$SSH_PRIVATE_KEY"
-          test -n "$SSH_KNOWN_HOSTS"
+          DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          MIGRATE_SERVICE="${MIGRATE_SERVICE:-migrate}"
+          test -n "$SERVER_HOST" || { echo "SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$DEPLOY_DIR" || { echo "REDLAUNCH_APP_DIR is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "SSH_PRIVATE_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "SSH_KNOWN_HOSTS is not set" >&2; exit 1; }
 
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
@@ -548,12 +567,14 @@ jobs:
           chmod 600 "$ssh_dir/id_ed25519"
           chmod 644 "$ssh_dir/known_hosts"
 
-          ssh -p 22 -i "$ssh_dir/id_ed25519" \
+          DEPLOY_DIR="$DEPLOY_DIR" MIGRATE_SERVICE="$MIGRATE_SERVICE" \
+          ssh -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/id_ed25519" \
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
             redlaunch@"$SERVER_HOST" 'bash -s' <<'REMOTE_SCRIPT'
           set -euo pipefail
           DEPLOY_DIR="${DEPLOY_DIR:?}"
+          MIGRATE_SERVICE="${MIGRATE_SERVICE:-migrate}"
           # DEPLOY_DIR must be the absolute managed application directory.
           if [ -f "$DEPLOY_DIR/compose.yml" ]; then
             compose_file="compose.yml"
@@ -570,14 +591,15 @@ jobs:
             env_args+=(--env-file .env)
           fi
           env_args+=(--env-file vars.env --env-file secrets.env)
-          docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm migrate
+          docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm "$MIGRATE_SERVICE"
           REMOTE_SCRIPT
 ```
 
-The remote snippet must be passed `DEPLOY_DIR` from the CI environment (for
-example via `env:` on the `ssh` invocation or a preceding `export`). The
-pattern above keeps the explicit `--project-name` and `--env-file` files on
-every invocation and runs Compose inside the manager container where the
+The remote snippet receives `DEPLOY_DIR` and `MIGRATE_SERVICE` as fixed
+remote values via the `VAR="..."` prefix on the `ssh` invocation (SSH does
+not forward the local environment automatically). The pattern above keeps the
+explicit `--project-name` and `--env-file` files on every invocation and runs
+Compose inside the manager container where the
 `0600` `vars.env` / `secrets.env` files are readable. A bare
 `docker compose run --rm migrate` in the application directory creates a
 duplicate project, fails with container-name and volume conflicts, and must
@@ -642,9 +664,9 @@ You need both credential sets:
 
 | Purpose | Variables | Secrets |
 | --- | --- | --- |
-| Push (port `2222`) | `REDLAUNCH_SERVER_HOST`, `REDLAUNCH_SERVER_USERNAME=redlaunch-deploy`, `REDLAUNCH_SERVER_SSH_PORT=2222`, plus reusable `REDLAUNCH_IMAGE_REPOSITORY=myapp/web`, `REDLAUNCH_DOCKERFILE=Dockerfile`, `REDLAUNCH_BUILD_CONTEXT=.` | `REDLAUNCH_DEPLOY_SSH_KEY`, `REDLAUNCH_DEPLOY_KNOWN_HOSTS` |
-| Deploy (port `22`) | `SERVER_HOST=203.0.113.10`, `REDLAUNCH_APP_DIR=/opt/redlaunch/projects/applications/myapp` | `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` (system host key) |
-| Migrate via API (optional, recommended) | `REDLAUNCH_URL`, `APPLICATION_ID`, `SERVICE_NAME=migrate` | `REDLAUNCH_RUN_TOKEN` |
+| Push (port `2222`) | `REDLAUNCH_SERVER_HOST` (required), `REDLAUNCH_IMAGE_REPOSITORY=myapp/web` (required); optional `REDLAUNCH_SERVER_USERNAME` (default `redlaunch-deploy`), `REDLAUNCH_SERVER_SSH_PORT` (default `2222`), `REDLAUNCH_DOCKERFILE` (default `Dockerfile`), `REDLAUNCH_BUILD_CONTEXT` (default `.`) | `REDLAUNCH_DEPLOY_SSH_KEY`, `REDLAUNCH_DEPLOY_KNOWN_HOSTS` |
+| Deploy (port `22`) | `SERVER_HOST=203.0.113.10`, `REDLAUNCH_APP_DIR=/opt/redlaunch/projects/applications/myapp`; optional `DEPLOY_SERVICE` (default `app`), `DEPLOY_SSH_PORT` (default `22`) | `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` (system host key) |
+| Migrate via API (optional, recommended) | `REDLAUNCH_URL`, `APPLICATION_ID`; optional `MIGRATE_SERVICE_NAME` (default `migrate`) | `REDLAUNCH_RUN_TOKEN` |
 
 `REDLAUNCH_APP_DIR` must be the absolute managed application directory. It
 resolves both on the host and inside the manager container because the
@@ -682,7 +704,8 @@ env:
   SSH_PORT: ${{ vars.REDLAUNCH_SERVER_SSH_PORT }}
   DEPLOY_HOST: ${{ vars.SERVER_HOST }}
   DEPLOY_DIR: ${{ vars.REDLAUNCH_APP_DIR }}
-  DEPLOY_SERVICE: app
+  DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE }}
+  DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
 
 jobs:
   build-push-deploy:
@@ -694,7 +717,9 @@ jobs:
       - name: Build image
         run: |
           set -euo pipefail
-          test -n "$IMAGE_REPOSITORY"
+          DOCKERFILE="${DOCKERFILE:-Dockerfile}"
+          BUILD_CONTEXT="${BUILD_CONTEXT:-.}"
+          test -n "$IMAGE_REPOSITORY" || { echo "REDLAUNCH_IMAGE_REPOSITORY is not set" >&2; exit 1; }
           IMAGE_SHA="localhost:5000/${IMAGE_REPOSITORY}:${GITHUB_SHA}"
           IMAGE_LATEST="localhost:5000/${IMAGE_REPOSITORY}:latest"
           echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
@@ -710,6 +735,13 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.REDLAUNCH_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
+          # Redlaunch defaults; override via repository variables when needed.
+          SERVER_USERNAME="${SERVER_USERNAME:-redlaunch-deploy}"
+          SSH_PORT="${SSH_PORT:-2222}"
+          test -n "$SERVER_HOST" || { echo "REDLAUNCH_SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "REDLAUNCH_DEPLOY_SSH_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "REDLAUNCH_DEPLOY_KNOWN_HOSTS is not set" >&2; exit 1; }
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || { echo "REDLAUNCH_SERVER_SSH_PORT is invalid" >&2; exit 1; }
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$ssh_dir/id_ed25519"
@@ -760,9 +792,12 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_DIR"
-          test -n "$DEPLOY_SERVICE"
+          DEPLOY_SERVICE="${DEPLOY_SERVICE:-app}"
+          DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          test -n "$DEPLOY_HOST" || { echo "SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$DEPLOY_DIR" || { echo "REDLAUNCH_APP_DIR is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "SSH_PRIVATE_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "SSH_KNOWN_HOSTS is not set" >&2; exit 1; }
 
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
@@ -774,7 +809,7 @@ jobs:
           # DEPLOY_DIR and DEPLOY_SERVICE travel as fixed remote values.
           # Do not interpolate untrusted input into the remote script.
           DEPLOY_DIR="$DEPLOY_DIR" DEPLOY_SERVICE="$DEPLOY_SERVICE" \
-          ssh -p 22 -i "$ssh_dir/deploy_ed25519" \
+          ssh -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/deploy_ed25519" \
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/deploy_known_hosts" \
             redlaunch@"$DEPLOY_HOST" 'bash -s' <<'REMOTE_SCRIPT'
@@ -856,9 +891,13 @@ GitHub variables/secrets (no `2222` values):
 
 | Variable | Example |
 | --- | --- |
-| `SERVER_HOST` | `203.0.113.10` |
-| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` |
-| `IMAGE_REPOSITORY` (optional reuse) | `myapp/web` |
+| `SERVER_HOST` | `203.0.113.10` (required) |
+| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
+| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) |
+| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) |
+| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) |
+| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) |
+| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
 
 | Secret | Value |
 | --- | --- |
@@ -894,7 +933,8 @@ env:
   BUILD_CONTEXT: ${{ vars.REDLAUNCH_BUILD_CONTEXT }}
   DEPLOY_HOST: ${{ vars.SERVER_HOST }}
   DEPLOY_DIR: ${{ vars.REDLAUNCH_APP_DIR }}
-  DEPLOY_SERVICE: app
+  DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE }}
+  DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
 
 jobs:
   build-copy-deploy:
@@ -906,7 +946,9 @@ jobs:
       - name: Build image
         run: |
           set -euo pipefail
-          test -n "$IMAGE_REPOSITORY"
+          DOCKERFILE="${DOCKERFILE:-Dockerfile}"
+          BUILD_CONTEXT="${BUILD_CONTEXT:-.}"
+          test -n "$IMAGE_REPOSITORY" || { echo "REDLAUNCH_IMAGE_REPOSITORY is not set" >&2; exit 1; }
           IMAGE_SHA="localhost:5000/${IMAGE_REPOSITORY}:${GITHUB_SHA}"
           IMAGE_LATEST="localhost:5000/${IMAGE_REPOSITORY}:latest"
           echo "IMAGE_SHA=$IMAGE_SHA" >> "$GITHUB_ENV"
@@ -922,11 +964,14 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_DIR"
-          test -n "$DEPLOY_SERVICE"
-          test -n "$IMAGE_SHA"
-          test -n "$IMAGE_LATEST"
+          DEPLOY_SERVICE="${DEPLOY_SERVICE:-app}"
+          DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          test -n "$DEPLOY_HOST" || { echo "SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$DEPLOY_DIR" || { echo "REDLAUNCH_APP_DIR is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "SSH_PRIVATE_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "SSH_KNOWN_HOSTS is not set" >&2; exit 1; }
+          test -n "$IMAGE_SHA" || { echo "built image reference is missing" >&2; exit 1; }
+          test -n "$IMAGE_LATEST" || { echo "built image reference is missing" >&2; exit 1; }
 
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
@@ -936,7 +981,7 @@ jobs:
           chmod 644 "$ssh_dir/deploy_known_hosts"
 
           ssh_opts=(
-            -p 22 -i "$ssh_dir/deploy_ed25519"
+            -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/deploy_ed25519"
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/deploy_known_hosts"
             -o ServerAliveInterval=30 -o ServerAliveCountMax=3
@@ -976,8 +1021,9 @@ Variant for large images or flaky networks: save to a file, copy with
 `scp`, then load. This allows resuming the copy without rebuilding:
 
 ```sh
+DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 docker save "$IMAGE_SHA" "$IMAGE_LATEST" -o /tmp/myapp.tar
-scp -P 22 -i "$ssh_dir/deploy_ed25519" \
+scp -P "$DEPLOY_SSH_PORT" -i "$ssh_dir/deploy_ed25519" \
   -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
   -o UserKnownHostsFile="$ssh_dir/deploy_known_hosts" \
   /tmp/myapp.tar redlaunch@"$DEPLOY_HOST":/tmp/myapp.tar
@@ -1055,13 +1101,14 @@ Keep the explicit `--project-name` on every manual invocation (`up`, `run`,
 ### CI SSH setup snippet (both ports)
 
 ```sh
+DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
 install -d -m 700 "$ssh_dir"
 printf '%s\n' "$SSH_PRIVATE_KEY" > "$ssh_dir/id_ed25519"
 printf '%s\n' "$SSH_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
 chmod 600 "$ssh_dir/id_ed25519"
 chmod 644 "$ssh_dir/known_hosts"
-ssh -p 22 -i "$ssh_dir/id_ed25519" \
+ssh -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/id_ed25519" \
   -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
   -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
   redlaunch@"$SERVER_HOST" 'bash -s' <<'REMOTE_SCRIPT'
