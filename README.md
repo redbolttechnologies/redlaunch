@@ -85,6 +85,10 @@ For host shell access from external automation, see the
 For machine-triggered one-off runs (for example database migrations from
 GitHub Actions), see the [API tokens guide](API_TOKENS.md).
 
+For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
+from GitHub Actions via the registry or via direct image copy), see the
+[recipes guide](RECIPES.md).
+
 ## What it can do
 
 - Create and manage Docker Compose applications.
