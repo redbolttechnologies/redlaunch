@@ -52,11 +52,9 @@ type Handler struct {
 	postgresManager                postgresqlService
 	redisManager                   redisService
 	applicationContainerManager    applicationContainerService
-	githubActions                  githubActionsService
 	serverSSHKeys                  serverSSHKeyService
 	apiTokens                      apiTokenService
 	apiRunJobs                     *apiRunJobStore
-	githubActionsJobs              *githubActionsJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	registryImages                 registryImageService
@@ -264,14 +262,6 @@ type applicationContainerInputValidator interface {
 	ValidateApplicationServiceInput(application.ApplicationServiceInput) error
 }
 
-type githubActionsService interface {
-	Get(context.Context, int64) (application.GitHubActionsIntegration, error)
-	Configure(context.Context, int64, application.GitHubActionsInput) (application.GitHubActionsSetup, error)
-	RenderWorkflow(context.Context, int64) (string, error)
-	Revoke(context.Context, int64) error
-	CleanupApplicationKey(context.Context, int64) error
-}
-
 type serverSSHKeyService interface {
 	Username() string
 	List(context.Context) ([]application.ServerSSHKey, error)
@@ -359,7 +349,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	postgres := postgresqlService(noApplicationService{})
 	redis := redisService(noApplicationService{})
 	applicationContainer := applicationContainerService(noApplicationService{})
-	githubActions := githubActionsService(noGitHubActionsService{})
 	var serverSSHKeys serverSSHKeyService
 	var apiTokens apiTokenService
 	proxy := proxyDetailsService(noProxyService{})
@@ -550,10 +539,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				applicationContainer = dependency
 			}
-		case githubActionsService:
-			if dependency != nil {
-				githubActions = dependency
-			}
 		case serverSSHKeyService:
 			if dependency != nil {
 				serverSSHKeys = dependency
@@ -609,7 +594,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	serviceDeleteJobs := newServiceDeleteJobStore()
 	applicationDeleteJobs := newApplicationDeleteJobStore()
 	backupJobs := newBackupJobStore()
-	githubActionsJobs := newGitHubActionsJobStore()
 	selfUpdateJobs := newSelfUpdateJobStore()
 	apiRunJobs := newAPIRunJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
@@ -620,7 +604,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(serviceDeleteJobs.expire)
 	jobs.registerCleanup(applicationDeleteJobs.expire)
 	jobs.registerCleanup(backupJobs.expire)
-	jobs.registerCleanup(githubActionsJobs.expire)
 	jobs.registerCleanup(selfUpdateJobs.expire)
 	jobs.registerCleanup(apiRunJobs.expire)
 	return &Handler{
@@ -645,7 +628,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		postgresManager:                postgres,
 		redisManager:                   redis,
 		applicationContainerManager:    applicationContainer,
-		githubActions:                  githubActions,
 		serverSSHKeys:                  serverSSHKeys,
 		apiTokens:                      apiTokens,
 		apiRunJobs:                     apiRunJobs,
@@ -662,7 +644,6 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		serviceDeleteJobs:              serviceDeleteJobs,
 		applicationDeleteJobs:          applicationDeleteJobs,
 		backupJobs:                     backupJobs,
-		githubActionsJobs:              githubActionsJobs,
 		selfUpdateJobs:                 selfUpdateJobs,
 		jobs:                           jobs,
 		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
@@ -718,11 +699,6 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
-	mux.HandleFunc("GET /applications/{id}/deployments/github-actions", h.githubActionsPage)
-	mux.HandleFunc("POST /applications/{id}/deployments/github-actions", h.configureGitHubActions)
-	mux.HandleFunc("POST /applications/{id}/deployments/github-actions/revoke", h.revokeGitHubActions)
-	mux.HandleFunc("GET /applications/{id}/deployments/github-actions/workflow", h.downloadGitHubActionsWorkflow)
-	mux.HandleFunc("GET /applications/{id}/deployments/github-actions/status", h.githubActionsStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/start", h.startService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/stop", h.stopService)
@@ -4554,7 +4530,6 @@ type pageData struct {
 	ServiceDeleteProgress        *serviceDeleteProgressData
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
-	GitHubActionsProgress        *githubActionsProgressData
 	SelfUpdateProgress           *selfUpdateProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
@@ -4565,7 +4540,6 @@ type pageData struct {
 	PostgreSQLServicePage        *postgresqlServicePageData
 	RedisServicePage             *redisServicePageData
 	ApplicationContainerPage     *applicationContainerPageData
-	GitHubActionsPage            *githubActionsPageData
 	DashboardPage                *dashboardPageData
 	SettingsPage                 *settingsPageData
 }
@@ -4829,16 +4803,8 @@ type settingsPageData struct {
 	SSHKeyError      string
 	SSHKeyNotice     string
 	SSHKeyName       string
-	// SSHKeyServiceRef preserves the restriction picker selection
-	// ("<applicationID>/<service>") across creation validation failures.
-	SSHKeyServiceRef string
-	// SSHServiceOptions lists every managed service as a tunnel
-	// restriction candidate, grouped by application in the form.
-	SSHServiceOptions []sshServicePickerOption
-	// SSHApplicationNames resolves key restriction references for display.
-	SSHApplicationNames map[int64]string
-	SSHKeyDelete        *sshKeyDeletePageData
-	SSHActive           bool
+	SSHKeyDelete     *sshKeyDeletePageData
+	SSHActive        bool
 
 	APITokens          []application.APIToken
 	APITokenSetup      *application.APITokenSetup
@@ -4858,15 +4824,6 @@ type settingsPageData struct {
 	APITokenApplicationNames map[int64]string
 	APITokenDelete           *apiTokenDeletePageData
 	APITokensActive          bool
-}
-
-// sshServicePickerOption is one managed service offered as an SSH key tunnel
-// restriction target. Value encodes the selection for the creation form.
-type sshServicePickerOption struct {
-	ApplicationID   int64
-	ApplicationName string
-	ServiceName     string
-	Value           string
 }
 
 type sshKeyDeletePageData struct {
@@ -4929,28 +4886,6 @@ func (noSetupManager) NeedsSetup() (bool, error) {
 
 func (noSetupManager) Setup(context.Context, bool, bool) error {
 	return errors.New("setup service is not configured")
-}
-
-type noGitHubActionsService struct{}
-
-func (noGitHubActionsService) Get(context.Context, int64) (application.GitHubActionsIntegration, error) {
-	return application.GitHubActionsIntegration{}, application.ErrGitHubActionsNotConfigured
-}
-
-func (noGitHubActionsService) Configure(context.Context, int64, application.GitHubActionsInput) (application.GitHubActionsSetup, error) {
-	return application.GitHubActionsSetup{}, errors.New("GitHub Actions service is not configured")
-}
-
-func (noGitHubActionsService) RenderWorkflow(context.Context, int64) (string, error) {
-	return "", application.ErrGitHubActionsNotConfigured
-}
-
-func (noGitHubActionsService) Revoke(context.Context, int64) error {
-	return application.ErrGitHubActionsNotConfigured
-}
-
-func (noGitHubActionsService) CleanupApplicationKey(context.Context, int64) error {
-	return application.ErrGitHubActionsNotConfigured
 }
 
 type noProxyService struct{}

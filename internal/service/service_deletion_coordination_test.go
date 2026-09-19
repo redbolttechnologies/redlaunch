@@ -41,7 +41,7 @@ func newServiceDeletionTestSetup(t *testing.T, ctx context.Context) (*store.Stor
 		t.Fatal(err)
 	}
 	scheduler := &serviceDeletionSchedulerFake{}
-	applications.SetApplicationDeletionDependencies(scheduler, nil)
+	applications.SetApplicationDeletionDependencies(scheduler)
 	prepareRoutingProxy(t, projectsRoot)
 
 	item, err := applications.Create(ctx, "Status page", "status-page")
@@ -193,7 +193,7 @@ func TestDeleteServiceRepairsDanglingDependsOn(t *testing.T) {
 		t.Fatal(err)
 	}
 	scheduler := &serviceDeletionSchedulerFake{}
-	applications.SetApplicationDeletionDependencies(scheduler, nil)
+	applications.SetApplicationDeletionDependencies(scheduler)
 	prepareRoutingProxy(t, projectsRoot)
 
 	item, err := applications.Create(ctx, "Status page", "status-page")

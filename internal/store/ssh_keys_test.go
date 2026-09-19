@@ -29,9 +29,6 @@ func TestServerSSHKeyRoundTrip(t *testing.T) {
 		DisplayName:    "second key",
 		PublicKey:      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMtestkey2 redlaunch-ssh-key",
 		KeyFingerprint: "SHA256:test2",
-		ApplicationID:  7,
-		ServiceName:    "cache",
-		PermitOpen:     "127.0.0.1:6379",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -54,17 +51,6 @@ func TestServerSSHKeyRoundTrip(t *testing.T) {
 	}
 	if got.PublicKey != created.PublicKey {
 		t.Fatalf("fetched public key = %q, want %q", got.PublicKey, created.PublicKey)
-	}
-	if got.PermitOpen != "" || got.ApplicationID != 0 || got.ServiceName != "" {
-		t.Fatalf("unrestricted key restriction = %+v, want empty", got)
-	}
-
-	restricted, err := database.GetServerSSHKey(t.Context(), second.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restricted.PermitOpen != "127.0.0.1:6379" || restricted.ApplicationID != 7 || restricted.ServiceName != "cache" {
-		t.Fatalf("restricted key = %+v, want stored restriction", restricted)
 	}
 
 	if err := database.DeleteServerSSHKey(t.Context(), created.ID); err != nil {

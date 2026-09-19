@@ -76,9 +76,6 @@ To open a shell inside the running Redlaunch container (`redbolt-redlaunch`):
 ./redlaunch-terminal.sh
 ```
 
-For the GitHub Actions wizard, generated workflow, and secure handoff steps,
-see the [GitHub Actions image deployment guide](GITHUB_ACTIONS.md).
-
 For host shell access from external automation, see the
 [server SSH keys guide](SSH_KEYS.md).
 
@@ -106,8 +103,6 @@ from GitHub Actions via the registry or via direct image copy), see the
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
-- Configure repository-specific GitHub Actions image builds through a restricted
-  SSH tunnel to the local registry.
 - Create and revoke server SSH keys for external automation from Settings.
 - Create and revoke per-application API tokens from Settings for
   machine-triggered one-off service runs.
@@ -117,9 +112,7 @@ from GitHub Actions via the registry or via direct image copy), see the
 
 On the first visit, choose whether Redlaunch should install a Caddy reverse
 proxy, a local Docker Registry, or both. You can then create an application and
-add services from its **Services** tab. To configure a repository-specific
-image build, open an application's **Deployment → GitHub Actions deployment**
-panel after the registry is running.
+add services from its **Services** tab.
 
 Managed projects use this directory layout:
 
@@ -132,8 +125,7 @@ projects/
 │       └── secrets.env
 └── core/
     ├── proxy/
-    ├── registry/
-    └── github-actions-tunnel/
+    └── registry/
 ```
 
 Each application has its own Compose file and environment files. Secret values

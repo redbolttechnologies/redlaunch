@@ -5,10 +5,8 @@ GitHub Actions.
 
  companion guides:
 
-- [GitHub Actions image deployment](GITHUB_ACTIONS.md) — wizard reference,
-  generated workflow behavior, rotation, troubleshooting
-- [Server SSH keys](SSH_KEYS.md) — `redlaunch` shell user, tunnel-only vs.
-  full-shell keys, managed Compose identity
+- [Server SSH keys](SSH_KEYS.md) — `redlaunch` shell user, managed Compose identity,
+  registry pushes over SSH
 - [API tokens](API_TOKENS.md) — machine-triggered one-off runs without SSH
 - [Installation](INSTALL.md) — VPS setup, first-run screen, ports, domains
 
@@ -38,15 +36,12 @@ do not paste them literally.
 | `migrate` | `migrate` | One-off migration Compose service |
 | `myapp/web` | `myapp/web` | Registry image repository (no `localhost:5000`, no tag) |
 
-Redlaunch uses two different SSH identities. Do not mix them.
+All automation below uses Redlaunch SSH keys from **Settings → SSH keys**.
 
 | Identity | User and port | Purpose | Capabilities |
 | --- | --- | --- | --- |
-| Registry push gateway | `redlaunch-deploy@<host>:2222` | Forward `localhost:5000` to `registry:5000` | Tunnel-only, `PermitOpen registry:5000`, no shell, no Docker socket |
-| Server shell | `redlaunch@<host>:22` | Run managed Compose commands, copy images | Full shell as the dedicated `redlaunch` user (in the `docker` group, which is root-equivalent) |
+| Server shell | `redlaunch@<host>:22` | Push images through a loopback tunnel, run managed Compose commands, copy images | Shell as the dedicated `redlaunch` user (in the `docker` group, which is root-equivalent) |
 
-Host-key entries are also different. The `[host]:2222 ssh-ed25519 ...`
-gateway entry never matches the system sshd on port `22`, and vice versa.
 Keep strict host-key checking enabled in CI; a host-key error means the wrong
 entry or the wrong host string was used.
 
@@ -76,13 +71,13 @@ How it works:
 
 ```text
 GitHub runner (docker build)
-  -> SSH -L 127.0.0.1:5000:registry:5000 redlaunch-deploy@server:2222
+  -> SSH -L 127.0.0.1:5000:127.0.0.1:5000 redlaunch@server:22
   -> docker push localhost:5000/<repository>:<commit-sha>
   -> visible on Redlaunch's Registry page
 ```
 
-The registry is bound to the server's private Docker network and is not
-exposed publicly. The gateway can only forward to `registry:5000`.
+The registry listens on host loopback `127.0.0.1:5000` and is not exposed
+publicly. The same Settings SSH key used for deploys forwards to it.
 
 ### 1.1 Prerequisites
 
@@ -99,80 +94,50 @@ exposed publicly. The gateway can only forward to `registry:5000`.
      projects/core/registry/
      ```
 
-2. Open an application in Redlaunch and select its **Deployment** tab. If you
-   do not have one yet, create it first:
+2. Create the application if you do not have one yet:
 
    - **Applications → Create application**, for example name `My app`,
      folder `myapp`.
    - Create at least one **Application** service (for example `app`). The
-     wizard needs a service to attach the image repository to. The service
-     image does not need to exist yet; leave **Automatically start
+     service image does not need to exist yet; leave **Automatically start
      container** off until the first push succeeds.
 
-3. Run the **Deployment → GitHub Actions deployment → Set up or manage**
-   wizard:
+3. Create a Settings SSH key:
 
-   - Exact repository as `owner/repository`.
-   - Branch (for example `main`).
-   - Dockerfile path relative to the repository (for example `Dockerfile`).
-   - Build context relative to the repository (for example `.`).
-   - Redlaunch service (for example `app`).
-   - Registry image repository without `localhost:5000`, tag, or digest
-     (for example `myapp/web`).
-   - Public server host GitHub will dial (IP or DNS, for example
-     `203.0.113.10`).
+   - **Settings → SSH keys → Create SSH key**, for example display name
+     `myapp push and deploy via GHA`.
+   - Copy the private key and the system host-key entry for port `22`.
+   - Verify the fingerprint out of band:
 
-   Select **Create SSH tunnel and workflow**. The wizard ensures the registry
-   is running, provisions `projects/core/github-actions-tunnel/`, installs
-   one Ed25519 public key for this application/repository, restarts the
-   gateway, and shows a one-time handoff.
+     ```sh
+     ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+     ```
 
-4. Allow inbound TCP `2222` to the VPS from GitHub-hosted runners (VPS
+4. Allow inbound TCP `22` to the VPS from GitHub-hosted runners (VPS
    firewall and cloud security group / network policy). A connection timeout
    in CI almost always means this port is blocked.
 
 5. In the GitHub repository, open **Settings → Secrets and variables →
-   Actions** and create exactly what the handoff shows.
+   Actions** and create:
 
    Variables:
 
     | Variable | Value |
     | --- | --- |
-    | `REDLAUNCH_SERVER_HOST` | Public host entered in the wizard (required) |
-    | `REDLAUNCH_SERVER_USERNAME` | `redlaunch-deploy` (optional, defaults to this) |
-    | `REDLAUNCH_SERVER_SSH_PORT` | `2222` (optional, defaults to this) |
+    | `SERVER_HOST` | Public host of the VPS (required) |
+    | `REDLAUNCH_IMAGE_REPOSITORY` | Registry repository, no `localhost:5000`, no tag (required) |
+    | `REDLAUNCH_DOCKERFILE` | Dockerfile path in the repository (optional, defaults to `Dockerfile`) |
+    | `REDLAUNCH_BUILD_CONTEXT` | Build context in the repository (optional, defaults to `.`) |
+    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
 
    Secrets (paste complete values, including `BEGIN`/`END` lines for the key):
 
    | Secret | Value |
    | --- | --- |
-   | `REDLAUNCH_DEPLOY_SSH_KEY` | Complete Ed25519 private key |
-   | `REDLAUNCH_DEPLOY_KNOWN_HOSTS` | Verified gateway host-key entry |
-
-   Verify the displayed gateway fingerprint out of band before trusting it.
-   From a trusted shell on the server:
-
-   ```sh
-   ssh-keygen -lf projects/core/github-actions-tunnel/host_key.pub
-   ```
-
-6. Save the workflow as `.github/workflows/redlaunch-push-image.yml` on the
-   configured branch. It also includes `workflow_dispatch` for manual runs.
+   | `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
+   | `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` |
 
 ### 1.2 Reusable push workflow
-
-This is the same behavior as the wizard-generated workflow, generalized with
-repository variables so it can be copied between repositories. Prefer the
-wizard's downloaded file when you have it; use this template when you want a
-shared starting point.
-
-Create these additional repository variables for reuse:
-
-| Variable | Example | Purpose |
-| --- | --- | --- |
-| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` | Registry repository, no `localhost:5000`, no tag (required) |
-| `REDLAUNCH_DOCKERFILE` | `Dockerfile` | Dockerfile path in the repository (optional, defaults to `Dockerfile`) |
-| `REDLAUNCH_BUILD_CONTEXT` | `.` | Build context in the repository (optional, defaults to `.`) |
 
 ```yaml
 name: Build and push Redlaunch image
@@ -211,24 +176,20 @@ jobs:
       - name: Open SSH tunnel and push image
         shell: bash
         env:
-          SERVER_HOST: ${{ vars.REDLAUNCH_SERVER_HOST }}
-          SERVER_USERNAME: ${{ vars.REDLAUNCH_SERVER_USERNAME }}
-          SSH_PORT: ${{ vars.REDLAUNCH_SERVER_SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.REDLAUNCH_DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.REDLAUNCH_DEPLOY_KNOWN_HOSTS }}
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          DEPLOY_SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
-          # Redlaunch defaults; override via repository variables when needed.
-          SERVER_USERNAME="${SERVER_USERNAME:-redlaunch-deploy}"
-          SSH_PORT="${SSH_PORT:-2222}"
+          DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
 
-          test -n "$SERVER_HOST" || { echo "REDLAUNCH_SERVER_HOST is not set" >&2; exit 1; }
-          test -n "$SSH_PRIVATE_KEY" || { echo "REDLAUNCH_DEPLOY_SSH_KEY is not set" >&2; exit 1; }
-          test -n "$SSH_KNOWN_HOSTS" || { echo "REDLAUNCH_DEPLOY_KNOWN_HOSTS is not set" >&2; exit 1; }
-          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || { echo "REDLAUNCH_SERVER_SSH_PORT is invalid" >&2; exit 1; }
-          [[ "$SERVER_HOST" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$ ]] || { echo "REDLAUNCH_SERVER_HOST contains invalid characters" >&2; exit 1; }
-          [[ "$SERVER_USERNAME" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]] || { echo "REDLAUNCH_SERVER_USERNAME contains invalid characters" >&2; exit 1; }
+          test -n "$SERVER_HOST" || { echo "SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "SSH_PRIVATE_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "SSH_KNOWN_HOSTS is not set" >&2; exit 1; }
+          [[ "$DEPLOY_SSH_PORT" =~ ^[0-9]+$ ]] && (( DEPLOY_SSH_PORT >= 1 && DEPLOY_SSH_PORT <= 65535 )) || { echo "DEPLOY_SSH_PORT is invalid" >&2; exit 1; }
+          [[ "$SERVER_HOST" =~ ^([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$ ]] || { echo "SERVER_HOST contains invalid characters" >&2; exit 1; }
 
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
@@ -248,7 +209,7 @@ jobs:
 
           ssh \
             -N -T \
-            -p "$SSH_PORT" \
+            -p "$DEPLOY_SSH_PORT" \
             -i "$ssh_dir/id_ed25519" \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
@@ -258,8 +219,8 @@ jobs:
             -o UserKnownHostsFile="$ssh_dir/known_hosts" \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            -L "127.0.0.1:5000:registry:5000" \
-            "$SERVER_USERNAME@$SERVER_HOST" &
+            -L "127.0.0.1:5000:127.0.0.1:5000" \
+            "redlaunch@$SERVER_HOST" &
           tunnel_pid=$!
 
           for attempt in $(seq 1 30); do
@@ -290,21 +251,18 @@ Notes:
   work around a host-key error by disabling checking.
 - The tunnel is closed by the `trap` after `docker push` completes. Key files
   exist only under `$RUNNER_TEMP`.
-- Defaults used by the workflow: SSH user `redlaunch-deploy`, SSH port
-  `2222`, Dockerfile `Dockerfile`, build context `.`. Set the corresponding
-  `REDLAUNCH_*` repository variables only to override them;
-  `REDLAUNCH_SERVER_HOST` and `REDLAUNCH_IMAGE_REPOSITORY` are always
-  required.
+- Defaults used by the workflow: SSH user `redlaunch`, SSH port `22`,
+  Dockerfile `Dockerfile`, build context `.`. `SERVER_HOST` and
+  `REDLAUNCH_IMAGE_REPOSITORY` are always required.
 
 ### 1.3 Verify and rotate
 
 - Run the workflow manually once from the repository's **Actions** tab.
 - Open Redlaunch's **Registry** page and confirm
   `myapp/web:<commit-sha>` appears.
-- To rotate, run the wizard again. It replaces the repository key and shows a
-  new handoff. Update the two GitHub secrets. To revoke, use **Revoke
-  repository key** in Redlaunch, then remove the GitHub variables/secrets
-  separately.
+- To rotate, create a replacement key in **Settings → SSH keys**, update the
+  GitHub secrets, then revoke the old key. To revoke, use **Revoke key** in
+  Redlaunch, then remove the GitHub variables/secrets separately.
 
 ---
 
@@ -370,7 +328,7 @@ migration to implicitly use the runner's freshly built image.
 | Method | Access | Best for | Secrets leave the server? |
 | --- | --- | --- | --- |
 | A. API token (recommended) | HTTPS Bearer token, scoped to one application | Scheduled or post-deploy migrations, least privilege | No |
-| B. SSH shell key | `redlaunch@server:22` unrestricted key + `docker exec` | Full control, existing SSH automation, no HTTPS exposure | No (commands run server-side) |
+| B. SSH shell key | `redlaunch@server:22` key + `docker exec` | Full control, existing SSH automation, no HTTPS exposure | No (commands run server-side) |
 
 Both methods keep `vars.env` / `secrets.env` on the server. The API token
 additionally cannot read environment files, run arbitrary commands (the
@@ -492,10 +450,9 @@ Notes:
 Use this when you already automate over SSH or cannot reach the API over
 HTTPS.
 
-1. Open **Settings → SSH keys → Create SSH key** with no service restriction
-   (list shows `Full shell`). Tunnel-only keys cannot open a shell by design.
-2. Copy the private key and the system host-key entry for port `22`. This is
-   not the `[host]:2222` gateway entry.
+1. Open **Settings → SSH keys → Create SSH key** (for example
+   `myapp migrate via GHA`).
+2. Copy the private key and the system host-key entry for port `22`.
 3. Verify the fingerprint out of band:
 
    ```sh
@@ -615,7 +572,7 @@ local registry, migrate, then restart the server-side service.
 ```text
 GitHub runner
   1. docker build -t localhost:5000/myapp/web:<sha> -t localhost:5000/myapp/web:latest
-  2. push via redlaunch-deploy@:2222 tunnel
+  2. push via redlaunch@:22 tunnel to 127.0.0.1:5000
   3. optionally trigger migrate service (Recipe 2)
   4. ssh as redlaunch@:22 -> docker compose pull + up -d in managed identity
 ```
@@ -651,21 +608,16 @@ GitHub runner
 
 4. Create the `migrate` service from Recipe 2 if the application needs
    migrations. It must use the same repository (`myapp/web`, switch off).
-5. Complete Recipe 1's gateway wizard for this application/repository so CI
-   can push. Note the image repository must match the service repository
-   (`myapp/web`).
-6. Create an unrestricted shell key from Recipe 2, Method B, for the deploy
-   step (`redlaunch@server:22`). The registry gateway key cannot open a
-   shell.
+5. Create one Settings SSH key for push and deploy
+   (`Settings → SSH keys`, for example `myapp push and deploy via GHA`).
 
 ### 3.2 GitHub setup
 
-You need both credential sets:
+You need one credential set for both push and deploy:
 
 | Purpose | Variables | Secrets |
 | --- | --- | --- |
-| Push (port `2222`) | `REDLAUNCH_SERVER_HOST` (required), `REDLAUNCH_IMAGE_REPOSITORY=myapp/web` (required); optional `REDLAUNCH_SERVER_USERNAME` (default `redlaunch-deploy`), `REDLAUNCH_SERVER_SSH_PORT` (default `2222`), `REDLAUNCH_DOCKERFILE` (default `Dockerfile`), `REDLAUNCH_BUILD_CONTEXT` (default `.`) | `REDLAUNCH_DEPLOY_SSH_KEY`, `REDLAUNCH_DEPLOY_KNOWN_HOSTS` |
-| Deploy (port `22`) | `SERVER_HOST=203.0.113.10`, `REDLAUNCH_APP_DIR=/opt/redlaunch/projects/applications/myapp`; optional `DEPLOY_SERVICE` (default `app`), `DEPLOY_SSH_PORT` (default `22`) | `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` (system host key) |
+| Push + deploy (port `22`) | `SERVER_HOST=203.0.113.10`, `REDLAUNCH_APP_DIR=/opt/redlaunch/projects/applications/myapp`, `REDLAUNCH_IMAGE_REPOSITORY=myapp/web`; optional `DEPLOY_SERVICE` (default `app`), `DEPLOY_SSH_PORT` (default `22`), `REDLAUNCH_DOCKERFILE` (default `Dockerfile`), `REDLAUNCH_BUILD_CONTEXT` (default `.`) | `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` (system host key) |
 | Migrate via API (optional, recommended) | `REDLAUNCH_URL`, `APPLICATION_ID`; optional `MIGRATE_SERVICE_NAME` (default `migrate`) | `REDLAUNCH_RUN_TOKEN` |
 
 `REDLAUNCH_APP_DIR` must be the absolute managed application directory. It
@@ -675,9 +627,8 @@ the installation lives elsewhere.
 
 ### 3.3 Reusable deploy-via-registry workflow
 
-This workflow pushes the SHA and moving tag, then pulls and restarts only the
-`app` service. It keeps the tunnel key (port `2222`) and shell key (port
-`22`) separate.
+This workflow pushes the SHA and moving tag through the Settings SSH tunnel,
+then pulls and restarts only the `app` service over the same key.
 
 ```yaml
 name: Deploy via registry
@@ -699,9 +650,6 @@ env:
   IMAGE_REPOSITORY: ${{ vars.REDLAUNCH_IMAGE_REPOSITORY }}
   DOCKERFILE: ${{ vars.REDLAUNCH_DOCKERFILE }}
   BUILD_CONTEXT: ${{ vars.REDLAUNCH_BUILD_CONTEXT }}
-  SERVER_HOST: ${{ vars.REDLAUNCH_SERVER_HOST }}
-  SERVER_USERNAME: ${{ vars.REDLAUNCH_SERVER_USERNAME }}
-  SSH_PORT: ${{ vars.REDLAUNCH_SERVER_SSH_PORT }}
   DEPLOY_HOST: ${{ vars.SERVER_HOST }}
   DEPLOY_DIR: ${{ vars.REDLAUNCH_APP_DIR }}
   DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE }}
@@ -731,17 +679,15 @@ jobs:
       - name: Push image through registry tunnel
         shell: bash
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.REDLAUNCH_DEPLOY_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.REDLAUNCH_DEPLOY_KNOWN_HOSTS }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          # Redlaunch defaults; override via repository variables when needed.
-          SERVER_USERNAME="${SERVER_USERNAME:-redlaunch-deploy}"
-          SSH_PORT="${SSH_PORT:-2222}"
-          test -n "$SERVER_HOST" || { echo "REDLAUNCH_SERVER_HOST is not set" >&2; exit 1; }
-          test -n "$SSH_PRIVATE_KEY" || { echo "REDLAUNCH_DEPLOY_SSH_KEY is not set" >&2; exit 1; }
-          test -n "$SSH_KNOWN_HOSTS" || { echo "REDLAUNCH_DEPLOY_KNOWN_HOSTS is not set" >&2; exit 1; }
-          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || { echo "REDLAUNCH_SERVER_SSH_PORT is invalid" >&2; exit 1; }
+          DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
+          test -n "$DEPLOY_HOST" || { echo "SERVER_HOST is not set" >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "SSH_PRIVATE_KEY is not set" >&2; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || { echo "SSH_KNOWN_HOSTS is not set" >&2; exit 1; }
+          [[ "$DEPLOY_SSH_PORT" =~ ^[0-9]+$ ]] && (( DEPLOY_SSH_PORT >= 1 && DEPLOY_SSH_PORT <= 65535 )) || { echo "DEPLOY_SSH_PORT is invalid" >&2; exit 1; }
           ssh_dir="$RUNNER_TEMP/redlaunch-ssh"
           install -d -m 700 "$ssh_dir"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$ssh_dir/id_ed25519"
@@ -758,13 +704,13 @@ jobs:
           }
           trap cleanup EXIT
 
-          ssh -N -T -p "$SSH_PORT" -i "$ssh_dir/id_ed25519" \
+          ssh -N -T -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/id_ed25519" \
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
             -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$ssh_dir/known_hosts" \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -L "127.0.0.1:5000:registry:5000" \
-            "$SERVER_USERNAME@$SERVER_HOST" &
+            -L "127.0.0.1:5000:127.0.0.1:5000" \
+            "redlaunch@$DEPLOY_HOST" &
           tunnel_pid=$!
 
           for attempt in $(seq 1 30); do
@@ -865,7 +811,7 @@ Pros and cons vs. Recipe 3:
 
 |  | Registry (Recipe 3) | Direct copy (this recipe) |
 | --- | --- | --- |
-| Server prerequisites | Registry + gateway (`:2222`) + shell key (`:22`) | Shell key (`:22`) only |
+| Server prerequisites | Registry + shell key (`:22`) | Shell key (`:22`) only |
 | Transfer | `docker push` through tunnel (efficient layer reuse) | `docker save` → SSH → `docker load` (full image each time) |
 | Image naming | Must be `localhost:5000/...` (switch off) | Keep `localhost:5000/...` (switch off) for consistency, or any exact reference with switch on |
 | Best for | Frequent deploys, larger images, shared base layers | Small images, infrequent deploys, no-registry setups |
@@ -884,10 +830,9 @@ optional. You still need:
 - Application `myapp` with service `app` (`myapp/web`, switch off,
   autostart as appropriate).
 - Optional `migrate` service from Recipe 2.
-- One unrestricted shell key (`Settings → SSH keys`, `Full shell`) for
-  `redlaunch@server:22`. No gateway key is needed.
+- One shell key (`Settings → SSH keys`) for `redlaunch@server:22`.
 
-GitHub variables/secrets (no `2222` values):
+GitHub variables/secrets:
 
 | Variable | Example |
 | --- | --- |
@@ -1098,7 +1043,7 @@ docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose --project-name "$p
 Keep the explicit `--project-name` on every manual invocation (`up`, `run`,
 `exec`, `logs`), whether run on the host or through `docker exec`.
 
-### CI SSH setup snippet (both ports)
+### CI SSH setup snippet
 
 ```sh
 DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-22}"
@@ -1117,23 +1062,21 @@ set -euo pipefail
 REMOTE_SCRIPT
 ```
 
-For the registry tunnel, use port `2222`, user `redlaunch-deploy`, the
-gateway secrets, `ExitOnForwardFailure=yes`, and
-`-L "127.0.0.1:5000:registry:5000"` as shown in Recipe 1.
+For the registry tunnel, add `ExitOnForwardFailure=yes` and
+`-L "127.0.0.1:5000:127.0.0.1:5000"` as shown in Recipe 1.
 
 ## Security checklist
 
-- Firewall: TCP `22` for administration and shell deploys; TCP `2222` only
-  when registry pushes are used; TCP `80`/`443` only when Caddy serves public
-  traffic. The registry itself stays on the private Docker network.
-- Least privilege: one gateway key per application/repository; one shell key
-  per automation purpose; one API token per application with the shortest
-  workable expiry. Revoke separately in Redlaunch and in GitHub.
+- Firewall: TCP `22` for administration and deploys; TCP `80`/`443` only
+  when Caddy serves public traffic. The registry itself stays on loopback
+  plus the private Docker network.
+- Least privilege: one shell key per automation purpose; one API token per
+  application with the shortest workable expiry. Revoke separately in
+  Redlaunch and in GitHub.
 - The `redlaunch` shell user is in the `docker` group, which is
-  root-equivalent. Treat unrestricted SSH keys as full host administrator
-  credentials.
-- The registry has no namespace-level authorization. A repository key can push
-  to any repository path. Add registry authentication before treating separate
+  root-equivalent. Treat SSH keys as full host administrator credentials.
+- The registry has no authentication. Anyone with SSH access can push to any
+  repository path. Add registry authentication before treating separate
   repositories as mutually untrusted.
 - Never expose the Docker socket or Docker API over HTTP. Use the dedicated
   Compose service layer (`docker exec redbolt-redlaunch ...`).
@@ -1145,11 +1088,9 @@ gateway secrets, `ExitOnForwardFailure=yes`, and
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| SSH tunnel timeout to port `2222` | Firewall / security group blocks `2222` | Allow inbound TCP `2222` from runners |
-| `REDLAUNCH_SERVER_* is not set` | Repository variable missing at repository scope | Create variables from the handoff table |
-| Host-key error on port `2222` | Wrong known-hosts entry or host string | Use the `[host]:2222` gateway entry verbatim; do not disable strict checking |
-| `No ED25519 host key is known` on port `22` | Gateway entry used for system sshd | Use the plain `host ssh-ed25519 ...` system entry for `SSH_KNOWN_HOSTS` |
-| Registry readiness failure | Registry stopped or gateway cannot reach `redlaunch-registry` network | Start Registry component; check `docker ps`, gateway health |
+| `SERVER_HOST is not set` | Repository variable missing at repository scope | Create variables from the tables above |
+| `No ED25519 host key is known` on port `22` | Wrong known-hosts entry or host string | Use the plain `host ssh-ed25519 ...` system entry for `SSH_KNOWN_HOSTS` |
+| Registry readiness failure | Registry stopped | Start Registry component; check `docker ps` |
 | `volume ... already exists but was created for project ...` | Bare `docker compose` without managed identity | Use the managed Compose identity snippet with `--project-name` and `--env-file` files |
 | `Conflict. The container name ... is already in use` | Same as above (duplicate project) | Same fix; never omit `--project-name` in managed directories |
 | `permission denied` reading `secrets.env` as `redlaunch` user | Expected (`0600` root) | Run Compose via `docker exec redbolt-redlaunch ...`, not host-side `--env-file secrets.env` |

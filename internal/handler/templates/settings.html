@@ -95,7 +95,6 @@
               <thead>
                 <tr>
                   <th scope="col">Display name</th>
-                  <th scope="col">Access</th>
                   <th scope="col">Fingerprint</th>
                   <th scope="col">Created</th>
                   <th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th>
@@ -105,7 +104,6 @@
                 {{range .SettingsPage.SSHKeys}}
                 <tr>
                   <th scope="row">{{.DisplayName}}</th>
-                  <td>{{if .PermitOpen}}Tunnel only: <code>{{.PermitOpen}}</code>{{if .ServiceName}} ({{with index $.SettingsPage.SSHApplicationNames .ApplicationID}}{{.}} / {{end}}{{.ServiceName}}){{end}}{{else}}Full shell{{end}}</td>
                   <td><code>{{.KeyFingerprint}}</code></td>
                   <td><time datetime="{{backupAtISO .CreatedAt}}">{{backupAt .CreatedAt}}</time></td>
                   <td class="application-environment-actions">
@@ -303,17 +301,7 @@
       <div class="field">
         <label for="ssh-key-display-name">Display name</label>
         <input id="ssh-key-display-name" name="display_name" type="text" value="{{.SettingsPage.SSHKeyName}}" maxlength="100" autocomplete="off" spellcheck="false" placeholder="GHA migrator workflow access" required>
-        <span class="field-help">Only shown in this list.</span>
-      </div>
-      <div class="field">
-        <label for="ssh-key-service">Restrict to service (optional)</label>
-        <select id="ssh-key-service" name="service_ref">
-          <option value="">Full shell access (unrestricted)</option>
-          {{range .SettingsPage.SSHServiceOptions}}
-          <option value="{{.Value}}"{{if eq .Value $.SettingsPage.SSHKeyServiceRef}} selected{{end}}>{{.ApplicationName}} / {{.ServiceName}}</option>
-          {{end}}
-        </select>
-        <span class="field-help">A restricted key is tunnel-only: it cannot open a shell and can only forward to the selected service's published host port. Unrestricted keys grant full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
+        <span class="field-help">Only shown in this list. Keys grant full shell access as <code>{{.SettingsPage.SSHKeysUsername}}</code>.</span>
       </div>
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-ssh-key-create-close data-ssh-key-create-cancel>Cancel</button>
@@ -351,14 +339,6 @@
       </div>
       <span class="field-help">Fingerprint: <code>{{.Key.KeyFingerprint}}</code>. The matching public key is already installed on this server.</span>
     </div>
-    {{with .Key.PermitOpen}}
-    <div class="field">
-      <label for="ssh-key-tunnel-usage">Tunnel usage</label>
-      <textarea id="ssh-key-tunnel-usage" class="github-actions-technical" rows="2" readonly autocomplete="off" spellcheck="false">ssh -N -L {{.}}:{{.}} {{$.SettingsPage.SSHKeysUsername}}@your-server</textarea>
-      <button class="button button-secondary" type="button" data-copy-target="ssh-key-tunnel-usage">Copy tunnel command</button>
-      <span class="field-help">This key cannot open a shell and can only forward to <code>{{.}}</code>. Use the exact destination shown.</span>
-    </div>
-    {{end}}
     {{if .HostKeys}}
     <div class="field">
       <label for="ssh-key-known-hosts-value">SSH known hosts for CI (SSH_KNOWN_HOSTS)</label>
@@ -367,7 +347,7 @@
       <div class="application-form-actions">
         <button class="button button-secondary" type="button" data-copy-target="ssh-key-known-hosts-value"><span>Copy known hosts</span></button>
       </div>
-      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Replace <code>YOUR_SERVER_HOST</code> with the same IP or DNS used as <code>SERVER_HOST</code> in CI (port 22), then save the result as the <code>SSH_KNOWN_HOSTS</code> secret. Verify before trusting:{{range .HostKeys}} <code>{{.Fingerprint}}</code> ({{.Algorithm}}){{end}}. Verify on the server with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Do not use the gateway <code>[host]:2222</code> entry here. Shell commands such as <code>docker compose run</code> need an unrestricted key and the managed <code>--project-name</code> from the SSH keys guide; a bare <code>docker compose run</code> uses the wrong project and fails on container and volume names.</span>
+      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Replace <code>YOUR_SERVER_HOST</code> with the same IP or DNS used as <code>SERVER_HOST</code> in CI (port 22), then save the result as the <code>SSH_KNOWN_HOSTS</code> secret. Verify before trusting:{{range .HostKeys}} <code>{{.Fingerprint}}</code> ({{.Algorithm}}){{end}}. Verify on the server with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. Shell commands such as <code>docker compose run</code> need the managed <code>--project-name</code> from the SSH keys guide; a bare <code>docker compose run</code> uses the wrong project and fails on container and volume names.</span>
     </div>
     {{else}}
     <div class="field">
@@ -376,7 +356,7 @@
       <div class="application-form-actions">
         <button class="button button-secondary" type="button" data-copy-target="ssh-key-known-hosts-fallback"><span>Copy command</span></button>
       </div>
-      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Run the command from a trusted network, verify the fingerprint with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the server, then save the <code>YOUR_SERVER_HOST ssh-ed25519 ...</code> line as the <code>SSH_KNOWN_HOSTS</code> secret. Do not use the gateway <code>[host]:2222</code> entry for port 22 shell access.</span>
+      <span class="field-help">Mandatory for CI with <code>StrictHostKeyChecking=yes</code>. Run the command from a trusted network, verify the fingerprint with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the server, then save the <code>YOUR_SERVER_HOST ssh-ed25519 ...</code> line as the <code>SSH_KNOWN_HOSTS</code> secret.</span>
     </div>
     {{end}}
     <footer class="application-form-actions">

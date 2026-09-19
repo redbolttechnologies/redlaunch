@@ -24,7 +24,7 @@
     <header class="service-widget-header">
       <div class="service-widget-heading">
         <h2 id="registry-images-title">Pushed images</h2>
-        <p>Tags pushed through the GitHub Actions SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+        <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
       </div>
     </header>
     <div class="service-widget-body">
@@ -52,7 +52,7 @@
       </div>
       {{else if .RegistryPage.Unavailable}}
       <div class="service-widget-empty" role="status">
-        <p>The local registry is not available. Install it during setup or configure a GitHub Actions deployment, which starts it automatically.</p>
+        <p>The local registry is not available. Install it during setup.</p>
       </div>
       {{else}}
       <div class="service-widget-empty" role="status">

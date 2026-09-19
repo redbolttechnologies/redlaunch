@@ -13,28 +13,7 @@ Keys grant shell access as the dedicated `redlaunch` user. That user owns no
 Redlaunch files and has no sudo privileges. `make setup` adds the user to
 the `docker` group so one-off Compose commands can run through
 `docker exec redbolt-redlaunch ...`. The `docker` group is root-equivalent:
-treat unrestricted keys as full host administrator credentials.
-
-## Restricting a key to one service
-
-The creation form offers an optional service restriction. A restricted key is
-tunnel-only: its `authorized_keys` line carries
-`no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc,permitopen="127.0.0.1:PORT"`,
-so it cannot open a shell and can only forward to the selected service's
-published host port. Unrestricted keys keep full shell access.
-
-The target is resolved when the key is created:
-
-- Redis services use their configured port (`127.0.0.1:<port>`).
-- Other services use the first TCP host port published in the application's
-  `compose.yml` (`127.0.0.1:<host port>`).
-- Services that publish no host port (for example Postgres, which is only
-  reachable inside its Compose network) cannot be restriction targets; the
-  form rejects them with an explanatory error.
-
-The restriction is a snapshot: if the service's published port changes later,
-or the service is removed, recreate the key. A stale target fails closed
-(the tunnel is refused) and never widens access.
+treat keys as full host administrator credentials.
 
 ## Prerequisites
 
@@ -102,8 +81,7 @@ docker compose up -d
 ## Create a key
 
 1. Open **Settings → SSH keys**.
-2. Enter a display name and select **Create SSH key**. Optionally pick a
-   service to restrict the key to tunnel-only access for that service.
+2. Enter a display name and select **Create SSH key**.
 3. Copy the private key or use **Download private key**. The key is shown only
    in this response (`Cache-Control: no-store`) and is never stored by
    Redlaunch.
@@ -114,14 +92,6 @@ Use the private key from the external system:
 install -m 600 redlaunch-ssh-key-1.key ~/.ssh/redlaunch-key
 ssh -i ~/.ssh/redlaunch-key redlaunch@your-server
 ```
-
-A restricted key shows the exact tunnel command to use, for example:
-
-```sh
-ssh -N -L 127.0.0.1:5432:127.0.0.1:5432 -i ~/.ssh/redlaunch-key redlaunch@your-server
-```
-
-Use the destination verbatim: the key is limited to that `host:port`.
 
 Verify the installed key on the server:
 
@@ -168,10 +138,6 @@ set -euo pipefail
 # remote commands here
 REMOTE_SCRIPT
 ```
-
-Shell commands such as `docker compose run --rm migrate` need an
-unrestricted key (the list shows `Full shell`). A tunnel-only key cannot
-open a shell by design.
 
 ## Run one-off Compose commands (migrations)
 
@@ -231,9 +197,6 @@ while `vars.env`/`secrets.env` intentionally stay `0600`. Keep the explicit
 `docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose ...`;
 omitting it recreates the duplicate project described above.
 
-Do not reuse the GitHub Actions gateway entry (`[host]:2222 ssh-ed25519 ...`)
-for port 22 shell access. That entry belongs to the `redlaunch-deploy`
-gateway on port `2222` and never matches the system sshd on port `22`.
 `No ED25519 host key is known` with strict checking means the `known_hosts`
 content does not contain the system host key for the configured host.
 
@@ -251,13 +214,27 @@ removes the matching `redlaunch-ssh-key:<id>` line and deletes the stored
 metadata, then redirects back to **Settings → SSH keys**. Remove the private
 key from the external system separately.
 
+## Push images to the local registry
+
+The local registry listens on host loopback `127.0.0.1:5000`. Forward it over
+the same Settings SSH key, then push as `localhost:5000/...`:
+
+```sh
+ssh -N -L 127.0.0.1:5000:127.0.0.1:5000 -i ~/.ssh/redlaunch-key redlaunch@your-server
+docker build -t localhost:5000/myapp/web:<sha> .
+docker push localhost:5000/myapp/web:<sha>
+```
+
+See the [recipes guide](RECIPES.md) for complete GitHub Actions workflows
+using only Settings SSH keys.
+
 ## Troubleshooting
 
 - `No ED25519 host key is known ... Host key verification failed` in CI means
   `SSH_KNOWN_HOSTS` does not contain the system sshd key for the configured
   `SERVER_HOST:22`. Re-check that the secret holds the `Settings → SSH keys`
-  host entry (plain `host ssh-ed25519 ...`), not the gateway `[host]:2222`
-  entry, and that the host string matches exactly.
+  host entry (plain `host ssh-ed25519 ...`) and that the host string matches
+  exactly.
 - `set SSH directory permissions: ... read-only file system` in the container
   logs means the stack still uses the old file mount instead of the directory
   mount above. Pull the latest Compose file and recreate the container with

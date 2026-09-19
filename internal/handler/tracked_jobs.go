@@ -197,3 +197,12 @@ func (h *Handler) startTrackedJob(key string, run func(context.Context)) error {
 	lease.start(run)
 	return nil
 }
+
+// Shutdown cancels every tracked operation and waits for its workers before
+// infrastructure dependencies such as SQLite are closed.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	if h.jobs == nil {
+		return nil
+	}
+	return h.jobs.shutdown(ctx)
+}

@@ -28,7 +28,6 @@ func TestApplicationDeleteProgressFromIntent(t *testing.T) {
 		applicationDeleteJobStepComplete,
 		applicationDeleteJobStepFailed,
 		applicationDeleteJobStepRemaining,
-		applicationDeleteJobStepRemaining,
 	}
 	if len(progress.Steps) != len(wantStates) {
 		t.Fatalf("progress steps = %d, want %d", len(progress.Steps), len(wantStates))

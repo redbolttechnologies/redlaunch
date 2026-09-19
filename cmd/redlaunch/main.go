@@ -114,17 +114,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create application service: %w", err)
 	}
-	githubActions, err := service.NewGitHubActionsService(
-		cfg.ProjectsRoot,
-		database,
-		applications,
-		setupService,
-		compose.CommandRunner{},
-		service.CommandSSHKeyGenerator{},
-	)
-	if err != nil {
-		return fmt.Errorf("create GitHub Actions service: %w", err)
-	}
 	systemdManager, err := systemd.NewManagerWithScope(cfg.SystemdUnitDirectory, cfg.SystemdBinary, cfg.SystemdScope)
 	if err != nil {
 		return fmt.Errorf("create systemd manager: %w", err)
@@ -152,7 +141,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create backup service: %w", err)
 	}
-	applications.SetApplicationDeletionDependencies(backupManager, githubActions)
+	applications.SetApplicationDeletionDependencies(backupManager)
 
 	registry, err := service.NewRegistryService(service.RegistryContainerName, compose.CommandRunner{})
 	if err != nil {
@@ -198,7 +187,6 @@ func run(ctx context.Context) error {
 		Setup:         setupService,
 		Applications:  applications,
 		Backups:       backupManager,
-		GitHubActions: githubActions,
 		ServerSSHKeys: serverSSHKeys,
 		APITokens:     apiTokens,
 		Registry:      registry,

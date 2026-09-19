@@ -228,7 +228,6 @@ func applicationDeleteJobSteps() []applicationDeleteJobStep {
 		{Stage: "resources", Label: "Remove application Docker resources", State: applicationDeleteJobStepRemaining},
 		{Stage: "metadata", Label: "Delete application metadata", State: applicationDeleteJobStepRemaining},
 		{Stage: "routing", Label: "Refresh application routing", State: applicationDeleteJobStepRemaining},
-		{Stage: "keys", Label: "Revoke deployment keys", State: applicationDeleteJobStepRemaining},
 		{Stage: "folder", Label: "Delete application folder", State: applicationDeleteJobStepRemaining},
 	}
 }
@@ -288,23 +287,10 @@ func applicationDeleteProgressFromIntent(intent application.ApplicationDeletionI
 func (h *Handler) runApplicationDeleteJob(ctx context.Context, job *applicationDeleteJob) {
 	var err error
 	job.update("schedules", "Disabling scheduled backups")
-	keyCleanupHandled := false
-	if owner, ok := h.applicationDeletion.(interface{ ApplicationDeletionHandlesKeyCleanup() bool }); ok {
-		keyCleanupHandled = owner.ApplicationDeletionHandlesKeyCleanup()
-	}
 	if manager, ok := h.applicationDeletion.(applicationDeletionProgressService); ok {
 		err = manager.DeleteApplicationWithProgress(ctx, job.applicationID, job.update)
 	} else {
 		err = h.applicationDeletion.DeleteApplication(ctx, job.applicationID)
-	}
-	if h.githubActions != nil && !keyCleanupHandled {
-		if cleanupErr := h.githubActions.CleanupApplicationKey(ctx, job.applicationID); cleanupErr != nil && !errors.Is(cleanupErr, application.ErrGitHubActionsNotConfigured) {
-			if err == nil {
-				err = cleanupErr
-			} else {
-				err = errors.Join(err, cleanupErr)
-			}
-		}
 	}
 	if err != nil {
 		job.fail(err)

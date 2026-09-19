@@ -90,8 +90,6 @@ func (m *projectLockManager) releaseReference(key string, lock *projectLock) {
 
 const proxyProjectLockKey = "proxy"
 
-const githubActionsGatewayProjectLockKey = "github-actions-gateway"
-
 func applicationProjectLockKey(applicationID int64) string {
 	return "application:" + formatProjectLockID(applicationID)
 }

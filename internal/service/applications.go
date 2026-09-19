@@ -440,10 +440,6 @@ type serviceDeletionIntentRepository interface {
 	UpdateServiceDeletion(context.Context, int64, string, string, string, string, time.Time) error
 }
 
-type applicationDeletionCleanup interface {
-	CleanupApplicationKey(context.Context, int64) error
-}
-
 type composeServiceInspector interface {
 	ListServices(context.Context, string) ([]compose.ServiceRuntime, error)
 }
@@ -501,7 +497,6 @@ type Applications struct {
 	serviceDeletionIntents serviceDeletionIntentRepository
 	backupLeases           applicationBackupLeaseRepository
 	scheduleDisabler       applicationDeletionScheduleDisabler
-	keyCleanup             applicationDeletionCleanup
 	applicationsDir        string
 	proxyDirectory         string
 	managementPort         int
@@ -539,28 +534,16 @@ func (s *Applications) acquireProxyProject(ctx context.Context) (*projectLockLea
 
 // SetApplicationDeletionDependencies supplies the optional infrastructure
 // operations that must agree with a durable application deletion intent.
-// Keeping them as narrow capabilities avoids coupling this service to the
-// backup and GitHub Actions implementations.
-func (s *Applications) SetApplicationDeletionDependencies(scheduleDisabler applicationDeletionScheduleDisabler, keyCleanup applicationDeletionCleanup) {
+func (s *Applications) SetApplicationDeletionDependencies(scheduleDisabler applicationDeletionScheduleDisabler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scheduleDisabler = scheduleDisabler
-	s.keyCleanup = keyCleanup
 }
 
-// ApplicationDeletionHandlesKeyCleanup reports whether the durable deletion
-// workflow owns deployment-key cleanup. The HTTP compatibility path uses this
-// to avoid running a second cleanup after the workflow has already completed.
-func (s *Applications) ApplicationDeletionHandlesKeyCleanup() bool {
+func (s *Applications) applicationDeletionDependencies() applicationDeletionScheduleDisabler {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.keyCleanup != nil
-}
-
-func (s *Applications) applicationDeletionDependencies() (applicationDeletionScheduleDisabler, applicationDeletionCleanup) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.scheduleDisabler, s.keyCleanup
+	return s.scheduleDisabler
 }
 
 type applicationDeletionIntentLister interface {
@@ -1826,15 +1809,19 @@ const (
 	applicationDeletionStageMetadata  = "metadata"
 	applicationDeletionStageSchedules = "schedules"
 	applicationDeletionStageRouting   = "routing"
-	applicationDeletionStageKeys      = "keys"
 	applicationDeletionStageFolder    = "folder"
 	applicationDeletionStageComplete  = "complete"
 	applicationDeletionStateRunning   = "running"
 	applicationDeletionStateFailed    = "failed"
 )
 
+// applicationDeletionStageKeys is retained for compatibility with deletion
+// intents checkpointed before the deployment-key stage was removed. Such
+// intents advance directly to the folder stage.
+const applicationDeletionStageKeys = "keys"
+
 func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicationID int64, intent application.ApplicationDeletionIntent, directory string, directoryMissing bool, remover composeProjectRemover, deleter applicationDeletionRepository, progress func(stage, message string)) error {
-	scheduleDisabler, keyCleanup := s.applicationDeletionDependencies()
+	scheduleDisabler := s.applicationDeletionDependencies()
 	folderName := intent.FolderName
 	if folderName == "" {
 		folderName = filepath.Base(directory)
@@ -1903,18 +1890,13 @@ func (s *Applications) resumeApplicationDeletion(ctx context.Context, applicatio
 		if err := s.refreshProxyAfterApplicationDeletion(ctx); err != nil {
 			return s.failApplicationDeletion(applicationID, applicationDeletionStageRouting, err)
 		}
-		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageKeys, applicationDeletionStateRunning, ""); err != nil {
+		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageFolder, applicationDeletionStateRunning, ""); err != nil {
 			return err
 		}
-		stage = applicationDeletionStageKeys
+		stage = applicationDeletionStageFolder
 	}
 
 	if stage == applicationDeletionStageKeys {
-		if keyCleanup != nil {
-			if err := keyCleanup.CleanupApplicationKey(ctx, applicationID); err != nil {
-				return s.failApplicationDeletion(applicationID, applicationDeletionStageKeys, err)
-			}
-		}
 		if err := s.checkpointApplicationDeletion(ctx, applicationID, applicationDeletionStageFolder, applicationDeletionStateRunning, ""); err != nil {
 			return err
 		}
@@ -1987,8 +1969,6 @@ func applicationDeletionFailureDetail(stage string) string {
 		return "Removing application metadata failed. Retry the deletion to continue."
 	case applicationDeletionStageRouting:
 		return "Refreshing application routing failed. Retry the deletion to continue."
-	case applicationDeletionStageKeys:
-		return "Removing deployment keys failed. Retry the deletion to continue."
 	case applicationDeletionStageFolder:
 		return "Removing the application folder failed. Retry the deletion to continue."
 	default:

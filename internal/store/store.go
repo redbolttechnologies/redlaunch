@@ -1779,6 +1779,35 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record API tokens migration: %w", err)
 		}
 	}
+
+	var deploymentRemovalMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 19`).Scan(&deploymentRemovalMigrationApplied); err != nil {
+		return fmt.Errorf("check deployment removal migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS github_actions_integrations`); err != nil {
+		return fmt.Errorf("drop GitHub Actions integrations table: %w", err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE server_ssh_keys DROP COLUMN application_id`,
+		`ALTER TABLE server_ssh_keys DROP COLUMN service_name`,
+		`ALTER TABLE server_ssh_keys DROP COLUMN permit_open`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "no such column") {
+				return fmt.Errorf("drop server SSH key restriction column: %w", err)
+			}
+		}
+	}
+	if deploymentRemovalMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (19, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record deployment removal migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

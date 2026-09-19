@@ -2,7 +2,6 @@
   const dialog = document.querySelector("[data-ssh-key-create-dialog]");
   if (dialog) {
     const nameInput = dialog.querySelector("#ssh-key-display-name");
-    const serviceInput = dialog.querySelector("#ssh-key-service");
     const form = dialog.querySelector("form");
     const submitButton = dialog.querySelector("[data-ssh-key-create-submit]");
     const closeButtons = dialog.querySelectorAll("[data-ssh-key-create-close]");
@@ -48,9 +47,6 @@
       }
       if (nameInput) {
         nameInput.value = "";
-      }
-      if (serviceInput) {
-        serviceInput.value = "";
       }
       showDialog();
     };
