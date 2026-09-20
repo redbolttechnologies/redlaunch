@@ -74,8 +74,10 @@
           <svg class="registry-repository-chevron" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="m6 9 6 6 6-6"></path>
           </svg>
-          <span class="registry-repository-name"><code>{{$group.Repository}}</code></span>
-          <span class="registry-repository-meta muted">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}{{if $.RegistryPage.RetentionAvailable}}, keep {{$group.EffectiveKeep}}{{if eq $group.EffectiveKeep 0}} (unlimited){{end}}{{end}}</span>
+          <span class="registry-repository-title">
+            <code class="registry-repository-name" title="{{$group.Repository}}">{{$group.Repository}}</code>
+            <span class="registry-repository-meta">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}{{if $.RegistryPage.RetentionAvailable}} · Keep {{if eq $group.EffectiveKeep 0}}unlimited{{else}}{{$group.EffectiveKeep}}{{end}}{{end}}</span>
+          </span>
           <span class="registry-repository-pushed">Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
         </summary>
         <div class="registry-repository-details">
@@ -117,8 +119,8 @@
               {{range $group.Images}}
               {{$image := .}}
               <tr>
-                <td><code>{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="badge">deployed</span>{{end}}</td>
-                <td><code>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
+                <td><code>{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="service-type-badge">deployed</span>{{end}}</td>
+                <td><code{{if $image.Digest}} title="{{$image.Digest}}"{{end}}>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
                 <td><time{{if registryPushedAtISO $image}} datetime="{{registryPushedAtISO $image}}" title="{{registryPushedAtTitle $image}}"{{end}}>{{registryPushedAt $image}}</time></td>
               </tr>
               {{end}}
