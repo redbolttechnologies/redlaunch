@@ -326,6 +326,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryPushedAt":            registryPushedAtText,
 		"registryPushedAtISO":         registryPushedAtISO,
 		"registryPushedAtTitle":       registryPushedAtTitle,
+		"registryTime":                registryTimeText,
+		"registryTimeISO":             registryTimeISO,
+		"registryTimeTitle":           registryTimeTitle,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -3938,24 +3941,36 @@ func serviceCreatedAtTitle(service application.Service) string {
 }
 
 func registryPushedAtText(image application.RegistryImage) string {
-	if image.PushedAt.IsZero() {
-		return "—"
-	}
-	return image.PushedAt.Format("2006-01-02 15:04")
+	return registryTimeText(image.PushedAt)
 }
 
 func registryPushedAtISO(image application.RegistryImage) string {
-	if image.PushedAt.IsZero() {
-		return ""
-	}
-	return image.PushedAt.Format(time.RFC3339)
+	return registryTimeISO(image.PushedAt)
 }
 
 func registryPushedAtTitle(image application.RegistryImage) string {
-	if image.PushedAt.IsZero() {
+	return registryTimeTitle(image.PushedAt)
+}
+
+func registryTimeText(pushedAt time.Time) string {
+	if pushedAt.IsZero() {
+		return "—"
+	}
+	return pushedAt.Format("2006-01-02 15:04")
+}
+
+func registryTimeISO(pushedAt time.Time) string {
+	if pushedAt.IsZero() {
+		return ""
+	}
+	return pushedAt.Format(time.RFC3339)
+}
+
+func registryTimeTitle(pushedAt time.Time) string {
+	if pushedAt.IsZero() {
 		return "Push date unavailable"
 	}
-	return image.PushedAt.Format("2006-01-02 15:04:05 MST")
+	return pushedAt.Format("2006-01-02 15:04:05 MST")
 }
 
 func postgresUserMessage(err error) string {
@@ -4818,11 +4833,16 @@ type registryPageData struct {
 	Notice      string
 	CSRFToken   string
 	DefaultKeep int
-	Groups      []registryRepositoryGroup
+	// RetentionAvailable reports whether per-repository retention settings
+	// can be edited. Read-only image services still get grouped display
+	// rows without the retention forms.
+	RetentionAvailable bool
+	Groups             []registryRepositoryGroup
 }
 
 // registryRepositoryGroup is one repository section on the Registry page with
-// its effective keep setting and manual purge preview.
+// its effective keep setting and manual purge preview. LatestPushedAt is the
+// newest tag push time in Images and renders the repository summary row.
 type registryRepositoryGroup struct {
 	Repository      string
 	Images          []application.RegistryImage
@@ -4831,6 +4851,7 @@ type registryRepositoryGroup struct {
 	OverrideKeep    int
 	PurgeCandidates []application.RegistryImage
 	ProtectedTags   map[string]bool
+	LatestPushedAt  time.Time
 }
 
 type settingsPageData struct {

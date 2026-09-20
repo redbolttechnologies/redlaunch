@@ -66,12 +66,20 @@
     </header>
     <div class="service-widget-body">
       {{if .RegistryPage.Groups}}
+      <div class="registry-repository-list" role="list" aria-label="Repositories">
       {{range .RegistryPage.Groups}}
       {{$group := .}}
-      <section class="registry-repository-group" aria-label="Repository {{$group.Repository}}">
-        <header class="registry-repository-header">
-          <h3><code>{{$group.Repository}}</code> <span class="muted">({{(len $group.Images)}} tags, keep {{$group.EffectiveKeep}}{{if eq $group.EffectiveKeep 0}} (unlimited){{end}})</span></h3>
-        </header>
+      <details class="registry-repository-group" aria-label="Repository {{$group.Repository}}">
+        <summary class="registry-repository-summary">
+          <svg class="registry-repository-chevron" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m6 9 6 6 6-6"></path>
+          </svg>
+          <span class="registry-repository-name"><code>{{$group.Repository}}</code></span>
+          <span class="registry-repository-meta muted">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}{{if $.RegistryPage.RetentionAvailable}}, keep {{$group.EffectiveKeep}}{{if eq $group.EffectiveKeep 0}} (unlimited){{end}}{{end}}</span>
+          <span class="registry-repository-pushed">Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
+        </summary>
+        <div class="registry-repository-details">
+        {{if $.RegistryPage.RetentionAvailable}}
         <form method="post" action="/registry/retention/repository" class="service-form service-form-inline">
           <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
           <input type="hidden" name="repository" value="{{$group.Repository}}">
@@ -93,23 +101,22 @@
         {{else}}
         <p class="service-widget-hint">Nothing to purge. The newest images and deployed tags are kept.</p>
         {{end}}
+        {{end}}
         {{if $group.Images}}
         <div class="service-environment-table-wrap">
           <table class="service-environment-table registry-images-table">
             <caption class="sr-only">Images in {{$group.Repository}}</caption>
             <thead>
               <tr>
-                <th scope="col">Repository</th>
                 <th scope="col">Tag</th>
                 <th scope="col">Digest</th>
-                <th scope="col">Pushed</th>
+                <th scope="col">Created</th>
               </tr>
             </thead>
             <tbody>
               {{range $group.Images}}
               {{$image := .}}
               <tr>
-                <th scope="row"><code>{{$image.Repository}}</code></th>
                 <td><code>{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="badge">deployed</span>{{end}}</td>
                 <td><code>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
                 <td><time{{if registryPushedAtISO $image}} datetime="{{registryPushedAtISO $image}}" title="{{registryPushedAtTitle $image}}"{{end}}>{{registryPushedAt $image}}</time></td>
@@ -121,8 +128,10 @@
         {{else}}
         <p class="service-widget-hint">No tags in this repository. The override can be removed with Use default.</p>
         {{end}}
-      </section>
+        </div>
+      </details>
       {{end}}
+      </div>
       {{else if .RegistryPage.Images}}
       <div class="service-environment-table-wrap">
         <table class="service-environment-table registry-images-table">
@@ -132,6 +141,7 @@
               <th scope="col">Repository</th>
               <th scope="col">Tag</th>
               <th scope="col">Digest</th>
+              <th scope="col">Created</th>
             </tr>
           </thead>
           <tbody>
@@ -140,6 +150,7 @@
               <th scope="row"><code>{{.Repository}}</code></th>
               <td><code>{{.Tag}}</code></td>
               <td><code>{{if .Digest}}{{.Digest}}{{else}}—{{end}}</code></td>
+              <td><time{{if registryPushedAtISO .}} datetime="{{registryPushedAtISO .}}" title="{{registryPushedAtTitle .}}"{{end}}>{{registryPushedAt .}}</time></td>
             </tr>
             {{end}}
           </tbody>

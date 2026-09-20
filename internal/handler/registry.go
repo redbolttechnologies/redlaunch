@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"redlaunch/internal/application"
 )
@@ -65,6 +66,7 @@ func (h *Handler) populateRegistryRetention(ctx context.Context, data *registryP
 	retention, ok := h.registryImages.(registryRetentionService)
 	if !ok {
 		data.DefaultKeep = application.DefaultRegistryKeepCount
+		data.Groups = groupRegistryImages(data.Images, data.DefaultKeep, nil, nil)
 		return nil
 	}
 	defaultKeep, err := retention.GetDefaultKeep(ctx)
@@ -72,6 +74,7 @@ func (h *Handler) populateRegistryRetention(ctx context.Context, data *registryP
 		return err
 	}
 	data.DefaultKeep = defaultKeep
+	data.RetentionAvailable = true
 	policies, err := retention.ListRetentionPolicies(ctx)
 	if err != nil {
 		return err
@@ -85,9 +88,18 @@ func (h *Handler) populateRegistryRetention(ctx context.Context, data *registryP
 		h.logger.Error("list deployed registry references", "error", err)
 		protected = map[string]bool{}
 	}
+	groups, err := planRegistryGroups(data.Images, defaultKeep, policyByRepo, protected)
+	if err != nil {
+		return err
+	}
+	data.Groups = groups
+	return nil
+}
+
+func planRegistryGroups(images []application.RegistryImage, defaultKeep int, policyByRepo map[string]int, protected map[string]bool) ([]registryRepositoryGroup, error) {
 	repositories := make([]string, 0)
 	imagesByRepo := make(map[string][]application.RegistryImage)
-	for _, image := range data.Images {
+	for _, image := range images {
 		if _, ok := imagesByRepo[image.Repository]; !ok {
 			repositories = append(repositories, image.Repository)
 		}
@@ -102,8 +114,8 @@ func (h *Handler) populateRegistryRetention(ctx context.Context, data *registryP
 	sort.Strings(repositories)
 	groups := make([]registryRepositoryGroup, 0, len(repositories))
 	for _, repository := range repositories {
-		images := imagesByRepo[repository]
-		sortRegistryImagesNewestFirst(images)
+		repositoryImages := imagesByRepo[repository]
+		sortRegistryImagesNewestFirst(repositoryImages)
 		keep, hasOverride := policyByRepo[repository]
 		overrideKeep := 0
 		if hasOverride {
@@ -111,29 +123,72 @@ func (h *Handler) populateRegistryRetention(ctx context.Context, data *registryP
 		} else {
 			keep = defaultKeep
 		}
-		kept, purge, err := application.PlanRegistryPurge(images, keep, protected)
+		kept, purge, err := application.PlanRegistryPurge(repositoryImages, keep, protected)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		_ = kept
 		protectedTags := make(map[string]bool)
-		for _, image := range images {
-			if protected[application.RegistryImageKey(image.Repository, image.Tag)] {
+		for _, image := range repositoryImages {
+			if protected != nil && protected[application.RegistryImageKey(image.Repository, image.Tag)] {
 				protectedTags[image.Tag] = true
 			}
 		}
 		groups = append(groups, registryRepositoryGroup{
 			Repository:      repository,
-			Images:          images,
+			Images:          repositoryImages,
 			EffectiveKeep:   keep,
 			HasOverride:     hasOverride,
 			OverrideKeep:    overrideKeep,
 			PurgeCandidates: purge,
 			ProtectedTags:   protectedTags,
+			LatestPushedAt:  latestRegistryPushedAt(repositoryImages),
 		})
 	}
-	data.Groups = groups
-	return nil
+	return groups, nil
+}
+
+// groupRegistryImages builds display-only repository groups when retention
+// settings are unavailable (for example a read-only image service in tests).
+// It sorts tags newest first so the summary row can show the latest push.
+func groupRegistryImages(images []application.RegistryImage, defaultKeep int, policyByRepo map[string]int, protected map[string]bool) []registryRepositoryGroup {
+	groups, err := planRegistryGroups(images, defaultKeep, policyByRepo, protected)
+	if err != nil {
+		repositories := make([]string, 0)
+		imagesByRepo := make(map[string][]application.RegistryImage)
+		for _, image := range images {
+			if _, ok := imagesByRepo[image.Repository]; !ok {
+				repositories = append(repositories, image.Repository)
+			}
+			imagesByRepo[image.Repository] = append(imagesByRepo[image.Repository], image)
+		}
+		sort.Strings(repositories)
+		groups = make([]registryRepositoryGroup, 0, len(repositories))
+		for _, repository := range repositories {
+			repositoryImages := imagesByRepo[repository]
+			sortRegistryImagesNewestFirst(repositoryImages)
+			groups = append(groups, registryRepositoryGroup{
+				Repository:     repository,
+				Images:         repositoryImages,
+				EffectiveKeep:  defaultKeep,
+				LatestPushedAt: latestRegistryPushedAt(repositoryImages),
+			})
+		}
+	}
+	return groups
+}
+
+func latestRegistryPushedAt(images []application.RegistryImage) time.Time {
+	var latest time.Time
+	for _, image := range images {
+		if image.PushedAt.IsZero() {
+			continue
+		}
+		if latest.IsZero() || image.PushedAt.After(latest) {
+			latest = image.PushedAt
+		}
+	}
+	return latest
 }
 
 func sortRegistryImagesNewestFirst(images []application.RegistryImage) {

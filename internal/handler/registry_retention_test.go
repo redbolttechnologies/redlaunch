@@ -153,11 +153,17 @@ func TestRegistryRetentionGroupsAndPurgePreview(t *testing.T) {
 		`Purge 2 older images`,
 		`middle`,
 		`oldest`,
-		`Pushed`,
+		`Created`,
+		`Last pushed`,
+		`registry-repository-group`,
+		`registry-repository-summary`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /registry did not render %q", expected)
 		}
+	}
+	if strings.Contains(body, "<details class=\"registry-repository-group\" open") || strings.Contains(body, "<details open") {
+		t.Fatalf("GET /registry repository rows should be initially closed")
 	}
 }
 

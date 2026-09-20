@@ -6079,9 +6079,12 @@ func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 		`class="side-menu-item side-menu-item-active"`,
 		`aria-current="page"`,
 		`<h2 id="registry-images-title">Pushed images</h2>`,
-		`>Repository</th>`,
+		`registry-repository-group`,
+		`registry-repository-summary`,
+		`Last pushed`,
 		`>Tag</th>`,
 		`>Digest</th>`,
+		`>Created</th>`,
 		`status-page/web`,
 		`abc123`,
 		`sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
@@ -6094,6 +6097,9 @@ func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 	}
 	if strings.Contains(body, "<unsafe>") {
 		t.Fatalf("GET /registry rendered an image name without escaping it: %s", body)
+	}
+	if strings.Contains(body, "<details class=\"registry-repository-group\" open") || strings.Contains(body, "<details open") {
+		t.Fatalf("GET /registry repository rows should be initially closed: %s", body)
 	}
 	if registry.calls != 1 {
 		t.Fatalf("registry calls = %d, want one", registry.calls)
