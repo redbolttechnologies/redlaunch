@@ -100,6 +100,9 @@ from GitHub Actions via the registry or via direct image copy), see the
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
 - Show container status, ports, logs, and explicitly scoped resource usage.
 - List the images previously pushed to the local registry from the Registry page.
+- Cap registry images per repository (global default 5, per-repository override,
+  0 for unlimited, max 100) and manually purge older tags; deployed tags are
+  always kept.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.

@@ -323,6 +323,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"dashboardMetricsScope":       dashboardMetricsScope,
 		"dashboardMetricsScopeDetail": dashboardMetricsScopeDetail,
 		"dashboardMetricAge":          dashboardMetricAge,
+		"registryPushedAt":            registryPushedAtText,
+		"registryPushedAtISO":         registryPushedAtISO,
+		"registryPushedAtTitle":       registryPushedAtTitle,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -672,6 +675,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /proxy/restart", h.restartProxy)
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /registry", h.registryPage)
+	mux.HandleFunc("POST /registry/retention/default", h.setRegistryDefaultKeep)
+	mux.HandleFunc("POST /registry/retention/repository", h.setRegistryRepositoryKeep)
+	mux.HandleFunc("POST /registry/purge", h.purgeRegistryRepository)
 	mux.HandleFunc("GET /applications/{id}", h.applicationDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/import", h.importDockerComposeProject)
 	mux.HandleFunc("POST /applications/{id}/import/preview", h.previewDockerComposeProject)
@@ -3931,6 +3937,27 @@ func serviceCreatedAtTitle(service application.Service) string {
 	return createdAt.Format("2006-01-02 15:04:05 MST")
 }
 
+func registryPushedAtText(image application.RegistryImage) string {
+	if image.PushedAt.IsZero() {
+		return "—"
+	}
+	return image.PushedAt.Format("2006-01-02 15:04")
+}
+
+func registryPushedAtISO(image application.RegistryImage) string {
+	if image.PushedAt.IsZero() {
+		return ""
+	}
+	return image.PushedAt.Format(time.RFC3339)
+}
+
+func registryPushedAtTitle(image application.RegistryImage) string {
+	if image.PushedAt.IsZero() {
+		return "Push date unavailable"
+	}
+	return image.PushedAt.Format("2006-01-02 15:04:05 MST")
+}
+
 func postgresUserMessage(err error) string {
 	switch {
 	case errors.Is(err, application.ErrServiceNameRequired):
@@ -4788,6 +4815,22 @@ type registryPageData struct {
 	// installed or not running, as opposed to a failed inspection.
 	Unavailable bool
 	Error       string
+	Notice      string
+	CSRFToken   string
+	DefaultKeep int
+	Groups      []registryRepositoryGroup
+}
+
+// registryRepositoryGroup is one repository section on the Registry page with
+// its effective keep setting and manual purge preview.
+type registryRepositoryGroup struct {
+	Repository      string
+	Images          []application.RegistryImage
+	EffectiveKeep   int
+	HasOverride     bool
+	OverrideKeep    int
+	PurgeCandidates []application.RegistryImage
+	ProtectedTags   map[string]bool
 }
 
 type settingsPageData struct {

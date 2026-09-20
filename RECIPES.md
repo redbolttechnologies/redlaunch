@@ -264,6 +264,20 @@ Notes:
   GitHub secrets, then revoke the old key. To revoke, use **Revoke key** in
   Redlaunch, then remove the GitHub variables/secrets separately.
 
+### 1.4 Cap registry images per repository
+
+- On the **Registry** page, set the global default keep count (default 5).
+  Use `0` for unlimited, maximum `100`.
+- Optionally set a per-repository override, for example `acme-app` keep `3`.
+  Reset with **Use default** to fall back to the global value.
+- The page previews which older tags would be purged. Tags are ordered by push
+  time (newest first); deployed tags (`localhost:5000/<repository>:<tag>`
+  currently used by a managed service) are always kept and do not count toward
+  the keep number.
+- Click **Purge N older images** and confirm. Only tag metadata is removed;
+  run `docker exec redbolt-registry registry garbage-collect
+  /etc/docker/registry/config.yml` on the server to reclaim blob space.
+
 ---
 
 ## Recipe 2: Trigger a Drizzle migration from GitHub Actions

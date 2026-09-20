@@ -30,6 +30,8 @@ const (
 	MaxBackupFileNameLength   = 255
 	MaxEmailLength            = 320
 	MaxBackupRetentionDays    = 3650
+	MaxRegistryKeepCount      = 100
+	DefaultRegistryKeepCount  = 5
 	MaxComposeFileSize        = 4 << 20
 	MaxEnvironmentFileSize    = 1 << 20
 	LocalRegistryAddress      = "localhost:5000"
@@ -132,6 +134,8 @@ var (
 	ErrBackupFormatUnsupported          = errors.New("backup file format is not supported")
 	ErrBackupOperationInProgress        = errors.New("another backup operation is in progress")
 	ErrBackupSchedulerUnavailable       = errors.New("backup scheduler is unavailable")
+	ErrRegistryKeepInvalid              = errors.New("registry keep count is invalid")
+	ErrRegistryRepositoryInvalid        = errors.New("registry repository is invalid")
 	ErrApplicationDeletionInProgress    = errors.New("application deletion is in progress")
 	ErrEmailRequired                    = errors.New("email address is required")
 	ErrEmailTooLong                     = errors.New("email address is too long")
@@ -323,11 +327,13 @@ type ProxyDomain struct {
 // registry, for example by a GitHub Actions workflow through the SSH tunnel.
 // Repository and Tag are the validated registry path and tag; Digest is the
 // manifest digest the tag currently points at and may be empty when it could
-// not be read.
+// not be read. PushedAt is the tag link modification time and orders retention;
+// it may be zero when the time could not be read.
 type RegistryImage struct {
 	Repository string
 	Tag        string
 	Digest     string
+	PushedAt   time.Time
 }
 
 // Reference returns the pullable image reference for the local registry, in

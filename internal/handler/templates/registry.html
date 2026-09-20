@@ -19,7 +19,13 @@
     </svg>
     <span>{{.RegistryPage.Error}}</span>
   </div>
-  {{else}}
+  {{end}}
+  {{if .RegistryPage.Notice}}
+  <div class="application-notice" role="status">
+    <span>{{.RegistryPage.Notice}}</span>
+  </div>
+  {{end}}
+  {{if .RegistryPage.Unavailable}}
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
       <div class="service-widget-heading">
@@ -28,7 +34,96 @@
       </div>
     </header>
     <div class="service-widget-body">
-      {{if .RegistryPage.Images}}
+      <div class="service-widget-empty" role="status">
+        <p>The local registry is not available. Install it during setup.</p>
+      </div>
+    </div>
+  </section>
+  {{else}}
+  <section class="service-widget registry-retention-widget" aria-labelledby="registry-retention-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="registry-retention-title">Retention</h2>
+        <p>Keep the most recent images per repository. Use 0 for unlimited. Maximum 100.</p>
+      </div>
+    </header>
+    <div class="service-widget-body">
+      <form method="post" action="/registry/retention/default" class="service-form">
+        <input type="hidden" name="csrf_token" value="{{.RegistryPage.CSRFToken}}">
+        <label for="registry-default-keep">Default keep count</label>
+        <input id="registry-default-keep" name="keep_count" type="number" min="0" max="100" step="1" value="{{.RegistryPage.DefaultKeep}}" inputmode="numeric" required>
+        <button type="submit" class="button button-secondary">Save default</button>
+      </form>
+      <p class="service-widget-hint">Applies to repositories without an override. Deployed tags are always kept and do not count toward the keep number. Blob space is reclaimed with registry garbage-collect.</p>
+    </div>
+  </section>
+  <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="registry-images-title">Pushed images</h2>
+        <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+      </div>
+    </header>
+    <div class="service-widget-body">
+      {{if .RegistryPage.Groups}}
+      {{range .RegistryPage.Groups}}
+      {{$group := .}}
+      <section class="registry-repository-group" aria-label="Repository {{$group.Repository}}">
+        <header class="registry-repository-header">
+          <h3><code>{{$group.Repository}}</code> <span class="muted">({{(len $group.Images)}} tags, keep {{$group.EffectiveKeep}}{{if eq $group.EffectiveKeep 0}} (unlimited){{end}})</span></h3>
+        </header>
+        <form method="post" action="/registry/retention/repository" class="service-form service-form-inline">
+          <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
+          <input type="hidden" name="repository" value="{{$group.Repository}}">
+          <label for="registry-keep-{{$group.Repository}}">Keep for this repository</label>
+          <input id="registry-keep-{{$group.Repository}}" name="keep_count" type="number" min="0" max="100" step="1" value="{{if $group.HasOverride}}{{$group.OverrideKeep}}{{else}}{{$group.EffectiveKeep}}{{end}}" inputmode="numeric" required>
+          <button type="submit" class="button button-secondary">Save</button>
+          {{if $group.HasOverride}}
+          <button type="submit" name="reset" value="1" class="button button-ghost">Use default</button>
+          {{end}}
+        </form>
+        {{if $group.PurgeCandidates}}
+        <p class="service-widget-hint">{{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}} would be purged: {{range $index, $image := $group.PurgeCandidates}}{{if $index}}, {{end}}<code>{{$image.Tag}}</code>{{end}}.</p>
+        <form method="post" action="/registry/purge" class="service-form service-form-inline" onsubmit="return confirm('Purge {{len $group.PurgeCandidates}} older images from {{$group.Repository}}? Deployed tags are kept.');">
+          <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
+          <input type="hidden" name="repository" value="{{$group.Repository}}">
+          <input type="hidden" name="confirm" value="purge">
+          <button type="submit" class="button button-destructive">Purge {{len $group.PurgeCandidates}} older images</button>
+        </form>
+        {{else}}
+        <p class="service-widget-hint">Nothing to purge. The newest images and deployed tags are kept.</p>
+        {{end}}
+        {{if $group.Images}}
+        <div class="service-environment-table-wrap">
+          <table class="service-environment-table registry-images-table">
+            <caption class="sr-only">Images in {{$group.Repository}}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Repository</th>
+                <th scope="col">Tag</th>
+                <th scope="col">Digest</th>
+                <th scope="col">Pushed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range $group.Images}}
+              {{$image := .}}
+              <tr>
+                <th scope="row"><code>{{$image.Repository}}</code></th>
+                <td><code>{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="badge">deployed</span>{{end}}</td>
+                <td><code>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
+                <td><time{{if registryPushedAtISO $image}} datetime="{{registryPushedAtISO $image}}" title="{{registryPushedAtTitle $image}}"{{end}}>{{registryPushedAt $image}}</time></td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+        {{else}}
+        <p class="service-widget-hint">No tags in this repository. The override can be removed with Use default.</p>
+        {{end}}
+      </section>
+      {{end}}
+      {{else if .RegistryPage.Images}}
       <div class="service-environment-table-wrap">
         <table class="service-environment-table registry-images-table">
           <caption class="sr-only">Images pushed to the local registry</caption>
@@ -49,10 +144,6 @@
             {{end}}
           </tbody>
         </table>
-      </div>
-      {{else if .RegistryPage.Unavailable}}
-      <div class="service-widget-empty" role="status">
-        <p>The local registry is not available. Install it during setup.</p>
       </div>
       {{else}}
       <div class="service-widget-empty" role="status">

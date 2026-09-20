@@ -78,6 +78,9 @@ exit 1
 	byReference := make(map[string]string, len(got))
 	for _, content := range got {
 		byReference[content.Repository+":"+content.Tag] = content.Digest
+		if content.PushedAt.IsZero() {
+			t.Fatalf("ListRegistryContents() PushedAt is zero for %s:%s", content.Repository, content.Tag)
+		}
 	}
 	for _, content := range want {
 		if byReference[content.Repository+":"+content.Tag] != content.Digest {
@@ -95,6 +98,48 @@ exit 1
 	}
 	if !strings.Contains(joined, "cp\x00redbolt-registry:/var/lib/registry/docker/registry/v2/repositories") {
 		t.Fatalf("registry arguments = %q, want explicit cp of the repositories tree", joined)
+	}
+}
+
+func TestDeleteRegistryTagUsesExecWithoutShell(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"${0%/*}/args\"\nexit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (CommandRunner{Binary: binary}).DeleteRegistryTag(context.Background(), "redbolt-registry", "acme-app", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(strings.Split(strings.TrimSpace(string(args)), "\n"), "\x00")
+	want := "exec\x00redbolt-registry\x00rm\x00-rf\x00--\x00/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/tags/abc123"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("delete arguments = %q, want %q", joined, want)
+	}
+}
+
+func TestDeleteRegistryTagRejectsTraversal(t *testing.T) {
+	runner := CommandRunner{Binary: "docker"}
+	for _, testCase := range []struct {
+		repository string
+		tag        string
+	}{
+		{"../escape", "good"},
+		{"acme-app", "../escape"},
+		{"", "good"},
+		{"acme-app", ""},
+		{"BAD", "good"},
+		{"acme-app", "-bad"},
+	} {
+		if err := runner.DeleteRegistryTag(context.Background(), "redbolt-registry", testCase.repository, testCase.tag); err == nil {
+			t.Fatalf("DeleteRegistryTag(%q, %q) error = nil, want invalid", testCase.repository, testCase.tag)
+		}
+	}
+	if err := runner.DeleteRegistryTag(context.Background(), "  ", "acme-app", "abc123"); err == nil {
+		t.Fatal("DeleteRegistryTag(empty container) error = nil, want container name error")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrRegistryUnavailable reports that the managed local image registry
@@ -31,10 +32,13 @@ const maxRegistryImages = 1000
 
 // RegistryContent is one tag previously pushed to the managed local image
 // registry. Digest is the manifest digest the tag currently points at.
+// PushedAt is the tag link modification time and orders retention; it may be
+// zero when the time could not be read.
 type RegistryContent struct {
 	Repository string
 	Tag        string
 	Digest     string
+	PushedAt   time.Time
 }
 
 // ListRegistryContents returns the tags previously pushed to the managed
@@ -92,6 +96,45 @@ func isRegistryPathNotFound(err error) bool {
 	return strings.Contains(err.Error(), "Could not find the file")
 }
 
+// DeleteRegistryTag removes one tag directory from the managed registry
+// container through the Docker daemon. Only the tag link tree is removed;
+// content-addressable blobs remain until the operator runs
+// `registry garbage-collect`. Repository and tag are strictly validated so a
+// user-controlled value cannot escape the repositories tree. Arguments are
+// passed exec-style without a shell.
+func (r CommandRunner) DeleteRegistryTag(ctx context.Context, containerName, repository, tag string) error {
+	ctx = normalizeContext(ctx)
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return errors.New("registry container name is required")
+	}
+	repository = strings.TrimSpace(repository)
+	if repository == "" || len(repository) > 255 {
+		return errors.New("registry repository is invalid")
+	}
+	parts := strings.Split(repository, "/")
+	for _, part := range parts {
+		if !validRegistryPathComponent(part) {
+			return errors.New("registry repository is invalid")
+		}
+	}
+	tag = strings.TrimSpace(tag)
+	if !validRegistryTag(tag) {
+		return errors.New("registry tag is invalid")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	containerPath := registryRepositoriesPath + "/" + repository + "/_manifests/tags/" + tag
+	remove := exec.CommandContext(ctx, binary, "exec", containerName, "rm", "-rf", "--", containerPath)
+	remove.Env = composeProcessEnvironment(os.Environ(), nil)
+	if err := runDiagnosticCommand(remove, "delete registry tag", ""); err != nil {
+		return err
+	}
+	return nil
+}
+
 var errRegistryImageLimit = errors.New("registry image limit reached")
 
 // readRegistryContents walks a copied repositories tree and returns one
@@ -140,6 +183,7 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 			Repository: repository,
 			Tag:        tag,
 			Digest:     digest,
+			PushedAt:   fileInfo.ModTime(),
 		})
 		return nil
 	})

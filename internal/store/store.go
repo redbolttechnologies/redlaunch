@@ -468,6 +468,115 @@ func (s *Store) ReleaseBackupLease(ctx context.Context, serviceID int64, token s
 	return nil
 }
 
+// GetRegistryDefaultKeep returns the global keep count for registry
+// retention. Zero means unlimited. Missing settings fall back to the
+// application default so older databases keep working.
+func (s *Store) GetRegistryDefaultKeep(ctx context.Context) (int, error) {
+	var keep int
+	err := s.db.QueryRowContext(ctx, `SELECT registry_default_keep FROM redlaunch_settings WHERE id = 1`).Scan(&keep)
+	if errors.Is(err, sql.ErrNoRows) {
+		return application.DefaultRegistryKeepCount, nil
+	}
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			return application.DefaultRegistryKeepCount, nil
+		}
+		return 0, fmt.Errorf("get registry default keep: %w", err)
+	}
+	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
+		return application.DefaultRegistryKeepCount, nil
+	}
+	return keep, nil
+}
+
+// SetRegistryDefaultKeep persists the global keep count for registry
+// retention. Zero means unlimited.
+func (s *Store) SetRegistryDefaultKeep(ctx context.Context, keep int) error {
+	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO redlaunch_settings (id) VALUES (1)`); err != nil {
+		return fmt.Errorf("initialize Redlaunch settings: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE redlaunch_settings SET registry_default_keep = ? WHERE id = 1`, keep); err != nil {
+		return fmt.Errorf("save registry default keep: %w", err)
+	}
+	return nil
+}
+
+// ListRegistryRetentionPolicies returns per-repository keep overrides in
+// repository order.
+func (s *Store) ListRegistryRetentionPolicies(ctx context.Context) ([]application.RegistryRetentionPolicy, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT repository, keep_count FROM registry_retention_policies ORDER BY repository ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list registry retention policies: %w", err)
+	}
+	defer rows.Close()
+	var policies []application.RegistryRetentionPolicy
+	for rows.Next() {
+		var policy application.RegistryRetentionPolicy
+		if err := rows.Scan(&policy.Repository, &policy.KeepCount); err != nil {
+			return nil, fmt.Errorf("scan registry retention policy: %w", err)
+		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate registry retention policies: %w", err)
+	}
+	return policies, nil
+}
+
+// GetRegistryRetentionPolicy returns the per-repository override and whether
+// one exists.
+func (s *Store) GetRegistryRetentionPolicy(ctx context.Context, repository string) (int, bool, error) {
+	repository, err := application.ValidateRegistryRepository(repository)
+	if err != nil {
+		return 0, false, err
+	}
+	var keep int
+	err = s.db.QueryRowContext(ctx, `SELECT keep_count FROM registry_retention_policies WHERE repository = ?`, repository).Scan(&keep)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("get registry retention policy: %w", err)
+	}
+	return keep, true, nil
+}
+
+// SetRegistryRetentionPolicy creates or updates one repository's keep
+// override. Zero means unlimited for that repository.
+func (s *Store) SetRegistryRetentionPolicy(ctx context.Context, repository string, keep int) error {
+	repository, err := application.ValidateRegistryRepository(repository)
+	if err != nil {
+		return err
+	}
+	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO registry_retention_policies (repository, keep_count, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(repository) DO UPDATE SET keep_count = excluded.keep_count, updated_at = excluded.updated_at`,
+		repository, keep, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("save registry retention policy: %w", err)
+	}
+	return nil
+}
+
+// DeleteRegistryRetentionPolicy removes one repository override so the global
+// default applies again. Missing policies are a no-op.
+func (s *Store) DeleteRegistryRetentionPolicy(ctx context.Context, repository string) error {
+	repository, err := application.ValidateRegistryRepository(repository)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM registry_retention_policies WHERE repository = ?`, repository); err != nil {
+		return fmt.Errorf("delete registry retention policy: %w", err)
+	}
+	return nil
+}
+
 // BeginApplicationDeletion records or returns the durable deletion intent for
 // one application. It intentionally has no foreign key so the tombstone
 // survives metadata deletion until filesystem cleanup is complete.
@@ -1806,6 +1915,34 @@ func (s *Store) migrate(ctx context.Context) error {
 			INSERT INTO schema_migrations (version, applied_at)
 			VALUES (19, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record deployment removal migration: %w", err)
+		}
+	}
+
+	var registryRetentionMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 20`).Scan(&registryRetentionMigrationApplied); err != nil {
+		return fmt.Errorf("check registry retention migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS registry_retention_policies (
+			repository TEXT PRIMARY KEY,
+			keep_count INTEGER NOT NULL,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create registry retention policies table: %w", err)
+	}
+	if registryRetentionMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE redlaunch_settings ADD COLUMN registry_default_keep INTEGER NOT NULL DEFAULT 5`); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				return fmt.Errorf("add registry default keep column: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (20, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record registry retention migration: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
