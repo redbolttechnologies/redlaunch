@@ -615,10 +615,26 @@ GitHub runner
 
 You need one credential set for both push and deploy:
 
-| Purpose | Variables | Secrets |
-| --- | --- | --- |
-| Push + deploy (port `22`) | `SERVER_HOST=203.0.113.10`, `REDLAUNCH_APP_DIR=/opt/redlaunch/projects/applications/myapp`, `REDLAUNCH_IMAGE_REPOSITORY=myapp/web`; optional `DEPLOY_SERVICE` (default `app`), `DEPLOY_SSH_PORT` (default `22`), `REDLAUNCH_DOCKERFILE` (default `Dockerfile`), `REDLAUNCH_BUILD_CONTEXT` (default `.`) | `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` (system host key) |
-| Migrate via API (optional, recommended) | `REDLAUNCH_URL`, `APPLICATION_ID`; optional `MIGRATE_SERVICE_NAME` (default `migrate`) | `REDLAUNCH_RUN_TOKEN` |
+GitHub variables/secrets:
+
+| Variable | Example |
+| --- | --- |
+| `SERVER_HOST` | `203.0.113.10` (required) |
+| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
+| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) |
+| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) |
+| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) |
+| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) |
+| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
+| `REDLAUNCH_URL` | `https://redlaunch.example.com` (optional, only for API migration) |
+| `APPLICATION_ID` | `"7"` (optional, only for API migration) |
+| `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`, only for API migration) |
+
+| Secret | Value |
+| --- | --- |
+| `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
+| `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` |
+| `REDLAUNCH_RUN_TOKEN` | API token value (optional, only for API migration) |
 
 `REDLAUNCH_APP_DIR` must be the absolute managed application directory. It
 resolves both on the host and inside the manager container because the
