@@ -122,20 +122,20 @@ publicly. The same Settings SSH key used for deploys forwards to it.
 
    Variables:
 
-    | Variable | Value |
-    | --- | --- |
-    | `SERVER_HOST` | Public host of the VPS (required) |
-    | `REDLAUNCH_IMAGE_REPOSITORY` | Registry repository, no `localhost:5000`, no tag (required) |
-    | `REDLAUNCH_DOCKERFILE` | Dockerfile path in the repository (optional, defaults to `Dockerfile`) |
-    | `REDLAUNCH_BUILD_CONTEXT` | Build context in the repository (optional, defaults to `.`) |
-    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
+    | Variable | Value | Description |
+    | --- | --- | --- |
+    | `SERVER_HOST` | Public host of the VPS (required) | SSH target for the registry tunnel (`redlaunch@SERVER_HOST`) |
+    | `REDLAUNCH_IMAGE_REPOSITORY` | Registry repository, no `localhost:5000`, no tag (required) | Repository pushed as `localhost:5000/<repository>:<commit-sha>` and listed on the Registry page |
+    | `REDLAUNCH_DOCKERFILE` | Dockerfile path in the repository (optional, defaults to `Dockerfile`) | Dockerfile passed to `docker build --file` |
+    | `REDLAUNCH_BUILD_CONTEXT` | Build context in the repository (optional, defaults to `.`) | Build context directory passed to `docker build` |
+    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) | SSH port used for the `redlaunch` user connection |
 
    Secrets (paste complete values, including `BEGIN`/`END` lines for the key):
 
-   | Secret | Value |
-   | --- | --- |
-   | `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
-   | `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` |
+   | Secret | Value | Description |
+   | --- | --- | --- |
+   | `SSH_PRIVATE_KEY` | Complete `redlaunch` private key | Authenticates as the `redlaunch` user to open the registry SSH tunnel |
+   | `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` | Verifies the VPS host key with `StrictHostKeyChecking=yes` |
 
 ### 1.2 Reusable push workflow
 
@@ -345,13 +345,13 @@ applications, or open a shell.
 
 In GitHub, create:
 
-| Variable | Example |
-| --- | --- |
-| `REDLAUNCH_URL` | `https://redlaunch.example.com` (managed HTTPS) |
+| Variable | Example | Description |
+| --- | --- | --- |
+| `REDLAUNCH_URL` | `https://redlaunch.example.com` (managed HTTPS) | Redlaunch base URL called to dispatch the migration run and poll its `status_url` |
 
-| Secret | Value |
-| --- | --- |
-| `REDLAUNCH_RUN_TOKEN` | The one-time token value |
+| Secret | Value | Description |
+| --- | --- | --- |
+| `REDLAUNCH_RUN_TOKEN` | The one-time token value | Bearer token authorizing the migration dispatch and status polls, scoped to one application |
 
 Set these as workflow or job environment values:
 
@@ -461,17 +461,17 @@ HTTPS.
 
 4. In GitHub, create:
 
-    | Variable | Example |
-    | --- | --- |
-    | `SERVER_HOST` | `203.0.113.10` (required) |
-    | `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
-    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
-    | `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`) |
+    | Variable | Example | Description |
+    | --- | --- | --- |
+    | `SERVER_HOST` | `203.0.113.10` (required) | SSH target that runs the migration command server-side |
+    | `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) | Managed application directory where `docker compose run --rm` executes |
+    | `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) | SSH port used for the `redlaunch` user connection |
+    | `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`) | One-off Compose service executed with `docker compose run --rm` |
 
-   | Secret | Value |
-   | --- | --- |
-   | `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
-   | `SSH_KNOWN_HOSTS` | System host-key line with `SERVER_HOST` as the host field |
+   | Secret | Value | Description |
+   | --- | --- | --- |
+   | `SSH_PRIVATE_KEY` | Complete `redlaunch` private key | Authenticates as the `redlaunch` user to run the migration over SSH |
+   | `SSH_KNOWN_HOSTS` | System host-key line with `SERVER_HOST` as the host field | Verifies the VPS host key with `StrictHostKeyChecking=yes` |
 
 5. Confirm prerequisites on the server (once, as an admin):
 
@@ -617,24 +617,24 @@ You need one credential set for both push and deploy:
 
 GitHub variables/secrets:
 
-| Variable | Example |
-| --- | --- |
-| `SERVER_HOST` | `203.0.113.10` (required) |
-| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
-| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) |
-| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) |
-| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) |
-| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) |
-| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
-| `REDLAUNCH_URL` | `https://redlaunch.example.com` (optional, only for API migration) |
-| `APPLICATION_ID` | `"7"` (optional, only for API migration) |
-| `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`, only for API migration) |
+| Variable | Example | Description |
+| --- | --- | --- |
+| `SERVER_HOST` | `203.0.113.10` (required) | SSH target for the registry tunnel and the deploy connection (`redlaunch@SERVER_HOST`) |
+| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) | Managed application directory where `docker compose pull` and `up -d` run |
+| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) | Repository built and pushed as `localhost:5000/<repository>:<sha>` and `:latest` tags |
+| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) | Dockerfile passed to `docker build --file` |
+| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) | Build context directory passed to `docker build` |
+| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) | Long-lived Compose service restarted with `pull` and `up -d` |
+| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) | SSH port used for the `redlaunch` user connection |
+| `REDLAUNCH_URL` | `https://redlaunch.example.com` (optional, only for API migration) | Redlaunch base URL called to dispatch the optional migration run |
+| `APPLICATION_ID` | `"7"` (optional, only for API migration) | Numeric application selected in the migration API path (`/api/v1/applications/<id>/...`) |
+| `MIGRATE_SERVICE_NAME` | `migrate` (optional, defaults to `migrate`, only for API migration) | One-off Compose service executed by the optional migration run |
 
-| Secret | Value |
-| --- | --- |
-| `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
-| `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` |
-| `REDLAUNCH_RUN_TOKEN` | API token value (optional, only for API migration) |
+| Secret | Value | Description |
+| --- | --- | --- |
+| `SSH_PRIVATE_KEY` | Complete `redlaunch` private key | Authenticates as the `redlaunch` user for the registry tunnel and deploy SSH session |
+| `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` | Verifies the VPS host key with `StrictHostKeyChecking=yes` |
+| `REDLAUNCH_RUN_TOKEN` | API token value (optional, only for API migration) | Bearer token authorizing the optional migration dispatch and status polls |
 
 `REDLAUNCH_APP_DIR` must be the absolute managed application directory. It
 resolves both on the host and inside the manager container because the
@@ -850,20 +850,20 @@ optional. You still need:
 
 GitHub variables/secrets:
 
-| Variable | Example |
-| --- | --- |
-| `SERVER_HOST` | `203.0.113.10` (required) |
-| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) |
-| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) |
-| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) |
-| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) |
-| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) |
-| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) |
+| Variable | Example | Description |
+| --- | --- | --- |
+| `SERVER_HOST` | `203.0.113.10` (required) | SSH target receiving the copied image (`docker load`) and running `up -d` |
+| `REDLAUNCH_APP_DIR` | `/opt/redlaunch/projects/applications/myapp` (required) | Managed application directory where `docker compose up -d` runs |
+| `REDLAUNCH_IMAGE_REPOSITORY` | `myapp/web` (required) | Repository built as `localhost:5000/<repository>:<sha>` and `:latest` tags for `docker save` |
+| `REDLAUNCH_DOCKERFILE` | `Dockerfile` (optional, defaults to `Dockerfile`) | Dockerfile passed to `docker build --file` |
+| `REDLAUNCH_BUILD_CONTEXT` | `.` (optional, defaults to `.`) | Build context directory passed to `docker build` |
+| `DEPLOY_SERVICE` | `app` (optional, defaults to `app`) | Long-lived Compose service restarted with `up -d` after `docker load` |
+| `DEPLOY_SSH_PORT` | `22` (optional, defaults to `22`) | SSH port used for the `redlaunch` user connection |
 
-| Secret | Value |
-| --- | --- |
-| `SSH_PRIVATE_KEY` | Complete `redlaunch` private key |
-| `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` |
+| Secret | Value | Description |
+| --- | --- | --- |
+| `SSH_PRIVATE_KEY` | Complete `redlaunch` private key | Authenticates as the `redlaunch` user for the image copy and deploy SSH session |
+| `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` | Verifies the VPS host key with `StrictHostKeyChecking=yes` |
 
 ### 4.2 Reusable copy-and-deploy workflow (streaming)
 
