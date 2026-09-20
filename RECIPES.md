@@ -536,14 +536,30 @@ jobs:
           chmod 600 "$ssh_dir/id_ed25519"
           chmod 644 "$ssh_dir/known_hosts"
 
-          DEPLOY_DIR="$DEPLOY_DIR" MIGRATE_SERVICE="$MIGRATE_SERVICE" \
+          # Validate locally, then pass values as remote argv with shell
+          # escaping. A VAR="..." prefix on ssh only sets the local client
+          # environment; sshd does not forward it without SendEnv/AcceptEnv.
+          case "$DEPLOY_DIR" in
+            /*) ;;
+            *) echo "REDLAUNCH_APP_DIR must be an absolute path" >&2; exit 1 ;;
+          esac
+          case "$DEPLOY_DIR" in
+            *$'\n'*|*'..'*) echo "REDLAUNCH_APP_DIR is invalid" >&2; exit 1 ;;
+          esac
+          case "$MIGRATE_SERVICE" in
+            '') echo "MIGRATE_SERVICE is invalid" >&2; exit 1 ;;
+            *[!A-Za-z0-9_.-]*) echo "MIGRATE_SERVICE is invalid" >&2; exit 1 ;;
+            [A-Za-z0-9]*) ;;
+            *) echo "MIGRATE_SERVICE is invalid" >&2; exit 1 ;;
+          esac
+          remote_cmd=$(printf 'bash -s -- %q %q' "$DEPLOY_DIR" "$MIGRATE_SERVICE")
           ssh -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/id_ed25519" \
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
-            redlaunch@"$SERVER_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+            redlaunch@"$SERVER_HOST" "$remote_cmd" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          DEPLOY_DIR="${DEPLOY_DIR:?}"
-          MIGRATE_SERVICE="${MIGRATE_SERVICE:-migrate}"
+          DEPLOY_DIR=${1:?}
+          MIGRATE_SERVICE=${2:-migrate}
           # DEPLOY_DIR must be the absolute managed application directory.
           if [ -f "$DEPLOY_DIR/compose.yml" ]; then
             compose_file="compose.yml"
@@ -564,9 +580,10 @@ jobs:
           REMOTE_SCRIPT
 ```
 
-The remote snippet receives `DEPLOY_DIR` and `MIGRATE_SERVICE` as fixed
-remote values via the `VAR="..."` prefix on the `ssh` invocation (SSH does
-not forward the local environment automatically). The pattern above keeps the
+The remote snippet receives `DEPLOY_DIR` and `MIGRATE_SERVICE` as positional
+arguments (`bash -s -- <dir> <service>`) built with `printf '%q'` so no
+untrusted value is interpolated into the remote script body (the heredoc
+stays quoted as `'REMOTE_SCRIPT'`). The pattern above keeps the
 explicit `--project-name` and `--env-file` files on every invocation and runs
 Compose inside the manager container where the
 `0600` `vars.env` / `secrets.env` files are readable. A bare
@@ -780,16 +797,31 @@ jobs:
           chmod 600 "$ssh_dir/deploy_ed25519"
           chmod 644 "$ssh_dir/deploy_known_hosts"
 
-          # DEPLOY_DIR and DEPLOY_SERVICE travel as fixed remote values.
-          # Do not interpolate untrusted input into the remote script.
-          DEPLOY_DIR="$DEPLOY_DIR" DEPLOY_SERVICE="$DEPLOY_SERVICE" \
+          # DEPLOY_DIR and DEPLOY_SERVICE travel as remote argv, not env.
+          # A VAR="..." prefix on ssh only sets the local client env; sshd
+          # does not forward it. Do not interpolate untrusted input into
+          # the remote script body (the heredoc stays quoted).
+          case "$DEPLOY_DIR" in
+            /*) ;;
+            *) echo "REDLAUNCH_APP_DIR must be an absolute path" >&2; exit 1 ;;
+          esac
+          case "$DEPLOY_DIR" in
+            *$'\n'*|*'..'*) echo "REDLAUNCH_APP_DIR is invalid" >&2; exit 1 ;;
+          esac
+          case "$DEPLOY_SERVICE" in
+            '') echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+            *[!A-Za-z0-9_.-]*) echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+            [A-Za-z0-9]*) ;;
+            *) echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+          esac
+          remote_cmd=$(printf 'bash -s -- %q %q' "$DEPLOY_DIR" "$DEPLOY_SERVICE")
           ssh -p "$DEPLOY_SSH_PORT" -i "$ssh_dir/deploy_ed25519" \
             -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/deploy_known_hosts" \
-            redlaunch@"$DEPLOY_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+            redlaunch@"$DEPLOY_HOST" "$remote_cmd" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          DEPLOY_DIR="${DEPLOY_DIR:?}"
-          DEPLOY_SERVICE="${DEPLOY_SERVICE:?}"
+          DEPLOY_DIR=${1:?}
+          DEPLOY_SERVICE=${2:?}
           if [ -f "$DEPLOY_DIR/compose.yml" ]; then
             compose_file="compose.yml"
           elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
@@ -965,11 +997,26 @@ jobs:
           docker save "$IMAGE_SHA" "$IMAGE_LATEST" \
             | ssh "${ssh_opts[@]}" redlaunch@"$DEPLOY_HOST" 'docker load'
 
-          DEPLOY_DIR="$DEPLOY_DIR" DEPLOY_SERVICE="$DEPLOY_SERVICE" \
-          ssh "${ssh_opts[@]}" redlaunch@"$DEPLOY_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+          # Validate locally, then pass values as remote argv with shell
+          # escaping (same reason as Recipe 3: ssh does not forward env).
+          case "$DEPLOY_DIR" in
+            /*) ;;
+            *) echo "REDLAUNCH_APP_DIR must be an absolute path" >&2; exit 1 ;;
+          esac
+          case "$DEPLOY_DIR" in
+            *$'\n'*|*'..'*) echo "REDLAUNCH_APP_DIR is invalid" >&2; exit 1 ;;
+          esac
+          case "$DEPLOY_SERVICE" in
+            '') echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+            *[!A-Za-z0-9_.-]*) echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+            [A-Za-z0-9]*) ;;
+            *) echo "DEPLOY_SERVICE is invalid" >&2; exit 1 ;;
+          esac
+          remote_cmd=$(printf 'bash -s -- %q %q' "$DEPLOY_DIR" "$DEPLOY_SERVICE")
+          ssh "${ssh_opts[@]}" redlaunch@"$DEPLOY_HOST" "$remote_cmd" <<'REMOTE_SCRIPT'
           set -euo pipefail
-          DEPLOY_DIR="${DEPLOY_DIR:?}"
-          DEPLOY_SERVICE="${DEPLOY_SERVICE:?}"
+          DEPLOY_DIR=${1:?}
+          DEPLOY_SERVICE=${2:?}
           if [ -f "$DEPLOY_DIR/compose.yml" ]; then
             compose_file="compose.yml"
           elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
