@@ -6081,6 +6081,8 @@ func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 		`<h2 id="registry-images-title">Pushed images</h2>`,
 		`registry-repository-group`,
 		`registry-repository-summary`,
+		`registry-meta-badge`,
+		`Keep 5`,
 		`Last pushed`,
 		`>Tag</th>`,
 		`>Digest</th>`,

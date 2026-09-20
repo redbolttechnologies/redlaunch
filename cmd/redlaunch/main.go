@@ -147,7 +147,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create registry service: %w", err)
 	}
-	registry.SetRetentionStore(database)
 
 	serverSSHKeys, err := service.NewServerSSHKeyService(
 		cfg.ProjectsRoot,

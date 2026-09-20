@@ -28,9 +28,17 @@
   {{if .RegistryPage.Unavailable}}
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="registry-images-title">Pushed images</h2>
-        <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m4 7 8-4 8 4v10l-8 4-8-4V7Z"></path>
+            <path d="m4 7 8 4 8-4M12 11v10"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2 id="registry-images-title">Pushed images</h2>
+          <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+        </div>
       </div>
     </header>
     <div class="service-widget-body">
@@ -40,69 +48,57 @@
     </div>
   </section>
   {{else}}
-  <section class="service-widget registry-retention-widget" aria-labelledby="registry-retention-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="registry-retention-title">Retention</h2>
-        <p>Keep the most recent images per repository. Use 0 for unlimited. Maximum 100.</p>
-      </div>
-    </header>
-    <div class="service-widget-body">
-      <form method="post" action="/registry/retention/default" class="service-form">
-        <input type="hidden" name="csrf_token" value="{{.RegistryPage.CSRFToken}}">
-        <label for="registry-default-keep">Default keep count</label>
-        <input id="registry-default-keep" name="keep_count" type="number" min="0" max="100" step="1" value="{{.RegistryPage.DefaultKeep}}" inputmode="numeric" required>
-        <button type="submit" class="button button-secondary">Save default</button>
-      </form>
-      <p class="service-widget-hint">Applies to repositories without an override. Deployed tags are always kept and do not count toward the keep number. Blob space is reclaimed with registry garbage-collect.</p>
-    </div>
-  </section>
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="registry-images-title">Pushed images</h2>
-        <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m4 7 8-4 8 4v10l-8 4-8-4V7Z"></path>
+            <path d="m4 7 8 4 8-4M12 11v10"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2 id="registry-images-title">Pushed images</h2>
+          <p>Tags pushed through an SSH tunnel to <code>localhost:5000</code>. Use <code>localhost:5000/&lt;repository&gt;:&lt;tag&gt;</code> as the image reference.</p>
+        </div>
       </div>
     </header>
     <div class="service-widget-body">
       {{if .RegistryPage.Groups}}
       <div class="registry-repository-list" role="list" aria-label="Repositories">
-      {{range .RegistryPage.Groups}}
-      {{$group := .}}
+      {{range $index, $group := .RegistryPage.Groups}}
       <details class="registry-repository-group" aria-label="Repository {{$group.Repository}}">
         <summary class="registry-repository-summary">
           <svg class="registry-repository-chevron" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="m6 9 6 6 6-6"></path>
           </svg>
-          <span class="registry-repository-title">
-            <code class="registry-repository-name" title="{{$group.Repository}}">{{$group.Repository}}</code>
-            <span class="registry-repository-meta">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}{{if $.RegistryPage.RetentionAvailable}} · Keep {{if eq $group.EffectiveKeep 0}}unlimited{{else}}{{$group.EffectiveKeep}}{{end}}{{end}}</span>
+          <code class="registry-repository-name" title="{{$group.Repository}}">{{$group.Repository}}</code>
+          <span class="registry-summary-badges">
+            <span class="registry-meta-badge">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}</span>
+            <span class="registry-meta-badge">Keep {{if eq $group.EffectiveKeep 0}}unlimited{{else}}{{$group.EffectiveKeep}}{{end}}</span>
+            <span class="registry-meta-badge registry-meta-badge-pushed">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 7v5l3 2"></path>
+              </svg>
+              <span>Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
+            </span>
           </span>
-          <span class="registry-repository-pushed">Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
         </summary>
         <div class="registry-repository-details">
-        {{if $.RegistryPage.RetentionAvailable}}
-        <form method="post" action="/registry/retention/repository" class="service-form service-form-inline">
-          <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
-          <input type="hidden" name="repository" value="{{$group.Repository}}">
-          <label for="registry-keep-{{$group.Repository}}">Keep for this repository</label>
-          <input id="registry-keep-{{$group.Repository}}" name="keep_count" type="number" min="0" max="100" step="1" value="{{if $group.HasOverride}}{{$group.OverrideKeep}}{{else}}{{$group.EffectiveKeep}}{{end}}" inputmode="numeric" required>
-          <button type="submit" class="button button-secondary">Save</button>
-          {{if $group.HasOverride}}
-          <button type="submit" name="reset" value="1" class="button button-ghost">Use default</button>
-          {{end}}
-        </form>
         {{if $group.PurgeCandidates}}
-        <p class="service-widget-hint">{{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}} would be purged: {{range $index, $image := $group.PurgeCandidates}}{{if $index}}, {{end}}<code>{{$image.Tag}}</code>{{end}}.</p>
-        <form method="post" action="/registry/purge" class="service-form service-form-inline" onsubmit="return confirm('Purge {{len $group.PurgeCandidates}} older images from {{$group.Repository}}? Deployed tags are kept.');">
-          <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
-          <input type="hidden" name="repository" value="{{$group.Repository}}">
-          <input type="hidden" name="confirm" value="purge">
-          <button type="submit" class="button button-destructive">Purge {{len $group.PurgeCandidates}} older images</button>
-        </form>
+        <p class="service-widget-hint">{{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}} would be purged: {{range $tagIndex, $image := $group.PurgeCandidates}}{{if $tagIndex}}, {{end}}<code>{{$image.Tag}}</code>{{end}}.</p>
+        <div class="registry-purge-actions">
+          <button class="button button-secondary registry-purge-button" type="button" data-registry-purge-open aria-controls="registry-purge-dialog-{{$index}}" aria-haspopup="dialog" aria-expanded="false">Purge {{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}}</button>
+        </div>
         {{else}}
-        <p class="service-widget-hint">Nothing to purge. The newest images and deployed tags are kept.</p>
-        {{end}}
+        <div class="registry-info-banner" role="status">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M12 11v5M12 8h.01"></path>
+          </svg>
+          <span>Nothing to purge. The newest images and deployed tags are kept.</span>
+        </div>
         {{end}}
         {{if $group.Images}}
         <div class="service-environment-table-wrap">
@@ -119,19 +115,55 @@
               {{range $group.Images}}
               {{$image := .}}
               <tr>
-                <td><code>{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="service-type-badge">deployed</span>{{end}}</td>
-                <td><code{{if $image.Digest}} title="{{$image.Digest}}"{{end}}>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
-                <td><time{{if registryPushedAtISO $image}} datetime="{{registryPushedAtISO $image}}" title="{{registryPushedAtTitle $image}}"{{end}}>{{registryPushedAt $image}}</time></td>
+                <td class="registry-tag-cell"><code class="registry-tag-name">{{$image.Tag}}</code>{{if index $group.ProtectedTags $image.Tag}} <span class="service-type-badge">deployed</span>{{end}}</td>
+                <td class="registry-digest-cell"><code{{if $image.Digest}} title="{{$image.Digest}}"{{end}}>{{if $image.Digest}}{{$image.Digest}}{{else}}—{{end}}</code></td>
+                <td class="registry-created-cell"><time{{if registryPushedAtISO $image}} datetime="{{registryPushedAtISO $image}}" title="{{registryPushedAtTitle $image}}"{{end}}>{{registryPushedAt $image}}</time></td>
               </tr>
               {{end}}
             </tbody>
           </table>
         </div>
         {{else}}
-        <p class="service-widget-hint">No tags in this repository. The override can be removed with Use default.</p>
+        <p class="service-widget-hint">No tags in this repository.</p>
         {{end}}
         </div>
       </details>
+      <dialog class="application-dialog registry-purge-dialog" id="registry-purge-dialog-{{$index}}" data-registry-purge-dialog{{with $.RegistryPage.PurgeDialog}}{{if and .Open (eq .Repository $group.Repository)}} data-registry-purge-open-dialog{{end}}{{end}} aria-modal="true" aria-labelledby="registry-purge-dialog-title-{{$index}}" aria-describedby="registry-purge-dialog-description-{{$index}}">
+        <div class="application-dialog-panel">
+          <header class="application-dialog-header">
+            <div>
+              <h2 id="registry-purge-dialog-title-{{$index}}">Purge images</h2>
+              <p id="registry-purge-dialog-description-{{$index}}">Remove older tags from <code>{{$group.Repository}}</code>. Deployed tags are always kept.</p>
+            </div>
+            <button class="icon-button" type="button" data-registry-purge-close aria-label="Close purge images dialog">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 6 12 12M18 6 6 18"></path>
+              </svg>
+            </button>
+          </header>
+
+          <form class="application-form" method="post" action="/registry/purge">
+            <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
+            <input type="hidden" name="repository" value="{{$group.Repository}}">
+            {{with $.RegistryPage.PurgeDialog}}
+            {{if and .Open (eq .Repository $group.Repository)}}
+            {{if .Error}}
+            <div class="application-alert application-dialog-alert" role="alert"><span>{{.Error}}</span></div>
+            {{end}}
+            {{end}}
+            {{end}}
+            <div class="field">
+              <label for="registry-purge-keep-{{$index}}">Keep the N recent images</label>
+              <input id="registry-purge-keep-{{$index}}" name="keep_count" type="number" min="0" max="100" step="1" value="{{with $.RegistryPage.PurgeDialog}}{{if and .Open (eq .Repository $group.Repository)}}{{.Keep}}{{else}}5{{end}}{{else}}5{{end}}" inputmode="numeric" required data-registry-purge-keep>
+              <span class="field-help">Keep the most recent images. Use 0 for unlimited. Maximum 100. Run registry garbage-collect on the server to reclaim blob space.</span>
+            </div>
+            <footer class="application-form-actions">
+              <button class="button button-secondary" type="button" data-registry-purge-close>Cancel</button>
+              <button class="button button-destructive" type="submit" data-registry-purge-submit>Purge images</button>
+            </footer>
+          </form>
+        </div>
+      </dialog>
       {{end}}
       </div>
       {{else if .RegistryPage.Images}}

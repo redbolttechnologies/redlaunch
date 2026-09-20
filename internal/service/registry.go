@@ -27,24 +27,12 @@ type RegistryTagDeleter interface {
 	DeleteRegistryTag(context.Context, string, string, string) error
 }
 
-// RegistryRetentionStore persists the global default and per-repository keep
-// overrides for registry retention.
-type RegistryRetentionStore interface {
-	GetRegistryDefaultKeep(context.Context) (int, error)
-	SetRegistryDefaultKeep(context.Context, int) error
-	ListRegistryRetentionPolicies(context.Context) ([]application.RegistryRetentionPolicy, error)
-	GetRegistryRetentionPolicy(context.Context, string) (int, bool, error)
-	SetRegistryRetentionPolicy(context.Context, string, int) error
-	DeleteRegistryRetentionPolicy(context.Context, string) error
-}
-
 // RegistryService lists the images previously pushed to the managed local
 // image registry for the Registry page.
 type RegistryService struct {
 	container string
 	runner    RegistryContentLister
 	deleter   RegistryTagDeleter
-	retention RegistryRetentionStore
 }
 
 // NewRegistryService constructs a registry service for the given managed
@@ -64,16 +52,6 @@ func NewRegistryService(container string, runner RegistryContentLister) (*Regist
 		service.deleter = deleter
 	}
 	return service, nil
-}
-
-// SetRetentionStore supplies the SQLite-backed retention policies. It is
-// optional so existing callers and tests without a database keep working for
-// read-only listing.
-func (s *RegistryService) SetRetentionStore(store RegistryRetentionStore) {
-	if s == nil {
-		return
-	}
-	s.retention = store
 }
 
 // SetTagDeleter overrides the delete adapter, primarily for tests.
@@ -117,95 +95,22 @@ func (s *RegistryService) ListRegistryImages(ctx context.Context) ([]application
 	return images, nil
 }
 
-// GetDefaultKeep returns the global retention default, falling back to the
-// application default when no store is configured.
-func (s *RegistryService) GetDefaultKeep(ctx context.Context) (int, error) {
-	if s.retention == nil {
-		return application.DefaultRegistryKeepCount, nil
-	}
-	return s.retention.GetRegistryDefaultKeep(ctx)
-}
-
-// SetDefaultKeep persists the global retention default. Zero means unlimited.
-func (s *RegistryService) SetDefaultKeep(ctx context.Context, keep int) error {
-	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return err
-	}
-	if s.retention == nil {
-		return errors.New("registry retention store is not configured")
-	}
-	return s.retention.SetRegistryDefaultKeep(ctx, keep)
-}
-
-// ListRetentionPolicies returns per-repository overrides in repository order.
-func (s *RegistryService) ListRetentionPolicies(ctx context.Context) ([]application.RegistryRetentionPolicy, error) {
-	if s.retention == nil {
-		return nil, nil
-	}
-	return s.retention.ListRegistryRetentionPolicies(ctx)
-}
-
-// SetRepositoryKeep creates or updates one repository override. Zero means
-// unlimited for that repository.
-func (s *RegistryService) SetRepositoryKeep(ctx context.Context, repository string, keep int) error {
-	repository, err := application.ValidateRegistryRepository(repository)
-	if err != nil {
-		return err
-	}
-	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return err
-	}
-	if s.retention == nil {
-		return errors.New("registry retention store is not configured")
-	}
-	return s.retention.SetRegistryRetentionPolicy(ctx, repository, keep)
-}
-
-// DeleteRepositoryKeep removes one repository override so the global default
-// applies again.
-func (s *RegistryService) DeleteRepositoryKeep(ctx context.Context, repository string) error {
-	repository, err := application.ValidateRegistryRepository(repository)
-	if err != nil {
-		return err
-	}
-	if s.retention == nil {
-		return errors.New("registry retention store is not configured")
-	}
-	return s.retention.DeleteRegistryRetentionPolicy(ctx, repository)
-}
-
-// effectiveKeepFor resolves the keep count for one repository.
-func (s *RegistryService) effectiveKeepFor(ctx context.Context, repository string) (int, error) {
-	defaultKeep := application.DefaultRegistryKeepCount
-	policies := map[string]int{}
-	if s.retention != nil {
-		storedDefault, err := s.retention.GetRegistryDefaultKeep(ctx)
-		if err != nil {
-			return 0, err
-		}
-		defaultKeep = storedDefault
-		stored, err := s.retention.ListRegistryRetentionPolicies(ctx)
-		if err != nil {
-			return 0, err
-		}
-		for _, policy := range stored {
-			policies[policy.Repository] = policy.KeepCount
-		}
-	}
-	return application.EffectiveRegistryKeep(defaultKeep, policies, repository), nil
-}
-
 // PlanRepositoryPurge lists one repository's images and splits them into kept
-// and purge candidates without deleting anything. Protected references (for
-// example currently deployed tags) are always kept.
-func (s *RegistryService) PlanRepositoryPurge(ctx context.Context, repository string, protected map[string]bool) (kept, purge []application.RegistryImage, effectiveKeep int, err error) {
+// and purge candidates without deleting anything. The keep count is supplied
+// per purge request: keep the N most recent images, 0 for unlimited.
+// Protected references (for example currently deployed tags) are always kept
+// and do not consume the keep quota.
+func (s *RegistryService) PlanRepositoryPurge(ctx context.Context, repository string, keep int, protected map[string]bool) (kept, purge []application.RegistryImage, err error) {
 	repository, err = application.ValidateRegistryRepository(repository)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
+	}
+	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
+		return nil, nil, err
 	}
 	images, err := s.ListRegistryImages(ctx)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
 	repositoryImages := make([]application.RegistryImage, 0)
 	for _, image := range images {
@@ -213,29 +118,28 @@ func (s *RegistryService) PlanRepositoryPurge(ctx context.Context, repository st
 			repositoryImages = append(repositoryImages, image)
 		}
 	}
-	effectiveKeep, err = s.effectiveKeepFor(ctx, repository)
+	kept, purge, err = application.PlanRegistryPurge(repositoryImages, keep, protected)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, err
 	}
-	kept, purge, err = application.PlanRegistryPurge(repositoryImages, effectiveKeep, protected)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	return kept, purge, effectiveKeep, nil
+	return kept, purge, nil
 }
 
 // PurgeRepository deletes a repository's purge candidates as computed by
-// PlanRepositoryPurge. Protected references are never deleted. It returns the
-// deleted tags in purge order.
-func (s *RegistryService) PurgeRepository(ctx context.Context, repository string, protected map[string]bool) ([]application.RegistryImage, error) {
+// PlanRepositoryPurge for the supplied keep count. Protected references are
+// never deleted. It returns the deleted tags in purge order.
+func (s *RegistryService) PurgeRepository(ctx context.Context, repository string, keep int, protected map[string]bool) ([]application.RegistryImage, error) {
 	repository, err := application.ValidateRegistryRepository(repository)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
 		return nil, err
 	}
 	if s.deleter == nil {
 		return nil, errors.New("registry delete adapter is not configured")
 	}
-	_, purge, _, err := s.PlanRepositoryPurge(ctx, repository, protected)
+	_, purge, err := s.PlanRepositoryPurge(ctx, repository, keep, protected)
 	if err != nil {
 		return nil, err
 	}

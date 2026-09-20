@@ -678,8 +678,6 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /proxy/restart", h.restartProxy)
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /registry", h.registryPage)
-	mux.HandleFunc("POST /registry/retention/default", h.setRegistryDefaultKeep)
-	mux.HandleFunc("POST /registry/retention/repository", h.setRegistryRepositoryKeep)
 	mux.HandleFunc("POST /registry/purge", h.purgeRegistryRepository)
 	mux.HandleFunc("GET /applications/{id}", h.applicationDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/import", h.importDockerComposeProject)
@@ -4832,26 +4830,32 @@ type registryPageData struct {
 	Error       string
 	Notice      string
 	CSRFToken   string
-	DefaultKeep int
-	// RetentionAvailable reports whether per-repository retention settings
-	// can be edited. Read-only image services still get grouped display
-	// rows without the retention forms.
-	RetentionAvailable bool
-	Groups             []registryRepositoryGroup
+	Groups      []registryRepositoryGroup
+	// PurgeDialog reopens one repository purge dialog with a validation
+	// error after a failed purge request.
+	PurgeDialog *registryPurgeDialogData
 }
 
-// registryRepositoryGroup is one repository section on the Registry page with
-// its effective keep setting and manual purge preview. LatestPushedAt is the
-// newest tag push time in Images and renders the repository summary row.
+// registryRepositoryGroup is one repository section on the Registry page.
+// LatestPushedAt is the newest tag push time in Images and renders the
+// repository summary row. EffectiveKeep and PurgeCandidates are a
+// display-only preview computed with the default keep count; the actual
+// purge uses the keep count entered in the purge dialog.
 type registryRepositoryGroup struct {
 	Repository      string
 	Images          []application.RegistryImage
-	EffectiveKeep   int
-	HasOverride     bool
-	OverrideKeep    int
-	PurgeCandidates []application.RegistryImage
 	ProtectedTags   map[string]bool
 	LatestPushedAt  time.Time
+	EffectiveKeep   int
+	PurgeCandidates []application.RegistryImage
+}
+
+// registryPurgeDialogData carries the state for one repository purge dialog.
+type registryPurgeDialogData struct {
+	Open       bool
+	Repository string
+	Keep       int
+	Error      string
 }
 
 type settingsPageData struct {

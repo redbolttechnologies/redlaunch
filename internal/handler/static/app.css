@@ -2793,15 +2793,14 @@ h1 {
   transform: rotate(180deg);
 }
 
-.registry-repository-title {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 0;
-  min-width: 0;
+.registry-repository-group[open] .registry-repository-summary {
+  background: hsl(var(--muted) / 0.45);
 }
 
 .registry-repository-name {
+  flex: 0 1 auto;
   overflow: hidden;
+  min-width: 0;
   color: hsl(var(--foreground));
   font-size: 0.8125rem;
   font-weight: 600;
@@ -2809,33 +2808,98 @@ h1 {
   white-space: nowrap;
 }
 
-.registry-repository-meta {
-  overflow: hidden;
+.registry-summary-badges {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.registry-meta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.125rem var(--space-2);
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 0.125rem);
   color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.55);
   font-size: 0.75rem;
-  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
   white-space: nowrap;
 }
 
-.registry-repository-pushed {
-  margin-left: auto;
+.registry-meta-badge svg {
   flex: 0 0 auto;
-  padding-left: var(--space-3);
-  color: hsl(var(--muted-foreground));
-  font-size: 0.75rem;
+}
+
+.registry-meta-badge time {
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .registry-repository-details {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: var(--space-4);
   border-top: 1px solid hsl(var(--border));
 }
 
+.registry-info-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 0.125rem);
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent) / 0.6);
+  font-size: 0.8125rem;
+}
+
+.registry-info-banner svg {
+  flex: 0 0 auto;
+  margin-top: 0.125rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.registry-purge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.registry-purge-button {
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
 .registry-images-table td code {
   overflow-wrap: anywhere;
+}
+
+.registry-tag-cell .registry-tag-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.registry-digest-cell {
+  max-width: 24rem;
+}
+
+.registry-digest-cell code {
+  display: block;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registry-created-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .routing-table {
@@ -4105,17 +4169,19 @@ h1 {
 
   .registry-repository-summary {
     flex-wrap: wrap;
-    row-gap: var(--space-1);
+    row-gap: var(--space-2);
   }
 
-  .registry-repository-title {
-    flex: 1 1 12rem;
+  .registry-repository-name {
+    flex: 1 1 100%;
   }
 
-  .registry-repository-pushed {
-    width: 100%;
-    margin-left: 0;
-    padding-left: 0;
+  .registry-summary-badges {
+    flex: 1 1 100%;
+  }
+
+  .registry-digest-cell {
+    max-width: none;
   }
 
   .registry-repository-details {

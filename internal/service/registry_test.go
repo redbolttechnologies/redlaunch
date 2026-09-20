@@ -37,50 +37,6 @@ func (s *stubRegistryDeleter) DeleteRegistryTag(_ context.Context, _, repository
 	return nil
 }
 
-type stubRetentionStore struct {
-	defaultKeep int
-	policies    map[string]int
-}
-
-func newStubRetentionStore(defaultKeep int) *stubRetentionStore {
-	return &stubRetentionStore{defaultKeep: defaultKeep, policies: map[string]int{}}
-}
-
-func (s *stubRetentionStore) GetRegistryDefaultKeep(context.Context) (int, error) {
-	return s.defaultKeep, nil
-}
-
-func (s *stubRetentionStore) SetRegistryDefaultKeep(_ context.Context, keep int) error {
-	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return err
-	}
-	s.defaultKeep = keep
-	return nil
-}
-
-func (s *stubRetentionStore) ListRegistryRetentionPolicies(context.Context) ([]application.RegistryRetentionPolicy, error) {
-	policies := make([]application.RegistryRetentionPolicy, 0, len(s.policies))
-	for repository, keep := range s.policies {
-		policies = append(policies, application.RegistryRetentionPolicy{Repository: repository, KeepCount: keep})
-	}
-	return policies, nil
-}
-
-func (s *stubRetentionStore) GetRegistryRetentionPolicy(_ context.Context, repository string) (int, bool, error) {
-	keep, ok := s.policies[repository]
-	return keep, ok, nil
-}
-
-func (s *stubRetentionStore) SetRegistryRetentionPolicy(_ context.Context, repository string, keep int) error {
-	s.policies[repository] = keep
-	return nil
-}
-
-func (s *stubRetentionStore) DeleteRegistryRetentionPolicy(_ context.Context, repository string) error {
-	delete(s.policies, repository)
-	return nil
-}
-
 func TestNewRegistryServiceRequiresContainer(t *testing.T) {
 	if _, err := NewRegistryService("  ", nil); err == nil {
 		t.Fatal("NewRegistryService() error = nil, want container name error")
@@ -152,12 +108,11 @@ func TestRegistryServicePurgeKeepsNewestAndProtectsDeployed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.SetRetentionStore(newStubRetentionStore(1))
 	deleter := &stubRegistryDeleter{}
 	registry.SetTagDeleter(deleter)
 
 	protected := map[string]bool{application.RegistryImageKey("acme-app", "oldest"): true}
-	purged, err := registry.PurgeRepository(t.Context(), "acme-app", protected)
+	purged, err := registry.PurgeRepository(t.Context(), "acme-app", 1, protected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +124,7 @@ func TestRegistryServicePurgeKeepsNewestAndProtectsDeployed(t *testing.T) {
 	}
 }
 
-func TestRegistryServicePurgeRespectsPerRepositoryOverride(t *testing.T) {
+func TestRegistryServicePurgeUsesExplicitKeepCount(t *testing.T) {
 	now := time.Now()
 	runner := &stubRegistryContentLister{contents: []compose.RegistryContent{
 		{Repository: "acme-app", Tag: "a", Digest: "sha256:aaaa", PushedAt: now.Add(-2 * time.Hour)},
@@ -179,17 +134,26 @@ func TestRegistryServicePurgeRespectsPerRepositoryOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := newStubRetentionStore(5)
-	store.policies["acme-app"] = 3
-	registry.SetRetentionStore(store)
 	deleter := &stubRegistryDeleter{}
 	registry.SetTagDeleter(deleter)
-	purged, err := registry.PurgeRepository(t.Context(), "acme-app", nil)
+	purged, err := registry.PurgeRepository(t.Context(), "acme-app", 3, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(purged) != 0 {
 		t.Fatalf("PurgeRepository() = %#v, want no purge with keep=3", purged)
+	}
+}
+
+func TestRegistryServicePurgeRejectsInvalidKeepCount(t *testing.T) {
+	runner := &stubRegistryContentLister{contents: []compose.RegistryContent{}}
+	registry, err := NewRegistryService(RegistryContainerName, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.SetTagDeleter(&stubRegistryDeleter{})
+	if _, err := registry.PurgeRepository(t.Context(), "acme-app", 101, nil); !errors.Is(err, application.ErrRegistryKeepInvalid) {
+		t.Fatalf("PurgeRepository() error = %v, want %v", err, application.ErrRegistryKeepInvalid)
 	}
 }
 
@@ -199,8 +163,7 @@ func TestRegistryServicePurgeRequiresDeleter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.SetRetentionStore(newStubRetentionStore(5))
-	if _, err := registry.PurgeRepository(t.Context(), "acme-app", nil); err == nil {
+	if _, err := registry.PurgeRepository(t.Context(), "acme-app", 5, nil); err == nil {
 		t.Fatal("PurgeRepository() error = nil, want missing deleter error")
 	}
 }
