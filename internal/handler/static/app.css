@@ -2745,6 +2745,12 @@ h1 {
   box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
 }
 
+.registry-page {
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+}
+
 .registry-repository-list {
   display: grid;
   gap: var(--space-2);
