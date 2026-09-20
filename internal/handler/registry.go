@@ -95,7 +95,6 @@ func groupRegistryImages(images []application.RegistryImage, protected map[strin
 			Images:          repositoryImages,
 			ProtectedTags:   protectedTags,
 			LatestPushedAt:  latestRegistryPushedAt(repositoryImages),
-			EffectiveKeep:   application.DefaultRegistryKeepCount,
 			PurgeCandidates: purge,
 		})
 	}

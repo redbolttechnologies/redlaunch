@@ -6082,7 +6082,7 @@ func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 		`registry-repository-group`,
 		`registry-repository-summary`,
 		`registry-meta-badge`,
-		`Keep 5`,
+		`>Purge</button>`,
 		`Last pushed`,
 		`>Tag</th>`,
 		`>Digest</th>`,

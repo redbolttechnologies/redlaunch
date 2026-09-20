@@ -75,7 +75,6 @@
           <code class="registry-repository-name" title="{{$group.Repository}}">{{$group.Repository}}</code>
           <span class="registry-summary-badges">
             <span class="registry-meta-badge">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}</span>
-            <span class="registry-meta-badge">Keep {{if eq $group.EffectiveKeep 0}}unlimited{{else}}{{$group.EffectiveKeep}}{{end}}</span>
             <span class="registry-meta-badge registry-meta-badge-pushed">
               <svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="9"></circle>
@@ -84,21 +83,13 @@
               <span>Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
             </span>
           </span>
+          <span class="registry-repository-actions">
+            <button class="button button-secondary registry-purge-button" type="button" data-registry-purge-open aria-controls="registry-purge-dialog-{{$index}}" aria-haspopup="dialog" aria-expanded="false">Purge</button>
+          </span>
         </summary>
         <div class="registry-repository-details">
         {{if $group.PurgeCandidates}}
         <p class="service-widget-hint">{{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}} would be purged: {{range $tagIndex, $image := $group.PurgeCandidates}}{{if $tagIndex}}, {{end}}<code>{{$image.Tag}}</code>{{end}}.</p>
-        <div class="registry-purge-actions">
-          <button class="button button-secondary registry-purge-button" type="button" data-registry-purge-open aria-controls="registry-purge-dialog-{{$index}}" aria-haspopup="dialog" aria-expanded="false">Purge {{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}}</button>
-        </div>
-        {{else}}
-        <div class="registry-info-banner" role="status">
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="9"></circle>
-            <path d="M12 11v5M12 8h.01"></path>
-          </svg>
-          <span>Nothing to purge. The newest images and deployed tags are kept.</span>
-        </div>
         {{end}}
         {{if $group.Images}}
         <div class="service-environment-table-wrap">

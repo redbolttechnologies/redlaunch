@@ -95,10 +95,10 @@ func TestRegistryGroupsWithBadgesBannerAndDialog(t *testing.T) {
 	for _, expected := range []string{
 		`acme-app`,
 		`3 tags`,
-		`Keep 5`,
 		`registry-meta-badge`,
-		`Nothing to purge. The newest images and deployed tags are kept.`,
-		`registry-info-banner`,
+		`registry-repository-actions`,
+		`>Purge</button>`,
+		`data-registry-purge-open`,
 		`registry-purge-dialog-0`,
 		`Keep the N recent images`,
 		`name="keep_count"`,
@@ -122,7 +122,9 @@ func TestRegistryGroupsWithBadgesBannerAndDialog(t *testing.T) {
 		`Keep for this repository`,
 		`Use default`,
 		`/registry/retention/`,
-		`registry-repository-actions`,
+		`Keep 5`,
+		`Nothing to purge`,
+		`registry-info-banner`,
 	} {
 		if strings.Contains(body, unexpected) {
 			t.Fatalf("GET /registry should not render retention setting %q", unexpected)
@@ -157,18 +159,23 @@ func TestRegistryGroupsWithPurgeCandidatesShowInlinePurgeButton(t *testing.T) {
 	body := recorder.Body.String()
 	for _, expected := range []string{
 		`7 tags`,
-		`Keep 5`,
 		`2 older images would be purged`,
-		`Purge 2 older images`,
+		`>Purge</button>`,
 		`data-registry-purge-open`,
-		`registry-purge-actions`,
+		`registry-repository-actions`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /registry did not render %q", expected)
 		}
 	}
-	if strings.Contains(body, "Nothing to purge") {
-		t.Fatalf("GET /registry should not render the empty purge banner when candidates exist: %s", body)
+	for _, unexpected := range []string{
+		`Nothing to purge`,
+		`registry-info-banner`,
+		`Keep 5`,
+	} {
+		if strings.Contains(body, unexpected) {
+			t.Fatalf("GET /registry should not render %q", unexpected)
+		}
 	}
 }
 

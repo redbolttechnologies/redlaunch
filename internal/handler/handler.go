@@ -4838,15 +4838,14 @@ type registryPageData struct {
 
 // registryRepositoryGroup is one repository section on the Registry page.
 // LatestPushedAt is the newest tag push time in Images and renders the
-// repository summary row. EffectiveKeep and PurgeCandidates are a
-// display-only preview computed with the default keep count; the actual
-// purge uses the keep count entered in the purge dialog.
+// repository summary row. PurgeCandidates is a display-only preview computed
+// with the default keep count; the actual purge uses the keep count entered
+// in the purge dialog.
 type registryRepositoryGroup struct {
 	Repository      string
 	Images          []application.RegistryImage
 	ProtectedTags   map[string]bool
 	LatestPushedAt  time.Time
-	EffectiveKeep   int
 	PurgeCandidates []application.RegistryImage
 }
 
