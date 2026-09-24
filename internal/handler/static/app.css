@@ -1472,13 +1472,32 @@ h1 {
   background: hsl(var(--accent));
 }
 
-.service-split-options li a {
+.service-split-options li a,
+.service-split-options li .service-split-more {
   display: flex;
   width: 100%;
   align-items: center;
   gap: var(--space-3);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: inherit;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
   text-decoration: none;
+  text-transform: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.service-split-options li .service-split-more:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.35);
 }
 
 .service-split-separator {
@@ -1490,19 +1509,6 @@ h1 {
 
 .service-split-separator:hover {
   background: transparent !important;
-}
-
-.service-split-more {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0;
-  border: 0;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
 }
 
 .service-table-actions {
@@ -4387,10 +4393,13 @@ h1 {
 
 .service-catalog-dialog {
   width: min(calc(100% - var(--space-8)), 48rem);
+  overflow: hidden;
 }
 
 .service-catalog-dialog .application-dialog-panel {
   max-width: 48rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .service-catalog-filters {
