@@ -21,19 +21,19 @@ func TestServiceSSHTunnelCommands(t *testing.T) {
 			name:     "single published port",
 			ports:    "0.0.0.0:8080->80/tcp",
 			ip:       "203.0.113.10",
-			expected: []string{"ssh -L 8080:localhost:8080 root@203.0.113.10"},
+			expected: []string{"ssh -N -L 8080:localhost:8080 root@203.0.113.10"},
 		},
 		{
 			name:     "dual stack deduplicates host port",
 			ports:    "0.0.0.0:8080->80/tcp, :::8080->80/tcp",
 			ip:       "203.0.113.10",
-			expected: []string{"ssh -L 8080:localhost:8080 root@203.0.113.10"},
+			expected: []string{"ssh -N -L 8080:localhost:8080 root@203.0.113.10"},
 		},
 		{
 			name:     "multiple published ports",
 			ports:    "0.0.0.0:8080->80/tcp, 0.0.0.0:5432->5432/tcp",
 			ip:       "203.0.113.10",
-			expected: []string{"ssh -L 8080:localhost:8080 root@203.0.113.10", "ssh -L 5432:localhost:5432 root@203.0.113.10"},
+			expected: []string{"ssh -N -L 8080:localhost:8080 root@203.0.113.10", "ssh -N -L 5432:localhost:5432 root@203.0.113.10"},
 		},
 		{
 			name:     "exposed without host binding",
@@ -92,7 +92,7 @@ func TestServiceDetailsRendersSSHTunnelCommand(t *testing.T) {
 		t.Fatalf("GET service details status = %d, want 200", recorder.Code)
 	}
 	body := recorder.Body.String()
-	expected := "ssh -L 8080:localhost:8080 root@203.0.113.10"
+	expected := "ssh -N -L 8080:localhost:8080 root@203.0.113.10"
 	for _, want := range []string{
 		`id="ssh-tunnel-title"`,
 		expected,
@@ -134,7 +134,7 @@ func TestServiceDetailsOmitsSSHTunnelWithoutPublishedPort(t *testing.T) {
 				t.Fatalf("GET service details status = %d, want 200", recorder.Code)
 			}
 			body := recorder.Body.String()
-			if strings.Contains(body, "ssh-tunnel-title") || strings.Contains(body, "ssh -L") {
+			if strings.Contains(body, "ssh-tunnel-title") || strings.Contains(body, "ssh -N -L") {
 				t.Fatalf("GET service details rendered an SSH tunnel for ports %q: %s", testCase.ports, body)
 			}
 		})

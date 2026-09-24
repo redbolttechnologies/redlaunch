@@ -4002,7 +4002,7 @@ func serviceSSHTunnelCommands(ports, ipAddress string) []string {
 	}
 	commands := make([]string, 0, len(hostPorts))
 	for _, hostPort := range hostPorts {
-		commands = append(commands, "ssh -L "+hostPort+":localhost:"+hostPort+" root@"+ipAddress)
+		commands = append(commands, "ssh -N -L "+hostPort+":localhost:"+hostPort+" root@"+ipAddress)
 	}
 	return commands
 }
