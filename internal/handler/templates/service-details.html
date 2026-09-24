@@ -217,6 +217,35 @@
       </dl>
     </div>
   </section>
+  {{$sshTunnels := serviceSSHTunnelCommands .ServiceDetailsPage.Details.Service.Ports .Server.IPAddress}}
+  {{if $sshTunnels}}
+  <section class="service-widget service-ssh-widget" aria-labelledby="ssh-tunnel-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect>
+            <path d="m7 9 2.5 2L7 13M11.5 13h4"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2 id="ssh-tunnel-title">SSH tunnel</h2>
+          <p>Access this service from your local machine over SSH.</p>
+        </div>
+      </div>
+    </header>
+    <div class="service-widget-body">
+      <div class="ssh-tunnel-list">
+        {{range $sshTunnels}}
+        <div class="ssh-tunnel-row">
+          <code>{{.}}</code>
+          <button class="button button-secondary" type="button" data-copy-value="{{.}}" aria-label="Copy SSH tunnel command" title="Copy SSH tunnel command"><span>Copy</span></button>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+  {{end}}
 </div>
 {{end}}
 

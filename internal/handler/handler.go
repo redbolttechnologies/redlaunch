@@ -298,6 +298,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"serviceCreatedAt":            serviceCreatedAtText,
 		"serviceCreatedAtISO":         serviceCreatedAtISO,
 		"serviceCreatedAtTitle":       serviceCreatedAtTitle,
+		"serviceSSHTunnelCommands":    serviceSSHTunnelCommands,
 		"proxyCreatedAt":              proxyCreatedAtText,
 		"proxyCreatedAtISO":           proxyCreatedAtISO,
 		"proxyCreatedAtTitle":         proxyCreatedAtTitle,
@@ -3946,6 +3947,64 @@ func serviceCreatedAtTitle(service application.Service) string {
 		return "Creation date unavailable"
 	}
 	return createdAt.Format("2006-01-02 15:04:05 MST")
+}
+
+func servicePublishedHostPorts(ports string) []string {
+	trimmed := strings.TrimSpace(ports)
+	if trimmed == "" {
+		return nil
+	}
+	var result []string
+	seen := make(map[string]struct{})
+	for _, part := range strings.Split(trimmed, ",") {
+		binding := strings.TrimSpace(part)
+		if binding == "" {
+			continue
+		}
+		arrow := strings.Index(binding, "->")
+		if arrow < 0 {
+			continue
+		}
+		published := strings.TrimSpace(binding[:arrow])
+		if published == "" {
+			continue
+		}
+		hostPort := published
+		if index := strings.LastIndex(published, ":"); index >= 0 {
+			hostPort = strings.TrimSpace(published[index+1:])
+		}
+		hostPort = strings.TrimSpace(hostPort)
+		if hostPort == "" {
+			continue
+		}
+		portNumber, err := strconv.Atoi(hostPort)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			continue
+		}
+		normalized := strconv.Itoa(portNumber)
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	return result
+}
+
+func serviceSSHTunnelCommands(ports, ipAddress string) []string {
+	ipAddress = strings.TrimSpace(ipAddress)
+	if ipAddress == "" {
+		return nil
+	}
+	hostPorts := servicePublishedHostPorts(ports)
+	if len(hostPorts) == 0 {
+		return nil
+	}
+	commands := make([]string, 0, len(hostPorts))
+	for _, hostPort := range hostPorts {
+		commands = append(commands, "ssh -L "+hostPort+":localhost:"+hostPort+" root@"+ipAddress)
+	}
+	return commands
 }
 
 func registryPushedAtText(image application.RegistryImage) string {

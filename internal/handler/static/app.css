@@ -2225,6 +2225,32 @@ h1 {
   color: hsl(var(--muted-foreground));
 }
 
+.ssh-tunnel-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ssh-tunnel-row {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+  align-items: center;
+}
+
+.ssh-tunnel-row code {
+  display: block;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
 .service-widget-empty {
   display: grid;
   min-height: 12rem;
