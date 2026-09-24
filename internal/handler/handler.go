@@ -291,6 +291,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	templates, err := template.New("redlaunch").Funcs(template.FuncMap{
 		"serviceTypeClass":            serviceTypeClass,
 		"serviceTypeLabel":            serviceTypeLabel,
+		"servicePresetCategoryLabel":  servicePresetCategoryLabel,
 		"serviceStatusClass":          serviceStatusClass,
 		"serviceIsRunning":            serviceIsRunning,
 		"serviceIsStopped":            serviceIsStopped,
@@ -1315,9 +1316,11 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 		}
 	}
 	return applicationDetailsPageData{
-		Application: item,
-		Services:    services,
-		Domains:     domains,
+		Application:             item,
+		Services:                services,
+		ServicePresets:          application.AllServicePresets(),
+		ServicePresetCategories: application.ServicePresetCategories(),
+		Domains:                 domains,
 		Variables: environmentFilePageData{
 			ID:              "variables",
 			ApplicationID:   item.ID,
@@ -3252,6 +3255,9 @@ func (h *Handler) applicationContainerPage(w http.ResponseWriter, r *http.Reques
 	}
 	data := newApplicationContainerPageData(item)
 	data.Services = services
+	if preset, ok := application.FindServicePreset(r.URL.Query().Get("preset")); ok {
+		applyServicePresetToContainerData(&data, preset)
+	}
 	h.writeApplicationContainerPage(w, r, http.StatusOK, data)
 }
 
@@ -3750,6 +3756,10 @@ func serviceTypeLabel(serviceType string) string {
 	default:
 		return "App"
 	}
+}
+
+func servicePresetCategoryLabel(category string) string {
+	return application.ServicePresetCategoryLabel(category)
 }
 
 func serviceStatusClass(status string) string {
@@ -4677,6 +4687,8 @@ type applicationPageData struct {
 type applicationDetailsPageData struct {
 	Application                       application.Application
 	Services                          []application.Service
+	ServicePresets                    []application.ServicePreset
+	ServicePresetCategories           []application.ServicePresetCategory
 	ImportError                       string
 	EnvironmentImportError            string
 	EnvironmentImportKind             string
@@ -4943,6 +4955,7 @@ type applicationContainerPageData struct {
 	RestartPolicy     string
 	PortMappings      []application.ApplicationPortMapping
 	VolumeMappings    []application.ApplicationVolumeMapping
+	Preset            *application.ServicePreset
 }
 
 type noSetupManager struct{}
@@ -5278,6 +5291,34 @@ func newApplicationContainerPageData(item application.Application) applicationCo
 		VolumeMappings: []application.ApplicationVolumeMapping{{
 			Options: "rw",
 		}},
+	}
+}
+
+// applyServicePresetToContainerData prefills the container form from a
+// catalog entry. The lookup already restricts values to the curated catalog,
+// and the POST path re-validates every field before touching Compose files.
+// Automatic startup stays off so a preset never starts a container the
+// operator has not reviewed.
+func applyServicePresetToContainerData(data *applicationContainerPageData, preset application.ServicePreset) {
+	presetCopy := preset
+	data.Preset = &presetCopy
+	data.ServiceName = preset.DefaultServiceName
+	data.ImageName = preset.Image
+	data.UseDockerRegistry = preset.UseDockerRegistry
+	data.AutoStart = false
+	data.Entrypoint = preset.Entrypoint
+	if preset.RestartPolicy != "" {
+		data.RestartPolicy = preset.RestartPolicy
+	}
+	if len(preset.PortMappings) > 0 {
+		mappings := make([]application.ApplicationPortMapping, len(preset.PortMappings))
+		copy(mappings, preset.PortMappings)
+		data.PortMappings = mappings
+	}
+	if len(preset.VolumeMappings) > 0 {
+		mappings := make([]application.ApplicationVolumeMapping, len(preset.VolumeMappings))
+		copy(mappings, preset.VolumeMappings)
+		data.VolumeMappings = mappings
 	}
 }
 

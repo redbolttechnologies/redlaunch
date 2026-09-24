@@ -88,6 +88,16 @@
                     <span>Application</span>
                   </a>
                 </li>
+                <li class="service-split-separator" aria-hidden="true"></li>
+                <li>
+                  <button class="service-split-more" type="button" data-service-catalog-trigger aria-controls="service-catalog-dialog" aria-haspopup="dialog" aria-expanded="false">
+                    <svg class="service-split-option-icon" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="11" cy="11" r="7"></circle>
+                      <path d="m21 21-4.3-4.3"></path>
+                    </svg>
+                    <span>More services...</span>
+                  </button>
+                </li>
               </ul>
             </details>
             </div>
@@ -388,6 +398,73 @@
         <button class="button button-primary" type="submit" data-compose-import-submit>Import project</button>
       </footer>
     </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog service-catalog-dialog" id="service-catalog-dialog" data-service-catalog-dialog aria-modal="true" aria-labelledby="service-catalog-dialog-title" aria-describedby="service-catalog-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="service-catalog-dialog-title">Add a service</h2>
+        <p id="service-catalog-dialog-description">Choose a preconfigured container. Fields stay editable on the next screen.</p>
+      </div>
+      <button class="icon-button" type="button" data-service-catalog-close aria-label="Close service catalog dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="field">
+      <label for="service-catalog-search">Search services</label>
+      <input id="service-catalog-search" type="search" placeholder="Search by name, description, or image..." autocomplete="off" autocapitalize="none" spellcheck="false" data-service-catalog-search>
+    </div>
+
+    <div class="service-catalog-filters" role="group" aria-label="Filter by category" data-service-catalog-filters>
+      <button class="button button-secondary service-catalog-filter" type="button" data-service-catalog-filter="all" aria-pressed="true">All</button>
+      {{range .ApplicationDetailsPage.ServicePresetCategories}}
+      <button class="button button-secondary service-catalog-filter" type="button" data-service-catalog-filter="{{.Slug}}" aria-pressed="false">{{.Label}}</button>
+      {{end}}
+    </div>
+
+    <p class="service-catalog-count" aria-live="polite" data-service-catalog-count></p>
+
+    <div class="service-catalog-grid" data-service-catalog-grid>
+      {{range .ApplicationDetailsPage.ServicePresets}}
+      <article class="service-catalog-card" data-service-catalog-card data-category="{{.Category}}" data-search="{{.Name}} {{.Description}} {{.Image}} {{.DefaultServiceName}}">
+        <header class="service-catalog-card-header">
+          <h3>{{.Name}}</h3>
+          <span class="service-type-badge">{{servicePresetCategoryLabel .Category}}</span>
+        </header>
+        <p class="service-catalog-card-description">{{.Description}}</p>
+        <dl class="service-catalog-card-details">
+          <div>
+            <dt>Image</dt>
+            <dd><code title="{{.Image}}">{{.Image}}</code></dd>
+          </div>
+          <div>
+            <dt>Service</dt>
+            <dd><code>{{.DefaultServiceName}}</code></dd>
+          </div>
+          {{if .PortMappings}}
+          <div>
+            <dt>Ports</dt>
+            <dd><code>{{range $index, $port := .PortMappings}}{{if $index}}, {{end}}{{$port.HostPort}}→{{$port.ContainerPort}}{{end}}</code></dd>
+          </div>
+          {{end}}
+        </dl>
+        {{if .EnvNote}}
+        <p class="field-help">{{.EnvNote}}</p>
+        {{end}}
+        <a class="button button-secondary service-catalog-use" href="/applications/{{$.ApplicationDetailsPage.Application.ID}}/services/application/new?preset={{.Slug}}">Use {{.Name}}</a>
+      </article>
+      {{end}}
+    </div>
+    <p class="service-catalog-empty" hidden data-service-catalog-empty>No services match the current search.</p>
+
+    <footer class="application-form-actions">
+      <button class="button button-secondary" type="button" data-service-catalog-close>Close</button>
+    </footer>
   </div>
 </dialog>
 

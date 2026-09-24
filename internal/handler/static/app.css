@@ -1481,6 +1481,30 @@ h1 {
   text-decoration: none;
 }
 
+.service-split-separator {
+  margin: var(--space-1) 0;
+  padding: 0 !important;
+  border-top: 1px solid hsl(var(--border));
+  cursor: default !important;
+}
+
+.service-split-separator:hover {
+  background: transparent !important;
+}
+
+.service-split-more {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
 .service-table-actions {
   width: 4.5rem;
   padding-right: var(--space-4) !important;
@@ -4359,4 +4383,124 @@ h1 {
   margin: 0;
   color: hsl(var(--muted-foreground));
   font-size: 0.8125rem;
+}
+
+.service-catalog-dialog {
+  width: min(calc(100% - var(--space-8)), 48rem);
+}
+
+.service-catalog-dialog .application-dialog-panel {
+  max-width: 48rem;
+}
+
+.service-catalog-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.service-catalog-filter[aria-pressed="true"] {
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  background: hsl(var(--primary));
+}
+
+.service-catalog-count {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.service-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.service-catalog-card {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  padding: var(--space-4);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+
+.service-catalog-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.service-catalog-card-header h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.service-catalog-card-description {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+
+.service-catalog-card-details {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.service-catalog-card-details div {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.service-catalog-card-details dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.service-catalog-card-details dd {
+  margin: 0;
+  min-width: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.service-catalog-card-details code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+}
+
+.service-catalog-card .field-help {
+  margin: 0;
+}
+
+.service-catalog-use {
+  justify-self: start;
+}
+
+.service-catalog-empty {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  font-style: italic;
+}
+
+.service-form-preset-note {
+  margin-bottom: var(--space-5);
+}
+
+@media (max-width: 48rem) {
+  .service-catalog-grid {
+    grid-template-columns: 1fr;
+  }
 }

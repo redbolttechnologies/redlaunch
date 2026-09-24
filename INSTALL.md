@@ -383,6 +383,12 @@ type from the menu:
   **Automatically start container** is off by default, which is useful when
   the image is not available yet. Turn it on when the image can be pulled
   immediately.
+- **More services...**: opens the service catalog with preconfigured
+  containers (for example pgAdmin and Seq), grouped by category with search.
+  Choosing **Use** opens the application container form with image, ports,
+  volumes, and entrypoint prefilled. Review the values before creating; the
+  container stays stopped until started, and any required credentials noted
+  on the card must be added via variables/secrets.
 
 Useful defaults are <code>db</code>/PostgreSQL 17, <code>redis</code>/Redis 7 on
 port 6379, and <code>app</code> for a custom application container. All managed

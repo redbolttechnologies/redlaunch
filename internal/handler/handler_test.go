@@ -1466,6 +1466,15 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 		`Redis cache`,
 		`href="/applications/7/services/application/new"`,
 		`<span>Application</span>`,
+		`More services...`,
+		`data-service-catalog-trigger`,
+		`id="service-catalog-dialog"`,
+		`data-service-catalog-dialog`,
+		`data-service-catalog-search`,
+		`data-service-catalog-filter="all"`,
+		`href="/applications/7/services/application/new?preset=pgadmin"`,
+		`href="/applications/7/services/application/new?preset=seq"`,
+		`/static/service-catalog.js`,
 		`/static/application-tabs.js`,
 		`/static/service-menu.js`,
 		`/static/application-environment.js`,
@@ -1502,8 +1511,8 @@ func TestApplicationDetailsRendersEmptyServicesState(t *testing.T) {
 	if strings.Contains(body, `service-split-button-main" type="button" disabled`) {
 		t.Fatalf("GET /applications/7 rendered the Create service button disabled: %s", body)
 	}
-	if got := strings.Count(body, `class="service-split-option-icon"`); got != 3 {
-		t.Fatalf("GET /applications/7 rendered %d service option icons, want 3: %s", got, body)
+	if got := strings.Count(body, `class="service-split-option-icon"`); got != 4 {
+		t.Fatalf("GET /applications/7 rendered %d service option icons, want 4: %s", got, body)
 	}
 	if strings.Contains(body, `class="services-list"`) {
 		t.Fatalf("GET /applications/7 rendered a service list with no services: %s", body)
@@ -4862,6 +4871,67 @@ func TestApplicationContainerPageRendersLocalRegistryDefault(t *testing.T) {
 	}
 	if strings.Count(body, `<h1`) != 1 {
 		t.Fatalf("GET application container page rendered %d page headings, want 1", strings.Count(body, `<h1`))
+	}
+}
+
+func TestApplicationContainerPagePrefillsServicePreset(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/application/new?preset=seq", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET preset application container page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`value="seq"`,
+		`value="datalust/seq:2024.1"`,
+		`Prefilled from <strong>Seq</strong>`,
+		`Set ACCEPT_EULA=Y in variables to accept the Seq license.`,
+		`value="seq-data"`,
+		`value="/data"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("GET preset application container page did not render %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, `name="use_docker_registry" type="checkbox" role="switch" value="on" checked`) == false {
+		t.Fatalf("GET preset application container page did not check the Docker Registry option: %s", body)
+	}
+	if strings.Contains(body, `name="auto_start" type="checkbox" role="switch" value="on" checked`) {
+		t.Fatalf("GET preset application container page enabled automatic startup for a preset: %s", body)
+	}
+	if strings.Count(body, `<h1`) != 1 {
+		t.Fatalf("GET preset application container page rendered %d page headings, want 1", strings.Count(body, `<h1`))
+	}
+}
+
+func TestApplicationContainerPageIgnoresUnknownPreset(t *testing.T) {
+	applications := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+	}
+	web, err := New(nil, applications)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/application/new?preset=does-not-exist", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET unknown preset page status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `value="app"`) {
+		t.Fatalf("GET unknown preset page did not fall back to defaults: %s", body)
+	}
+	if strings.Contains(body, `Prefilled from`) {
+		t.Fatalf("GET unknown preset page rendered a preset banner: %s", body)
 	}
 }
 

@@ -37,6 +37,12 @@
       <span>{{.ApplicationContainerPage.Error}}</span>
     </div>
     {{end}}
+    {{with .ApplicationContainerPage.Preset}}
+    <div class="application-form-note service-form-preset-note" role="status">
+      <span class="application-form-note-mark" aria-hidden="true">i</span>
+      <span>Prefilled from <strong>{{.Name}}</strong> — review and adjust before creating.{{if .EnvNote}} {{.EnvNote}}{{end}}</span>
+    </div>
+    {{end}}
 
     <form class="application-form service-form" method="post" action="{{if .ApplicationContainerPage.IsEdit}}/applications/{{.ApplicationContainerPage.Application.ID}}/services/{{.ApplicationContainerPage.ServiceName}}/edit{{else}}/applications/{{.ApplicationContainerPage.Application.ID}}/services/application/new{{end}}">
       <input type="hidden" name="csrf_token" value="{{.ApplicationContainerPage.CSRFToken}}">
