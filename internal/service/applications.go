@@ -70,11 +70,17 @@ func (s *Applications) GetEnvironmentFiles(ctx context.Context, applicationID in
 	if s.detailsRepository == nil {
 		return application.EnvironmentFiles{}, errors.New("application details repository is not configured")
 	}
-	lease, err := s.acquireApplicationProject(ctx, applicationID)
-	if err != nil {
+	// Page rendering must never block behind a long Docker operation or the
+	// progress redirect stays pending until the job finishes (and trips
+	// Cloudflare). File replacements are atomic renames, so a best-effort
+	// read without the lock is safe when another operation holds it.
+	lease, err := s.tryAcquireApplicationProject(applicationID)
+	if err != nil && !errors.Is(err, ErrProjectBusy) {
 		return application.EnvironmentFiles{}, err
 	}
-	defer lease.release()
+	if lease != nil {
+		defer lease.release()
+	}
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -113,11 +119,13 @@ func (s *Applications) GetEnvironmentSecretValue(ctx context.Context, applicatio
 	if s.detailsRepository == nil {
 		return "", errors.New("application details repository is not configured")
 	}
-	lease, err := s.acquireApplicationProject(ctx, applicationID)
-	if err != nil {
+	lease, err := s.tryAcquireApplicationProject(applicationID)
+	if err != nil && !errors.Is(err, ErrProjectBusy) {
 		return "", err
 	}
-	defer lease.release()
+	if lease != nil {
+		defer lease.release()
+	}
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
@@ -532,6 +540,33 @@ func (s *Applications) acquireProxyProject(ctx context.Context) (*projectLockLea
 	return s.acquireProjectKey(ctx, proxyProjectLockKey)
 }
 
+// tryAcquireApplicationProject returns a lease only when no other operation
+// holds the project. Page rendering uses it so a long Docker operation never
+// blocks the progress redirect behind Cloudflare; on ErrProjectBusy callers
+// serve database/filesystem state without Docker enrichment.
+func (s *Applications) tryAcquireApplicationProject(applicationID int64) (*projectLockLease, error) {
+	if applicationID < 1 {
+		return nil, application.ErrNotFound
+	}
+	s.mu.Lock()
+	if s.projectLocks == nil {
+		s.projectLocks = newProjectLockManager()
+	}
+	locks := s.projectLocks
+	s.mu.Unlock()
+	return locks.tryAcquire(applicationProjectLockKey(applicationID))
+}
+
+func (s *Applications) tryAcquireProxyProject() (*projectLockLease, error) {
+	s.mu.Lock()
+	if s.projectLocks == nil {
+		s.projectLocks = newProjectLockManager()
+	}
+	locks := s.projectLocks
+	s.mu.Unlock()
+	return locks.tryAcquire(proxyProjectLockKey)
+}
+
 // SetApplicationDeletionDependencies supplies the optional infrastructure
 // operations that must agree with a durable application deletion intent.
 func (s *Applications) SetApplicationDeletionDependencies(scheduleDisabler applicationDeletionScheduleDisabler) {
@@ -775,12 +810,18 @@ func (s *Applications) restoreDeletedDomain(ctx context.Context, domain applicat
 
 // ListServices returns an application's service metadata in creation order and
 // enriches it with best-effort Docker runtime details when available.
+// When another operation holds the project lock the database snapshot is
+// returned without Docker enrichment so progress pages render immediately
+// instead of blocking until the job finishes.
 func (s *Applications) ListServices(ctx context.Context, applicationID int64) ([]application.Service, error) {
 	if s.detailsRepository == nil {
 		return nil, errors.New("application details repository is not configured")
 	}
-	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	lease, err := s.tryAcquireApplicationProject(applicationID)
 	if err != nil {
+		if errors.Is(err, ErrProjectBusy) {
+			return s.detailsRepository.ListServices(ctx, applicationID)
+		}
 		return nil, err
 	}
 	defer lease.release()
@@ -833,9 +874,14 @@ func (s *Applications) listServicesLocked(ctx context.Context, applicationID int
 // managed proxy and the request mappings represented by its persisted routing
 // entries. Docker inspection failures leave the runtime fields unavailable so
 // the dashboard can still show the configured domains.
+// When a proxy operation holds the lock only the routing domains are
+// returned so the proxy page (and its progress toast) renders immediately.
 func (s *Applications) GetProxyDetails(ctx context.Context) (application.ProxyDetails, error) {
-	lease, err := s.acquireProxyProject(ctx)
+	lease, err := s.tryAcquireProxyProject()
 	if err != nil {
+		if errors.Is(err, ErrProjectBusy) {
+			return s.proxyDomainsOnly(ctx)
+		}
 		return application.ProxyDetails{}, err
 	}
 	defer lease.release()
@@ -884,6 +930,32 @@ func (s *Applications) GetProxyDetails(ctx context.Context) (application.ProxyDe
 			details.LogsAvailable = true
 		}
 	}
+	return details, nil
+}
+
+// proxyDomainsOnly returns routing domains without Docker inspection for use
+// while a proxy operation holds the project lock.
+func (s *Applications) proxyDomainsOnly(ctx context.Context) (application.ProxyDetails, error) {
+	var details application.ProxyDetails
+	if s.routingRepository == nil {
+		return details, nil
+	}
+	routings, err := s.routingRepository.ListAllRoutings(ctx)
+	if err != nil {
+		return application.ProxyDetails{}, fmt.Errorf("list proxy domains: %w", err)
+	}
+	applications := make([]application.Application, 0)
+	if len(routings) > 0 {
+		applications, err = s.repository.List(ctx)
+		if err != nil {
+			return application.ProxyDetails{}, fmt.Errorf("list proxy applications: %w", err)
+		}
+	}
+	applicationNames := make(map[int64]string, len(applications))
+	for _, item := range applications {
+		applicationNames[item.ID] = item.Name
+	}
+	details.Domains = proxyDomainsFromRoutings(routings, applicationNames)
 	return details, nil
 }
 
@@ -942,6 +1014,8 @@ func (s *Applications) OpenProxyLogs(ctx context.Context) (io.ReadCloser, error)
 // best-effort Docker runtime and recent log information. Environment values
 // are loaded only by the dedicated environment page, so sensitive Compose
 // resolution is not part of this request.
+// When another operation holds the project lock the database snapshot is
+// returned without Docker/log enrichment so progress pages render immediately.
 func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDetails, error) {
 	if s.detailsRepository == nil {
 		return application.ServiceDetails{}, errors.New("application details repository is not configured")
@@ -951,8 +1025,11 @@ func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int6
 		return application.ServiceDetails{}, err
 	}
 
-	lease, err := s.acquireApplicationProject(ctx, applicationID)
+	lease, err := s.tryAcquireApplicationProject(applicationID)
 	if err != nil {
+		if errors.Is(err, ErrProjectBusy) {
+			return s.serviceDetailsDatabaseOnly(ctx, applicationID, serviceName)
+		}
 		return application.ServiceDetails{}, err
 	}
 	defer lease.release()
@@ -991,6 +1068,26 @@ func (s *Applications) GetServiceDetails(ctx context.Context, applicationID int6
 			details.Logs = logs
 			details.LogsAvailable = true
 		}
+	}
+	return details, nil
+}
+
+// serviceDetailsDatabaseOnly returns registered metadata without Docker or
+// log enrichment for use while another operation holds the project lock.
+func (s *Applications) serviceDetailsDatabaseOnly(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDetails, error) {
+	services, err := s.detailsRepository.ListServices(ctx, applicationID)
+	if err != nil {
+		return application.ServiceDetails{}, err
+	}
+	var details application.ServiceDetails
+	for _, service := range services {
+		if service.Name == serviceName {
+			details.Service = service
+			break
+		}
+	}
+	if details.Service.Name == "" {
+		return application.ServiceDetails{}, application.ErrServiceNotFound
 	}
 	return details, nil
 }

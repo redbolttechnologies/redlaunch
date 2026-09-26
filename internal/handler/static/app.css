@@ -4539,3 +4539,125 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.toast-stack {
+  position: fixed;
+  z-index: 20;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  width: min(calc(100vw - 2rem), 24rem);
+}
+
+.toast {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  color: hsl(var(--card-foreground));
+  background: hsl(var(--card));
+  box-shadow: 0 0.5rem 1.5rem hsl(var(--foreground) / 0.12);
+}
+
+.toast-running .toast-icon {
+  color: hsl(var(--muted-foreground));
+  animation: toast-pulse 1.2s ease-in-out infinite;
+}
+
+.toast-complete {
+  border-color: hsl(var(--success) / 0.5);
+}
+
+.toast-complete .toast-icon {
+  color: hsl(var(--success));
+}
+
+.toast-failed {
+  border-color: hsl(var(--destructive) / 0.5);
+}
+
+.toast-failed .toast-icon {
+  color: hsl(var(--destructive));
+}
+
+.toast-icon {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  border: 1px solid hsl(var(--border));
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+
+.toast-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.toast-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.toast-title code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+}
+
+.toast-detail {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+
+.toast-close {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted));
+}
+
+.toast-error {
+  color: hsl(var(--destructive));
+  font-size: 0.75rem;
+}
+
+.toast-error[hidden] {
+  display: none;
+}
+
+@keyframes toast-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-running .toast-icon {
+    animation: none;
+  }
+}
+
+.toast-technical code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}

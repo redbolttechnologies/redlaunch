@@ -36,6 +36,7 @@ type fakeProxyService struct {
 	fullLogsCalled bool
 	proxyAction    string
 	proxyActionErr error
+	proxyActionMu  sync.Mutex
 }
 
 type fakeDashboardMetricsService struct {
@@ -123,18 +124,39 @@ func (s *fakeProxyService) GetProxyFullLogs(context.Context) (string, error) {
 }
 
 func (s *fakeProxyService) StartProxy(context.Context) error {
+	s.proxyActionMu.Lock()
 	s.proxyAction = "start"
-	return s.proxyActionErr
+	err := s.proxyActionErr
+	s.proxyActionMu.Unlock()
+	return err
 }
 
 func (s *fakeProxyService) StopProxy(context.Context) error {
+	s.proxyActionMu.Lock()
 	s.proxyAction = "stop"
-	return s.proxyActionErr
+	err := s.proxyActionErr
+	s.proxyActionMu.Unlock()
+	return err
 }
 
 func (s *fakeProxyService) RestartProxy(context.Context) error {
+	s.proxyActionMu.Lock()
 	s.proxyAction = "restart"
-	return s.proxyActionErr
+	err := s.proxyActionErr
+	s.proxyActionMu.Unlock()
+	return err
+}
+
+func (s *fakeProxyService) getProxyAction() string {
+	s.proxyActionMu.Lock()
+	defer s.proxyActionMu.Unlock()
+	return s.proxyAction
+}
+
+func (s *fakeProxyService) setProxyAction(action string) {
+	s.proxyActionMu.Lock()
+	defer s.proxyActionMu.Unlock()
+	s.proxyAction = action
 }
 
 type fakeRegistryService struct {
@@ -269,6 +291,7 @@ type fakeApplicationService struct {
 	serviceActionID                 int64
 	serviceActionName               string
 	serviceActionErr                error
+	serviceActionMu                 sync.Mutex
 	serviceDeleteID                 int64
 	serviceDeleteName               string
 	serviceDeleteErr                error
@@ -540,31 +563,49 @@ func (s *fakeApplicationService) GetServiceFullLogs(context.Context, int64, stri
 }
 
 func (s *fakeApplicationService) StartService(_ context.Context, id int64, serviceName string) error {
+	s.serviceActionMu.Lock()
 	s.serviceAction = "start"
 	s.serviceActionID = id
 	s.serviceActionName = serviceName
-	return s.serviceActionErr
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return err
 }
 
 func (s *fakeApplicationService) StopService(_ context.Context, id int64, serviceName string) error {
+	s.serviceActionMu.Lock()
 	s.serviceAction = "stop"
 	s.serviceActionID = id
 	s.serviceActionName = serviceName
-	return s.serviceActionErr
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return err
 }
 
 func (s *fakeApplicationService) RestartService(_ context.Context, id int64, serviceName string) error {
+	s.serviceActionMu.Lock()
 	s.serviceAction = "restart"
 	s.serviceActionID = id
 	s.serviceActionName = serviceName
-	return s.serviceActionErr
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return err
 }
 
 func (s *fakeApplicationService) RunServiceOnce(_ context.Context, id int64, serviceName string) error {
+	s.serviceActionMu.Lock()
 	s.serviceAction = "run"
 	s.serviceActionID = id
 	s.serviceActionName = serviceName
-	return s.serviceActionErr
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return err
+}
+
+func (s *fakeApplicationService) getServiceAction() (string, int64, string) {
+	s.serviceActionMu.Lock()
+	defer s.serviceActionMu.Unlock()
+	return s.serviceAction, s.serviceActionID, s.serviceActionName
 }
 
 func (s *fakeApplicationService) DeleteService(_ context.Context, id int64, serviceName string) error {
@@ -1163,25 +1204,39 @@ func TestProxyActionsRequireCSRFAndInvokeProxyService(t *testing.T) {
 			if recorder.Code != http.StatusSeeOther {
 				t.Fatalf("POST %s status = %d, want %d", testCase.path, recorder.Code, http.StatusSeeOther)
 			}
-			if got := recorder.Header().Get("Location"); got != "/proxy" {
-				t.Fatalf("POST %s Location = %q, want /proxy", testCase.path, got)
+			location := recorder.Header().Get("Location")
+			if !strings.HasPrefix(location, "/proxy?proxy_action_job=") {
+				t.Fatalf("POST %s Location = %q, want /proxy?proxy_action_job=...", testCase.path, location)
 			}
-			if proxy.proxyAction != testCase.action {
-				t.Fatalf("proxy action = %q, want %q", proxy.proxyAction, testCase.action)
+			waitForProxyAction(t, proxy, testCase.action)
+			if got := proxy.getProxyAction(); got != testCase.action {
+				t.Fatalf("proxy action = %q, want %q", got, testCase.action)
 			}
 
-			proxy.proxyAction = ""
+			proxy.setProxyAction("")
 			missingToken := httptest.NewRequest(http.MethodPost, testCase.path, nil)
 			missingRecorder := httptest.NewRecorder()
 			web.Routes().ServeHTTP(missingRecorder, missingToken)
 			if missingRecorder.Code != http.StatusForbidden {
 				t.Fatalf("POST %s without CSRF status = %d, want %d", testCase.path, missingRecorder.Code, http.StatusForbidden)
 			}
-			if proxy.proxyAction != "" {
-				t.Fatalf("proxy action without CSRF = %q, want no action", proxy.proxyAction)
+			if got := proxy.getProxyAction(); got != "" {
+				t.Fatalf("proxy action without CSRF = %q, want no action", got)
 			}
 		})
 	}
+}
+
+func waitForProxyAction(t *testing.T, proxy *fakeProxyService, action string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if proxy.getProxyAction() == action {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("proxy action did not run: got %q, want %q", proxy.getProxyAction(), action)
 }
 
 func TestProxyLogsRenderOnlyTheMostRecentThousandLines(t *testing.T) {
@@ -3727,8 +3782,8 @@ func TestServiceActionsRequireCSRFAndRedirect(t *testing.T) {
 			if missingToken.Code != http.StatusForbidden {
 				t.Fatalf("POST %s without CSRF status = %d, want %d", testCase.path, missingToken.Code, http.StatusForbidden)
 			}
-			if applications.serviceAction != "" {
-				t.Fatalf("service action without CSRF = %q, want no action", applications.serviceAction)
+			if action, _, _ := applications.getServiceAction(); action != "" {
+				t.Fatalf("service action without CSRF = %q, want no action", action)
 			}
 
 			form := url.Values{"csrf_token": {web.csrfToken}}
@@ -3740,14 +3795,29 @@ func TestServiceActionsRequireCSRFAndRedirect(t *testing.T) {
 			if recorder.Code != http.StatusSeeOther {
 				t.Fatalf("POST %s status = %d, want %d", testCase.path, recorder.Code, http.StatusSeeOther)
 			}
-			if got := recorder.Header().Get("Location"); got != "/applications/7" {
-				t.Fatalf("POST %s Location = %q, want /applications/7", testCase.path, got)
+			location := recorder.Header().Get("Location")
+			if !strings.HasPrefix(location, "/applications/7?service_action_job=") {
+				t.Fatalf("POST %s Location = %q, want /applications/7?service_action_job=...", testCase.path, location)
 			}
-			if applications.serviceAction != testCase.action || applications.serviceActionID != 7 || applications.serviceActionName != "db" {
-				t.Fatalf("service action = (%q, %d, %q), want (%q, 7, db)", applications.serviceAction, applications.serviceActionID, applications.serviceActionName, testCase.action)
+			waitForServiceAction(t, web, applications, testCase.action, 7, "db")
+			if action, id, name := applications.getServiceAction(); action != testCase.action || id != 7 || name != "db" {
+				t.Fatalf("service action = (%q, %d, %q), want (%q, 7, db)", action, id, name, testCase.action)
 			}
 		})
 	}
+}
+
+func waitForServiceAction(t *testing.T, web *Handler, applications *fakeApplicationService, action string, id int64, service string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if gotAction, gotID, gotName := applications.getServiceAction(); gotAction == action && gotID == id && gotName == service {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	gotAction, gotID, gotName := applications.getServiceAction()
+	t.Fatalf("service action did not run: got (%q, %d, %q), want (%q, %d, %q)", gotAction, gotID, gotName, action, id, service)
 }
 
 func TestServiceActionsCanReturnToServiceDetails(t *testing.T) {
@@ -3778,17 +3848,19 @@ func TestServiceActionsCanReturnToServiceDetails(t *testing.T) {
 			if recorder.Code != http.StatusSeeOther {
 				t.Fatalf("POST %s status = %d, want %d", testCase.path, recorder.Code, http.StatusSeeOther)
 			}
-			if got := recorder.Header().Get("Location"); got != "/applications/7/services/db" {
-				t.Fatalf("POST %s Location = %q, want /applications/7/services/db", testCase.path, got)
+			location := recorder.Header().Get("Location")
+			if !strings.HasPrefix(location, "/applications/7/services/db?service_action_job=") {
+				t.Fatalf("POST %s Location = %q, want /applications/7/services/db?service_action_job=...", testCase.path, location)
 			}
-			if applications.serviceAction != testCase.action || applications.serviceActionID != 7 || applications.serviceActionName != "db" {
-				t.Fatalf("service action = (%q, %d, %q), want (%q, 7, db)", applications.serviceAction, applications.serviceActionID, applications.serviceActionName, testCase.action)
+			waitForServiceAction(t, web, applications, testCase.action, 7, "db")
+			if action, id, name := applications.getServiceAction(); action != testCase.action || id != 7 || name != "db" {
+				t.Fatalf("service action = (%q, %d, %q), want (%q, 7, db)", action, id, name, testCase.action)
 			}
 		})
 	}
 }
 
-func TestServiceActionFailureRendersErrorDialogOnApplicationPage(t *testing.T) {
+func TestServiceActionFailureRendersErrorToastOnApplicationPage(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications:     []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
 		services:         []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
@@ -3806,33 +3878,44 @@ func TestServiceActionFailureRendersErrorDialogOnApplicationPage(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	body := recorder.Body.String()
+	location := recorder.Header().Get("Location")
+	jobID := serviceActionJobIDFromLocation(t, location)
+	waitForServiceAction(t, web, applications, "start", 7, "db")
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/applications/7/services/db/action/status?id="+url.QueryEscape(jobID), nil)
+	statusRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("GET action status = %d, want %d", statusRecorder.Code, http.StatusOK)
+	}
+	body := statusRecorder.Body.String()
 	for _, expected := range []string{
-		`data-service-action-error-dialog`,
-		`data-service-action-error-open`,
-		`The service could not be started`,
-		`port is already allocated`,
-		`Error details`,
-		`service-action-error-detail`,
-		`/static/service-action-error.js`,
-		`<h1 id="page-title">Status page</h1>`,
+		`data-toast-job`,
+		`could not be started`,
 	} {
 		if !strings.Contains(body, expected) {
-			t.Fatalf("POST start failure did not render %q: %s", expected, body)
+			t.Fatalf("action status did not render %q: %s", expected, body)
 		}
-	}
-	if !strings.Contains(strings.ToLower(body), "already in use") {
-		t.Fatalf("POST start failure did not explain the port conflict: %s", body)
-	}
-	if strings.HasPrefix(strings.TrimSpace(body), "The service could not be started.") && !strings.Contains(body, "<html") {
-		t.Fatalf("POST start failure rendered a plain-text white screen: %s", body)
 	}
 }
 
-func TestServiceActionFailureRendersErrorDialogOnServiceDetailsPage(t *testing.T) {
+func serviceActionJobIDFromLocation(t *testing.T, location string) string {
+	t.Helper()
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := parsed.Query().Get("service_action_job")
+	if jobID == "" {
+		t.Fatalf("Location %q has no service_action_job param", location)
+	}
+	return jobID
+}
+
+func TestServiceActionFailureRendersErrorToastOnServiceDetailsPage(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
 		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "db"}},
@@ -3854,16 +3937,23 @@ func TestServiceActionFailureRendersErrorDialogOnServiceDetailsPage(t *testing.T
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST start failure status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	body := recorder.Body.String()
+	location := recorder.Header().Get("Location")
+	jobID := serviceActionJobIDFromLocation(t, location)
+	waitForServiceAction(t, web, applications, "start", 7, "db")
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/applications/7/services/db/action/status?id="+url.QueryEscape(jobID), nil)
+	statusRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("GET action status = %d, want %d", statusRecorder.Code, http.StatusOK)
+	}
+	body := statusRecorder.Body.String()
 	for _, expected := range []string{
-		`data-service-action-error-dialog`,
-		`data-service-action-error-open`,
-		`The service could not be started`,
-		`container failed to start`,
-		`<h1 id="page-title">db</h1>`,
+		`data-toast-job`,
+		`could not be started`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST start failure on service details did not render %q: %s", expected, body)
@@ -3871,7 +3961,7 @@ func TestServiceActionFailureRendersErrorDialogOnServiceDetailsPage(t *testing.T
 	}
 }
 
-func TestRunServiceOnceFailureRendersErrorDialog(t *testing.T) {
+func TestRunServiceOnceFailureRendersErrorToast(t *testing.T) {
 	applications := &fakeApplicationService{
 		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
 		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
@@ -3893,22 +3983,30 @@ func TestRunServiceOnceFailureRendersErrorDialog(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	web.Routes().ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("POST run failure status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("POST run failure status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	body := recorder.Body.String()
+	location := recorder.Header().Get("Location")
+	jobID := serviceActionJobIDFromLocation(t, location)
+	waitForServiceAction(t, web, applications, "run", 7, "migrate")
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/applications/7/services/migrate/action/status?id="+url.QueryEscape(jobID), nil)
+	statusRecorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("GET run status = %d, want %d", statusRecorder.Code, http.StatusOK)
+	}
+	body := statusRecorder.Body.String()
 	for _, expected := range []string{
-		`data-service-action-error-dialog`,
-		`The service could not be run`,
-		`relation does not exist`,
-		`<h1 id="page-title">migrate</h1>`,
+		`data-toast-job`,
+		`could not be run`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST run failure did not render %q: %s", expected, body)
 		}
 	}
-	if applications.serviceAction != "run" || applications.serviceActionName != "migrate" {
-		t.Fatalf("service action = (%q, %q), want (run, migrate)", applications.serviceAction, applications.serviceActionName)
+	if action, _, name := applications.getServiceAction(); action != "run" || name != "migrate" {
+		t.Fatalf("service action = (%q, %q), want (run, migrate)", action, name)
 	}
 }
 

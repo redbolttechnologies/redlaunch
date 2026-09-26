@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -63,29 +65,88 @@ func (h *Handler) proxyAction(w http.ResponseWriter, r *http.Request, action str
 		http.Error(w, "This proxy action page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
-
-	var actionErr error
 	switch action {
-	case "start":
-		actionErr = h.proxyActions.StartProxy(r.Context())
-	case "stop":
-		actionErr = h.proxyActions.StopProxy(r.Context())
-	case "restart":
-		actionErr = h.proxyActions.RestartProxy(r.Context())
+	case "start", "stop", "restart":
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	if actionErr != nil {
-		if errors.Is(actionErr, application.ErrNotFound) {
-			http.NotFound(w, r)
+
+	job, created, err := h.proxyActionJobs.createUnique(action)
+	if err != nil {
+		if errors.Is(err, ErrProxyActionBusy) {
+			http.Error(w, "Another proxy operation is already running. Try again shortly.", http.StatusConflict)
 			return
 		}
-		h.logger.Error("run proxy action", "action", action, "error", actionErr)
-		http.Error(w, "The proxy could not be "+serviceActionPastTense(action)+".", http.StatusInternalServerError)
+		h.logger.Error("create proxy action job", "action", action, "error", err)
+		http.Error(w, "The proxy operation could not be started.", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/proxy", http.StatusSeeOther)
+	if created {
+		if err := h.startTrackedJob("proxy-action", func(ctx context.Context) {
+			h.runProxyActionJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit proxy action job", "action", action, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	location := "/proxy?proxy_action_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func (h *Handler) proxyActionStatus(w http.ResponseWriter, r *http.Request) {
+	jobID := r.URL.Query().Get("id")
+	if jobID == "" {
+		http.Error(w, "The proxy operation job ID is required.", http.StatusBadRequest)
+		return
+	}
+	progress, ok := h.proxyActionProgress(jobID)
+	if !ok {
+		http.Error(w, "The proxy operation job was not found.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeTemplateStatus(w, "proxy-action-toast.html", pageData{ProxyActionProgress: progress}, http.StatusOK)
+}
+
+func (h *Handler) proxyActionProgress(jobID string) (*proxyActionProgressData, bool) {
+	if jobID == "" {
+		return nil, true
+	}
+	job := h.proxyActionJobs.get(jobID)
+	if job == nil {
+		return nil, false
+	}
+	progress := job.snapshot()
+	progress.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(jobID)
+	progress.CloseURL = "/proxy"
+	return &progress, true
+}
+
+func (h *Handler) proxyActionToastsForPage(explicitJobID string) []*proxyActionProgressData {
+	seen := make(map[string]struct{})
+	var toasts []*proxyActionProgressData
+	if explicitJobID != "" {
+		if job := h.proxyActionJobs.get(explicitJobID); job != nil {
+			snapshot := job.snapshot()
+			snapshot.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(snapshot.JobID)
+			snapshot.CloseURL = "/proxy"
+			toasts = append(toasts, &snapshot)
+			seen[snapshot.JobID] = struct{}{}
+		}
+	}
+	for _, job := range h.proxyActionJobs.active() {
+		snapshot := job.snapshot()
+		if _, ok := seen[snapshot.JobID]; ok {
+			continue
+		}
+		snapshot.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(snapshot.JobID)
+		snapshot.CloseURL = "/proxy"
+		toasts = append(toasts, &snapshot)
+	}
+	return toasts
 }
 
 func (h *Handler) downloadProxyLogs(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +209,9 @@ func (h *Handler) writeProxyPage(w http.ResponseWriter, r *http.Request, status 
 	page := h.shellPageData(r)
 	page.ActivePage = "proxy"
 	page.ProxyPage = &data
+	if h.proxyActionJobs != nil {
+		page.ProxyActionToasts = h.proxyActionToastsForPage(r.URL.Query().Get("proxy_action_job"))
+	}
 	h.writeTemplateStatus(w, "proxy.html", page, status)
 }
 

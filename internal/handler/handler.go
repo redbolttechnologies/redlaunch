@@ -69,6 +69,8 @@ type Handler struct {
 	applicationDeleteJobs          *applicationDeleteJobStore
 	backupJobs                     *backupJobStore
 	selfUpdateJobs                 *selfUpdateJobStore
+	serviceActionJobs              *serviceActionJobStore
+	proxyActionJobs                *proxyActionJobStore
 	jobs                           *trackedJobRuntime
 	logDownloads                   chan struct{}
 	csrfToken                      string
@@ -316,6 +318,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"backupWeekday":               backupWeekdayText,
 		"serviceLogLines":             serviceLogLines,
 		"proxyLogLines":               proxyLogLines,
+		"serviceActionPresentTense":   serviceActionPresentTense,
 		"routingHost":                 routingHost,
 		"environmentSensitive":        environmentSensitive,
 		"dashboardPercent":            dashboardPercent,
@@ -604,6 +607,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	backupJobs := newBackupJobStore()
 	selfUpdateJobs := newSelfUpdateJobStore()
 	apiRunJobs := newAPIRunJobStore()
+	serviceActionJobs := newServiceActionJobStore()
+	proxyActionJobs := newProxyActionJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
 	jobs.registerCleanup(setupJobs.expire)
 	jobs.registerCleanup(postgresJobs.expire)
@@ -614,6 +619,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(backupJobs.expire)
 	jobs.registerCleanup(selfUpdateJobs.expire)
 	jobs.registerCleanup(apiRunJobs.expire)
+	jobs.registerCleanup(serviceActionJobs.expire)
+	jobs.registerCleanup(proxyActionJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -653,6 +660,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationDeleteJobs:          applicationDeleteJobs,
 		backupJobs:                     backupJobs,
 		selfUpdateJobs:                 selfUpdateJobs,
+		serviceActionJobs:              serviceActionJobs,
+		proxyActionJobs:                proxyActionJobs,
 		jobs:                           jobs,
 		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
 		csrfToken:                      csrfToken,
@@ -678,6 +687,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /proxy/start", h.startProxy)
 	mux.HandleFunc("POST /proxy/stop", h.stopProxy)
 	mux.HandleFunc("POST /proxy/restart", h.restartProxy)
+	mux.HandleFunc("GET /proxy/action/status", h.proxyActionStatus)
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /registry", h.registryPage)
 	mux.HandleFunc("POST /registry/purge", h.purgeRegistryRepository)
@@ -715,6 +725,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/action/status", h.serviceActionStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/logs/download", h.downloadServiceLogs)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/schedule", h.updateBackupSchedule)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/run", h.runBackupNow)
@@ -2760,6 +2771,11 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 		return
 	}
 	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.Error(w, "The service name is invalid.", http.StatusBadRequest)
+		return
+	}
 	if err := parseBoundedForm(w, r); err != nil {
 		http.Error(w, "The service action request was invalid.", http.StatusBadRequest)
 		return
@@ -2768,39 +2784,128 @@ func (h *Handler) serviceAction(w http.ResponseWriter, r *http.Request, action s
 		http.Error(w, "This service action page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 		return
 	}
-
-	var actionErr error
 	switch action {
-	case "start":
-		actionErr = h.serviceActions.StartService(r.Context(), id, serviceName)
-	case "stop":
-		actionErr = h.serviceActions.StopService(r.Context(), id, serviceName)
-	case "restart":
-		actionErr = h.serviceActions.RestartService(r.Context(), id, serviceName)
-	case "run":
-		actionErr = h.serviceActions.RunServiceOnce(r.Context(), id, serviceName)
+	case "start", "stop", "restart", "run":
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	if actionErr != nil {
-		if errors.Is(actionErr, application.ErrNotFound) || errors.Is(actionErr, application.ErrServiceNotFound) {
-			http.NotFound(w, r)
+
+	job, created, err := h.serviceActionJobs.createUnique(id, serviceName, action)
+	if err != nil {
+		if errors.Is(err, ErrServiceActionBusy) {
+			http.Error(w, "Another operation is already running for this service. Try again shortly.", http.StatusConflict)
 			return
 		}
-		if errors.Is(actionErr, application.ErrServiceNameRequired) || errors.Is(actionErr, application.ErrServiceNameTooLong) || errors.Is(actionErr, application.ErrServiceNameInvalid) {
-			http.Error(w, "The service name is invalid.", http.StatusBadRequest)
-			return
-		}
-		h.logger.Error("run service action", "application_id", id, "service", serviceName, "action", action, "error", actionErr)
-		h.renderServiceActionError(w, r, id, serviceName, action, actionErr)
+		h.logger.Error("create service action job", "application_id", id, "service", serviceName, "action", action, "error", err)
+		http.Error(w, "The service operation could not be started.", http.StatusInternalServerError)
 		return
 	}
-	location := "/applications/" + strconv.FormatInt(id, 10)
-	if r.Form.Get("return_to") == "service-details" {
-		location = serviceDetailsPath(id, serviceName)
+	if created {
+		if err := h.startTrackedJob("service-action:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runServiceActionJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit service action job", "application_id", id, "service", serviceName, "action", action, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
 	}
+	base := "/applications/" + strconv.FormatInt(id, 10)
+	if r.Form.Get("return_to") == "service-details" {
+		base = serviceDetailsPath(id, serviceName)
+	}
+	location := base + "?service_action_job=" + url.QueryEscape(job.id)
 	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func (h *Handler) serviceActionStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.NotFound(w, r)
+		return
+	}
+	jobID := r.URL.Query().Get("id")
+	if jobID == "" {
+		http.Error(w, "The service operation job ID is required.", http.StatusBadRequest)
+		return
+	}
+	closeURL := sanitizeToastCloseURL(r.URL.Query().Get("close"), id, serviceName)
+	progress, ok := h.serviceActionProgress(id, serviceName, jobID, closeURL)
+	if !ok {
+		http.Error(w, "The service operation job was not found.", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeTemplateStatus(w, "service-action-toast.html", pageData{ServiceActionProgress: progress}, http.StatusOK)
+}
+
+func (h *Handler) serviceActionProgress(applicationID int64, serviceName, jobID, closeURL string) (*serviceActionProgressData, bool) {
+	if jobID == "" {
+		return nil, true
+	}
+	job := h.serviceActionJobs.get(applicationID, serviceName, jobID)
+	if job == nil {
+		return nil, false
+	}
+	progress := job.snapshot()
+	if closeURL == "" {
+		closeURL = "/applications/" + strconv.FormatInt(applicationID, 10)
+	}
+	progress.CloseURL = closeURL
+	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(serviceName) + "/action/status?id=" + url.QueryEscape(jobID) + "&close=" + url.QueryEscape(closeURL)
+	return &progress, true
+}
+
+// serviceActionToastsForPage collects running jobs plus an explicit finished
+// job so toasts persist across navigation and still show the final result.
+func (h *Handler) serviceActionToastsForPage(applicationID int64, explicitJobID, closeURL string) []*serviceActionProgressData {
+	if closeURL == "" {
+		closeURL = "/applications/" + strconv.FormatInt(applicationID, 10)
+	}
+	seen := make(map[string]struct{})
+	var toasts []*serviceActionProgressData
+	if explicitJobID != "" {
+		if job := h.serviceActionJobs.getByID(applicationID, explicitJobID); job != nil {
+			snapshot := job.snapshot()
+			snapshot.CloseURL = closeURL
+			snapshot.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(snapshot.ServiceName) + "/action/status?id=" + url.QueryEscape(snapshot.JobID) + "&close=" + url.QueryEscape(closeURL)
+			toasts = append(toasts, &snapshot)
+			seen[snapshot.JobID] = struct{}{}
+		}
+	}
+	for _, job := range h.serviceActionJobs.active(applicationID) {
+		snapshot := job.snapshot()
+		if _, ok := seen[snapshot.JobID]; ok {
+			continue
+		}
+		snapshot.CloseURL = closeURL
+		snapshot.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(snapshot.ServiceName) + "/action/status?id=" + url.QueryEscape(snapshot.JobID) + "&close=" + url.QueryEscape(closeURL)
+		toasts = append(toasts, &snapshot)
+	}
+	return toasts
+}
+
+// sanitizeToastCloseURL keeps toast dismissal on the same application scope
+// and falls back to a safe default instead of following an open redirect.
+func sanitizeToastCloseURL(raw string, applicationID int64, serviceName string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "/applications/" + strconv.FormatInt(applicationID, 10)
+	}
+	if strings.HasPrefix(raw, "/applications/"+strconv.FormatInt(applicationID, 10)) {
+		return raw
+	}
+	if serviceName != "" && raw == serviceDetailsPath(applicationID, serviceName) {
+		return raw
+	}
+	return "/applications/" + strconv.FormatInt(applicationID, 10)
 }
 
 func serviceActionPastTense(action string) string {
@@ -2818,57 +2923,19 @@ func serviceActionPastTense(action string) string {
 	}
 }
 
-func (h *Handler) renderServiceActionError(w http.ResponseWriter, r *http.Request, id int64, serviceName, action string, actionErr error) {
-	errData := newServiceActionError(action, serviceName, actionErr)
-	if r.Form.Get("return_to") == "service-details" {
-		item, err := h.applicationDetails.Get(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, application.ErrNotFound) {
-				http.NotFound(w, r)
-				return
-			}
-			h.logger.Error("get application after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
-			http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
-			return
-		}
-		details, err := h.getServiceDetails(r.Context(), id, serviceName)
-		if err != nil {
-			if errors.Is(err, application.ErrNotFound) || errors.Is(err, application.ErrServiceNotFound) || errors.Is(err, application.ErrServiceNameRequired) || errors.Is(err, application.ErrServiceNameTooLong) || errors.Is(err, application.ErrServiceNameInvalid) {
-				http.NotFound(w, r)
-				return
-			}
-			h.logger.Error("get service details after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
-			http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
-			return
-		}
-		if h.backupManager != nil && application.IsDatabaseServiceType(details.Service.Type) {
-			backupDetails, backupErr := h.backupManager.GetBackupDetails(r.Context(), id, serviceName)
-			if backupErr != nil {
-				h.logger.Error("get service backup details after service action failure", "application_id", id, "service", serviceName, "error", backupErr)
-			} else {
-				details.Backup = &backupDetails
-			}
-		}
-		h.writeServiceDetailsPage(w, r, http.StatusInternalServerError, serviceDetailsPageData{
-			Application:        item,
-			Details:            details,
-			ServiceActionError: errData,
-		})
-		return
+func serviceActionPresentTense(action string) string {
+	switch action {
+	case "start":
+		return "Starting"
+	case "stop":
+		return "Stopping"
+	case "restart":
+		return "Restarting"
+	case "run":
+		return "Running"
+	default:
+		return "Updating"
 	}
-
-	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, application.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		h.logger.Error("load application details after service action failure", "application_id", id, "service", serviceName, "action", action, "error", err)
-		http.Error(w, errData.Title+": "+errData.Detail, http.StatusInternalServerError)
-		return
-	}
-	data.ServiceActionError = errData
-	h.writeApplicationDetailsPage(w, r, http.StatusInternalServerError, data, nil, nil)
 }
 
 func newServiceActionError(action, serviceName string, err error) *serviceActionErrorData {
@@ -4640,6 +4707,10 @@ type pageData struct {
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
 	SelfUpdateProgress           *selfUpdateProgressData
+	ServiceActionProgress        *serviceActionProgressData
+	ServiceActionToasts          []*serviceActionProgressData
+	ProxyActionProgress          *proxyActionProgressData
+	ProxyActionToasts            []*proxyActionProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData
@@ -5247,6 +5318,10 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	}
 	page.ServiceDeleteProgress = data.ServiceDeleteProgress
 	page.ApplicationDeleteProgress = data.ApplicationDeleteProgress
+	if h.serviceActionJobs != nil {
+		closeURL := "/applications/" + strconv.FormatInt(data.Application.ID, 10)
+		page.ServiceActionToasts = h.serviceActionToastsForPage(data.Application.ID, r.URL.Query().Get("service_action_job"), closeURL)
+	}
 	h.writeTemplateStatus(w, "application-details.html", page, status)
 }
 
@@ -5273,6 +5348,10 @@ func (h *Handler) writeServiceDetailsPage(w http.ResponseWriter, r *http.Request
 	page.ActivePage = "applications"
 	page.ServiceDetailsPage = &data
 	page.BackupProgress = data.BackupProgress
+	if h.serviceActionJobs != nil {
+		closeURL := serviceDetailsPath(data.Application.ID, data.Details.Service.Name)
+		page.ServiceActionToasts = h.serviceActionToastsForPage(data.Application.ID, r.URL.Query().Get("service_action_job"), closeURL)
+	}
 	h.writeTemplateStatus(w, "service-details.html", page, status)
 }
 

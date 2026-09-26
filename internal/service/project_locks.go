@@ -17,6 +17,13 @@ type projectLockManager struct {
 	locks map[string]*projectLock
 }
 
+// ErrProjectBusy reports that a project lock is held by another operation.
+// Read paths use it to fall back to cached data instead of blocking page
+// rendering behind a long Docker operation (which previously kept the
+// progress dialog from appearing until the operation finished and tripped
+// Cloudflare timeouts).
+var ErrProjectBusy = errors.New("project is busy")
+
 type projectLock struct {
 	semaphore chan struct{}
 	refs      int
@@ -66,6 +73,34 @@ func (m *projectLockManager) acquire(ctx context.Context, key string) (*projectL
 	case <-ctx.Done():
 		m.releaseReference(key, lock)
 		return nil, ctx.Err()
+	}
+}
+
+// tryAcquire returns a lease only when the project lock is immediately free.
+// Callers must not block page rendering on long Docker operations; on
+// ErrProjectBusy they should serve cached/database state instead.
+func (m *projectLockManager) tryAcquire(key string) (*projectLockLease, error) {
+	if m == nil {
+		return nil, errors.New("project lock manager is not configured")
+	}
+	if key == "" {
+		return nil, errors.New("project lock key is required")
+	}
+	m.mu.Lock()
+	lock, ok := m.locks[key]
+	if !ok {
+		lock = &projectLock{semaphore: make(chan struct{}, 1)}
+		m.locks[key] = lock
+	}
+	lock.refs++
+	m.mu.Unlock()
+
+	select {
+	case lock.semaphore <- struct{}{}:
+		return &projectLockLease{manager: m, key: key, lock: lock}, nil
+	default:
+		m.releaseReference(key, lock)
+		return nil, ErrProjectBusy
 	}
 }
 

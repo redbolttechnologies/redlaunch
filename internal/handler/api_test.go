@@ -151,8 +151,8 @@ func TestAPIRunRequiresBearerAuthentication(t *testing.T) {
 			if response := decodeAPIResponse(t, recorder.Body.String()); response["error"] == "" {
 				t.Fatalf("POST run did not render a JSON error: %s", recorder.Body.String())
 			}
-			if applications.serviceAction != "" {
-				t.Fatalf("unauthenticated run action = %q, want no action", applications.serviceAction)
+			if action, _, _ := applications.getServiceAction(); action != "" {
+				t.Fatalf("unauthenticated run action = %q, want no action", action)
 			}
 		})
 	}
@@ -208,8 +208,8 @@ func TestAPIRunEnforcesApplicationScope(t *testing.T) {
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("cross-application run status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
-	if applications.serviceAction != "" {
-		t.Fatalf("cross-application run action = %q, want no action", applications.serviceAction)
+	if action, _, _ := applications.getServiceAction(); action != "" {
+		t.Fatalf("cross-application run action = %q, want no action", action)
 	}
 }
 
@@ -228,8 +228,8 @@ func TestAPIRunRejectsUnknownServiceFast(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("unknown service run status = %d, want %d", recorder.Code, http.StatusNotFound)
 	}
-	if applications.serviceAction != "" {
-		t.Fatalf("unknown service run action = %q, want no action", applications.serviceAction)
+	if action, _, _ := applications.getServiceAction(); action != "" {
+		t.Fatalf("unknown service run action = %q, want no action", action)
 	}
 }
 
@@ -277,8 +277,8 @@ func TestAPIRunDispatchesJobAndReportsCompletion(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if applications.serviceAction != "run" || applications.serviceActionName != "migrate" {
-		t.Fatalf("service action = (%q, %q), want (run, migrate)", applications.serviceAction, applications.serviceActionName)
+	if action, _, name := applications.getServiceAction(); action != "run" || name != "migrate" {
+		t.Fatalf("service action = (%q, %q), want (run, migrate)", action, name)
 	}
 }
 
@@ -372,7 +372,7 @@ func TestAPIRunReportsExpiredToken(t *testing.T) {
 	if response := decodeAPIResponse(t, recorder.Body.String()); !strings.Contains(response["error"], "expired") {
 		t.Fatalf("expired token error = %q, want expiry message", response["error"])
 	}
-	if applications.serviceAction != "" {
-		t.Fatalf("expired token action = %q, want no action", applications.serviceAction)
+	if action, _, _ := applications.getServiceAction(); action != "" {
+		t.Fatalf("expired token action = %q, want no action", action)
 	}
 }
