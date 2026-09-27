@@ -1353,6 +1353,55 @@ h1 {
   flex: 0 0 auto;
 }
 
+.application-clone-zone {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+
+.application-clone-zone-header {
+  padding: var(--space-4);
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.application-clone-zone-header h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.application-clone-zone-header p,
+.application-clone-zone-copy p {
+  margin: var(--space-1) 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.application-clone-zone-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-4);
+}
+
+.application-clone-zone-copy {
+  min-width: 0;
+}
+
+.application-clone-zone-copy h4 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.application-clone-zone-action .button {
+  flex: 0 0 auto;
+}
+
 .services-section {
   margin-top: var(--space-8);
   border: 1px solid hsl(var(--border));
@@ -4183,6 +4232,11 @@ h1 {
   }
 
   .application-danger-zone-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .application-clone-zone-action {
     align-items: stretch;
     flex-direction: column;
   }

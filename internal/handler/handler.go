@@ -36,6 +36,7 @@ type Handler struct {
 	server                         ServerInfo
 	setupManager                   setupManager
 	applicationManager             applicationService
+	applicationCloner              applicationCloner
 	applicationImporter            applicationComposeImporter
 	applicationEnvironmentImporter applicationEnvironmentFileImporter
 	applicationDetails             applicationDetailsService
@@ -344,6 +345,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	}
 	manager := setupManager(noSetupManager{})
 	applications := applicationService(noApplicationService{})
+	var appCloner applicationCloner
 	var applicationImporter applicationComposeImporter
 	var applicationEnvironmentImporter applicationEnvironmentFileImporter
 	details := applicationDetailsService(noApplicationService{})
@@ -380,6 +382,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		case applicationService:
 			if dependency != nil {
 				applications = dependency
+				if cloner, ok := dependency.(applicationCloner); ok {
+					appCloner = cloner
+				}
 				if importer, ok := dependency.(applicationComposeImporter); ok {
 					applicationImporter = importer
 				}
@@ -523,6 +528,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				applicationDeletion = dependency
 			}
+		case applicationCloner:
+			if dependency != nil {
+				appCloner = dependency
+			}
 		case applicationComposeImporter:
 			if dependency != nil {
 				applicationImporter = dependency
@@ -627,6 +636,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		server:                         discoverServerInfo(),
 		setupManager:                   manager,
 		applicationManager:             applications,
+		applicationCloner:              appCloner,
 		applicationImporter:            applicationImporter,
 		applicationEnvironmentImporter: applicationEnvironmentImporter,
 		applicationDetails:             details,
@@ -696,6 +706,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/import/preview", h.previewDockerComposeProject)
 	mux.HandleFunc("POST /applications/{id}/environment/import", h.importApplicationEnvironmentFiles)
 	mux.HandleFunc("POST /applications/{id}/delete", h.deleteApplication)
+	mux.HandleFunc("POST /applications/{id}/clone", h.cloneApplication)
 	mux.HandleFunc("GET /applications/{id}/delete/status", h.applicationDeleteStatus)
 	mux.HandleFunc("POST /applications/{id}/variables", h.updateApplicationVariable)
 	mux.HandleFunc("POST /applications/{id}/variables/delete", h.deleteApplicationVariable)
@@ -925,6 +936,7 @@ func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request)
 	}
 	data.ServiceDeleteProgress = serviceDeleteProgress
 	data.ApplicationDeleteProgress = applicationDeleteProgress
+	data.ClonedFrom = clonedFromSourceID(r)
 	h.writeApplicationDetailsPage(w, r, http.StatusOK, data, postgresProgress, redisProgress, applicationProgress)
 }
 
@@ -4836,6 +4848,11 @@ type applicationDetailsPageData struct {
 	ServiceDeleteProgress             *serviceDeleteProgressData
 	ApplicationDeleteProgress         *applicationDeleteProgressData
 	ServiceActionError                *serviceActionErrorData
+	Clone                             *cloneApplicationPageData
+	// ClonedFrom holds the source application ID when the page was reached
+	// through a fresh clone redirect, so the page can warn about copied
+	// secrets. Zero means no banner.
+	ClonedFrom int64
 }
 
 type applicationRoutingPageData struct {

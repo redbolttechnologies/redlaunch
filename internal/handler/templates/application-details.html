@@ -18,6 +18,12 @@
     </div>
   </header>
 
+  {{if .ApplicationDetailsPage.ClonedFrom}}
+  <div class="application-notice" role="status">
+    <span>Cloned with secrets copied as-is. Review variables and secrets carefully before starting services. All services are stopped, domains were copied without routing, and volume data was not copied.</span>
+  </div>
+  {{end}}
+
   <div class="application-tabs" data-application-tabs>
     <div class="application-tablist" role="tablist" aria-label="Application details">
       <button class="application-tab" id="services-tab" type="button" role="tab" aria-controls="services-panel" aria-selected="true" tabindex="0" data-application-tab="services-panel">Services</button>
@@ -339,6 +345,27 @@
       <header class="application-settings-header">
         <h2>Settings</h2>
       </header>
+      <section class="application-clone-zone" aria-labelledby="clone-zone-title">
+        <header class="application-clone-zone-header">
+          <div>
+            <h3 id="clone-zone-title">Clone application</h3>
+            <p>Create an independent copy for another environment, such as dev or stage.</p>
+          </div>
+        </header>
+        <div class="application-clone-zone-action">
+          <div class="application-clone-zone-copy">
+            <h4>Clone {{.ApplicationDetailsPage.Application.Name}}</h4>
+            <p>Copies services, Compose configuration, variables, secrets, and domains without routing. Volume data is not copied and all services stay stopped.</p>
+          </div>
+          <button class="button button-secondary" type="button" data-application-clone-open aria-controls="application-clone-dialog" aria-haspopup="dialog" aria-expanded="false">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>Clone application…</span>
+          </button>
+        </div>
+      </section>
       <section class="application-danger-zone" aria-labelledby="danger-zone-title">
         <header class="application-danger-zone-header">
           <div>
@@ -586,6 +613,59 @@
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-application-delete-close>Cancel</button>
         <button class="button button-destructive" type="submit" data-application-delete-submit>Delete application</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="application-dialog application-clone-dialog" id="application-clone-dialog" data-application-clone-dialog{{with .ApplicationDetailsPage.Clone}}{{if .Open}} data-application-clone-open{{end}}{{end}} aria-modal="true" aria-labelledby="application-clone-dialog-title" aria-describedby="application-clone-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="application-clone-dialog-title">Clone application</h2>
+        <p id="application-clone-dialog-description">Create an independent copy of <code>{{.ApplicationDetailsPage.Application.Name}}</code> for another environment. The clone starts with all services stopped.</p>
+      </div>
+      <button class="icon-button" type="button" data-application-clone-close aria-label="Close clone application dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form" method="post" action="/applications/{{.ApplicationDetailsPage.Application.ID}}/clone">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationDetailsPage.CSRFToken}}">
+      {{with .ApplicationDetailsPage.Clone}}
+      {{if .Error}}
+      <div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>
+      {{end}}
+      {{end}}
+      <div class="field">
+        <label for="application-clone-name">Application name</label>
+        <input id="application-clone-name" name="name" type="text" value="{{with .ApplicationDetailsPage.Clone}}{{.Name}}{{else}}{{.ApplicationDetailsPage.Application.Name}} (dev){{end}}" maxlength="64" autocomplete="off" spellcheck="false" required>
+        <span class="field-help">A display name for the cloned application.</span>
+      </div>
+      <div class="field">
+        <label for="application-clone-folder">Folder name</label>
+        <input id="application-clone-folder" name="folder_name" type="text" value="{{with .ApplicationDetailsPage.Clone}}{{.FolderName}}{{else}}{{.ApplicationDetailsPage.Application.FolderName}}-dev{{end}}" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+        <span class="field-help">A single directory name below the managed applications directory.</span>
+      </div>
+      <div class="field">
+        <span class="field-label">Extra files</span>
+        <label class="checkbox-field" for="application-clone-extra-files">
+          <input id="application-clone-extra-files" name="copy_extra_files" type="checkbox" value="on"{{with .ApplicationDetailsPage.Clone}}{{if .CopyExtraFiles}} checked{{end}}{{end}}>
+          <span class="checkbox-field-copy">
+            <span class="checkbox-field-title">Copy extra project files</span>
+            <span class="checkbox-field-help">Also copy non-managed files below the project directory, such as bind-mounted configuration. Off by default; symlinks are never copied.</span>
+          </span>
+        </label>
+      </div>
+      <div class="application-form-note application-clone-impact">
+        <span class="application-form-note-mark" aria-hidden="true">!</span>
+        <span>Secrets are cloned as-is and need careful review. Domains are copied without routing, volume data is not copied, and every service stays stopped until started manually.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-application-clone-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-application-clone-submit>Clone application</button>
       </footer>
     </form>
   </div>

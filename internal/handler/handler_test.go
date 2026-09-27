@@ -177,6 +177,10 @@ type fakeApplicationService struct {
 	routings                        []application.Routing
 	created                         application.Application
 	createErr                       error
+	cloneID                         int64
+	cloneInput                      application.CloneInput
+	cloned                          application.Application
+	cloneErr                        error
 	importID                        int64
 	importContents                  []byte
 	importedServices                []application.Service
@@ -340,6 +344,18 @@ func (s *fakeApplicationService) Create(_ context.Context, name, folderName stri
 	}
 	s.created = application.Application{Name: name, FolderName: folderName}
 	return s.created, nil
+}
+
+func (s *fakeApplicationService) CloneApplication(_ context.Context, id int64, input application.CloneInput) (application.Application, error) {
+	if s.cloneErr != nil {
+		return application.Application{}, s.cloneErr
+	}
+	s.cloneID = id
+	s.cloneInput = input
+	if s.cloned.ID == 0 {
+		s.cloned = application.Application{ID: 9, Name: input.Name, FolderName: input.FolderName}
+	}
+	return s.cloned, nil
 }
 
 func (s *fakeApplicationService) ImportDockerComposeProject(_ context.Context, id int64, contents []byte) ([]application.Service, error) {

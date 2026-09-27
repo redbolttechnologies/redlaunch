@@ -93,6 +93,7 @@ from GitHub Actions via the registry or via direct image copy), see the
 - Configure application container entrypoints, healthchecks, restart policies,
   dependencies, port mappings, and volumes.
 - Import an existing Compose project.
+- Clone an application into an independent environment variant (dev, stage) from its Settings tab. Secrets copy as-is for review, domains copy without routing, volume data is not copied, and all services stay stopped.
 - Start, stop, restart, and remove managed services.
 - Run a managed service once as a one-off task (for example a database
   migration) with `docker compose run --rm` semantics; the container is

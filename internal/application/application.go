@@ -194,6 +194,18 @@ type Application struct {
 	ServiceCount int
 }
 
+// CloneInput contains the user-supplied values needed to clone an
+// application into a new, independent application (for example a dev or
+// stage variant). Secrets and variables are always copied as-is; the clone
+// is always left stopped so credential-dependent services can be reviewed
+// before the first start. Domains are copied without routings; routings must
+// be re-mapped manually on the clone. Volume data is never copied.
+type CloneInput struct {
+	Name           string
+	FolderName     string
+	CopyExtraFiles bool
+}
+
 // Domain is a domain name associated with an application.
 type Domain struct {
 	ID            int64
