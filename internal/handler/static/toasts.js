@@ -1,5 +1,7 @@
 (() => {
   const pollingDelay = 1500;
+  const refreshDelay = 1500;
+  let refreshScheduled = false;
 
   const closeToast = (toast) => {
     const closeURL = (toast && toast.dataset.closeUrl) || window.location.pathname;
@@ -11,6 +13,25 @@
     if (closeButton) {
       closeButton.addEventListener("click", () => closeToast(toast));
     }
+  };
+
+  // Once every toast has finished, refresh automatically so the page shows
+  // the new service status without requiring a manual dismiss. Failed toasts
+  // are excluded: their error detail must stay visible until dismissed.
+  const scheduleRefresh = (toast) => {
+    if (refreshScheduled) {
+      return;
+    }
+    if (document.querySelector('[data-toast-job][data-state="running"]')) {
+      return;
+    }
+    refreshScheduled = true;
+    const title = toast && toast.querySelector(".toast-title");
+    if (title) {
+      title.textContent += " — refreshing…";
+    }
+    const closeURL = (toast && toast.dataset.closeUrl) || window.location.pathname;
+    window.setTimeout(() => window.location.assign(closeURL), refreshDelay);
   };
 
   const showPollingError = (toast) => {
@@ -53,6 +74,8 @@
       bindToast(updated);
       if (updated.dataset.state === "running") {
         window.setTimeout(() => pollToast(updated), pollingDelay);
+      } else if (updated.dataset.state === "complete") {
+        scheduleRefresh(updated);
       }
     } catch (_) {
       showPollingError(toast);
@@ -68,6 +91,8 @@
     bindToast(toast);
     if (toast.dataset.state === "running") {
       window.setTimeout(() => pollToast(toast), pollingDelay);
+    } else if (toast.dataset.state === "complete") {
+      scheduleRefresh(toast);
     }
   });
 })();
