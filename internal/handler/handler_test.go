@@ -181,6 +181,10 @@ type fakeApplicationService struct {
 	cloneInput                      application.CloneInput
 	cloned                          application.Application
 	cloneErr                        error
+	renameID                        int64
+	renameName                      string
+	renamed                         application.Application
+	renameErr                       error
 	importID                        int64
 	importContents                  []byte
 	importedServices                []application.Service
@@ -356,6 +360,24 @@ func (s *fakeApplicationService) CloneApplication(_ context.Context, id int64, i
 		s.cloned = application.Application{ID: 9, Name: input.Name, FolderName: input.FolderName}
 	}
 	return s.cloned, nil
+}
+
+func (s *fakeApplicationService) RenameApplication(_ context.Context, id int64, name string) (application.Application, error) {
+	s.renameID = id
+	s.renameName = name
+	if s.renameErr != nil {
+		return application.Application{}, s.renameErr
+	}
+	if s.renamed.ID != 0 {
+		return s.renamed, nil
+	}
+	for _, item := range s.applications {
+		if item.ID == id {
+			item.Name = name
+			return item, nil
+		}
+	}
+	return application.Application{}, application.ErrNotFound
 }
 
 func (s *fakeApplicationService) ImportDockerComposeProject(_ context.Context, id int64, contents []byte) ([]application.Service, error) {

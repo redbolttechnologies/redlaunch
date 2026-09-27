@@ -31,6 +31,7 @@ networks:
 type ApplicationRepository interface {
 	List(context.Context) ([]application.Application, error)
 	Create(context.Context, application.Application) (application.Application, error)
+	UpdateApplicationName(context.Context, int64, string) (application.Application, error)
 }
 
 type applicationDetailsRepository interface {
@@ -703,6 +704,24 @@ func (s *Applications) Get(ctx context.Context, id int64) (application.Applicati
 		return application.Application{}, errors.New("application details repository is not configured")
 	}
 	return s.detailsRepository.Get(ctx, id)
+}
+
+// RenameApplication changes an application's display name. Only the metadata
+// name changes; the folder name, managed files, and Docker resources are
+// untouched.
+func (s *Applications) RenameApplication(ctx context.Context, id int64, name string) (application.Application, error) {
+	name, err := application.ValidateName(name)
+	if err != nil {
+		return application.Application{}, err
+	}
+	if s.repository == nil {
+		return application.Application{}, errors.New("application repository is not configured")
+	}
+	renamed, err := s.repository.UpdateApplicationName(ctx, id, name)
+	if err != nil {
+		return application.Application{}, fmt.Errorf("rename application: %w", err)
+	}
+	return renamed, nil
 }
 
 // ListDomains returns an application's associated domains in creation order.

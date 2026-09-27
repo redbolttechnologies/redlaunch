@@ -37,6 +37,7 @@ type Handler struct {
 	setupManager                   setupManager
 	applicationManager             applicationService
 	applicationCloner              applicationCloner
+	applicationRenamer             applicationRenamer
 	applicationImporter            applicationComposeImporter
 	applicationEnvironmentImporter applicationEnvironmentFileImporter
 	applicationDetails             applicationDetailsService
@@ -292,6 +293,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		logger = slog.Default()
 	}
 	templates, err := template.New("redlaunch").Funcs(template.FuncMap{
+		"applicationNameEditValue":    applicationNameEditValue,
 		"serviceTypeClass":            serviceTypeClass,
 		"serviceTypeLabel":            serviceTypeLabel,
 		"servicePresetCategoryLabel":  servicePresetCategoryLabel,
@@ -346,6 +348,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	manager := setupManager(noSetupManager{})
 	applications := applicationService(noApplicationService{})
 	var appCloner applicationCloner
+	var appRenamer applicationRenamer
 	var applicationImporter applicationComposeImporter
 	var applicationEnvironmentImporter applicationEnvironmentFileImporter
 	details := applicationDetailsService(noApplicationService{})
@@ -384,6 +387,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 				applications = dependency
 				if cloner, ok := dependency.(applicationCloner); ok {
 					appCloner = cloner
+				}
+				if renamer, ok := dependency.(applicationRenamer); ok {
+					appRenamer = renamer
 				}
 				if importer, ok := dependency.(applicationComposeImporter); ok {
 					applicationImporter = importer
@@ -446,6 +452,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		case applicationDetailsService:
 			if dependency != nil {
 				details = dependency
+				if renamer, ok := dependency.(applicationRenamer); ok {
+					appRenamer = renamer
+				}
 				if importer, ok := dependency.(applicationComposeImporter); ok {
 					applicationImporter = importer
 				}
@@ -531,6 +540,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		case applicationCloner:
 			if dependency != nil {
 				appCloner = dependency
+			}
+		case applicationRenamer:
+			if dependency != nil {
+				appRenamer = dependency
 			}
 		case applicationComposeImporter:
 			if dependency != nil {
@@ -637,6 +650,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		setupManager:                   manager,
 		applicationManager:             applications,
 		applicationCloner:              appCloner,
+		applicationRenamer:             appRenamer,
 		applicationImporter:            applicationImporter,
 		applicationEnvironmentImporter: applicationEnvironmentImporter,
 		applicationDetails:             details,
@@ -707,6 +721,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/environment/import", h.importApplicationEnvironmentFiles)
 	mux.HandleFunc("POST /applications/{id}/delete", h.deleteApplication)
 	mux.HandleFunc("POST /applications/{id}/clone", h.cloneApplication)
+	mux.HandleFunc("POST /applications/{id}/rename", h.renameApplication)
 	mux.HandleFunc("GET /applications/{id}/delete/status", h.applicationDeleteStatus)
 	mux.HandleFunc("POST /applications/{id}/variables", h.updateApplicationVariable)
 	mux.HandleFunc("POST /applications/{id}/variables/delete", h.deleteApplicationVariable)
@@ -4853,6 +4868,9 @@ type applicationDetailsPageData struct {
 	// through a fresh clone redirect, so the page can warn about copied
 	// secrets. Zero means no banner.
 	ClonedFrom int64
+	// NameEdit carries the inline title-edit state. Nil renders the static
+	// title; a non-nil value with Editing renders the editor open.
+	NameEdit *applicationNameEditData
 }
 
 type applicationRoutingPageData struct {
@@ -5144,6 +5162,10 @@ func (noApplicationService) List(context.Context) ([]application.Application, er
 }
 
 func (noApplicationService) Create(context.Context, string, string) (application.Application, error) {
+	return application.Application{}, errors.New("application service is not configured")
+}
+
+func (noApplicationService) RenameApplication(context.Context, int64, string) (application.Application, error) {
 	return application.Application{}, errors.New("application service is not configured")
 }
 

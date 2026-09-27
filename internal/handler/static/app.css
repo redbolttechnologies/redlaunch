@@ -1198,6 +1198,74 @@ h1 {
   margin: 0;
 }
 
+.application-title-block {
+  min-width: 0;
+}
+
+.application-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.application-title-row[hidden],
+.application-title-form[hidden] {
+  display: none;
+}
+
+.application-title-edit {
+  opacity: 0;
+}
+
+.application-title-row:hover .application-title-edit,
+.application-title-row:focus-within .application-title-edit,
+.application-title-edit:focus-visible {
+  opacity: 1;
+}
+
+.application-title-edit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.35);
+}
+
+@media (hover: none) {
+  .application-title-edit {
+    opacity: 1;
+  }
+}
+
+.application-title-form {
+  min-width: 0;
+}
+
+.application-title-input {
+  width: min(100%, 28rem);
+  min-height: 2.75rem;
+  padding: 0 var(--space-3);
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  outline: none;
+  /* Mirror the h1 typography above so the title does not shift while editing. */
+  font-size: 1.875rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+}
+
+.application-title-input:focus {
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.application-title-error {
+  margin: var(--space-2) 0 0;
+  color: hsl(var(--destructive));
+  font-size: 0.8125rem;
+}
+
 .application-tabs {
   min-width: 0;
   margin-top: var(--space-8);

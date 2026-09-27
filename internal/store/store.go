@@ -1074,6 +1074,30 @@ func (s *Store) DeleteApplication(ctx context.Context, id int64) error {
 	return nil
 }
 
+// UpdateApplicationName changes an application's display name and returns
+// the updated record. The folder name is untouched, so no managed files,
+// Compose configuration, or Docker resources are affected.
+func (s *Store) UpdateApplicationName(ctx context.Context, id int64, name string) (application.Application, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE applications
+		SET name = ?
+		WHERE id = ?`, name, id)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return application.Application{}, application.ErrAlreadyExists
+		}
+		return application.Application{}, fmt.Errorf("update application name: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return application.Application{}, fmt.Errorf("read updated application count: %w", err)
+	}
+	if affected == 0 {
+		return application.Application{}, application.ErrNotFound
+	}
+	return s.Get(ctx, id)
+}
+
 // CreateService persists service metadata and returns it with its database ID.
 // Secrets are deliberately not part of the service record.
 func (s *Store) CreateService(ctx context.Context, item application.Service) (application.Service, error) {

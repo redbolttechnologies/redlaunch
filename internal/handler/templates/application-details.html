@@ -9,13 +9,11 @@
     <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
       <path d="m9 18 6-6-6-6"></path>
     </svg>
-    <span aria-current="page">{{.ApplicationDetailsPage.Application.Name}}</span>
+    <span aria-current="page" id="application-breadcrumb-name" data-application-breadcrumb-name>{{.ApplicationDetailsPage.Application.Name}}</span>
   </nav>
 
   <header class="page-heading application-details-heading">
-    <div class="page-heading-copy">
-      <h1 id="page-title">{{.ApplicationDetailsPage.Application.Name}}</h1>
-    </div>
+    {{template "application-name-block" .}}
   </header>
 
   {{if .ApplicationDetailsPage.ClonedFrom}}

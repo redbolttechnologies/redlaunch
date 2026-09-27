@@ -1,0 +1,23 @@
+{{define "application-name-block"}}
+<div class="application-title-block" id="application-title-block" data-application-title-block data-application-id="{{.ApplicationDetailsPage.Application.ID}}" data-application-name="{{.ApplicationDetailsPage.Application.Name}}">
+  <div class="application-title-row" data-application-title-view{{with .ApplicationDetailsPage.NameEdit}}{{if .Editing}} hidden{{end}}{{end}}>
+    <h1 id="page-title">{{.ApplicationDetailsPage.Application.Name}}</h1>
+    <button class="icon-button application-title-edit" type="button" data-application-name-edit aria-label="Rename application" title="Rename application">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9"></path>
+        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path>
+      </svg>
+    </button>
+  </div>
+  <form class="application-title-form" data-application-name-form{{with .ApplicationDetailsPage.NameEdit}}{{if not .Editing}} hidden{{end}}{{else}} hidden{{end}} method="post" action="/applications/{{.ApplicationDetailsPage.Application.ID}}/rename" hx-post="/applications/{{.ApplicationDetailsPage.Application.ID}}/rename" hx-target="#application-title-block" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{.ApplicationDetailsPage.CSRFToken}}">
+    <label class="sr-only" for="application-name-input">Application name</label>
+    <input class="application-title-input" id="application-name-input" name="name" type="text" value="{{applicationNameEditValue .ApplicationDetailsPage}}" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"{{with .ApplicationDetailsPage.NameEdit}}{{if and .Editing (ne .Error "")}} aria-invalid="true" aria-describedby="application-name-error"{{end}}{{end}} data-application-name-input>
+  </form>
+  {{with .ApplicationDetailsPage.NameEdit}}{{if and .Editing (ne .Error "")}}<p class="application-title-error" id="application-name-error" role="alert">{{.Error}}</p>{{end}}{{end}}
+</div>
+{{end}}
+
+{{define "application-name-fragment"}}{{template "application-name-block" .}}
+<span id="application-breadcrumb-name" hx-swap-oob="true">{{.ApplicationDetailsPage.Application.Name}}</span>
+{{end}}

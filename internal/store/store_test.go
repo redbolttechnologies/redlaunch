@@ -121,6 +121,52 @@ func TestStoreApplicationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateApplicationName(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	created, err := database.Create(t.Context(), application.Application{
+		Name:       "Status page",
+		FolderName: "status-page",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := database.Create(t.Context(), application.Application{
+		Name:       "Shop",
+		FolderName: "shop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := database.UpdateApplicationName(t.Context(), created.ID, "Status overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != created.ID || updated.Name != "Status overview" || updated.FolderName != created.FolderName {
+		t.Fatalf("UpdateApplicationName() = %#v, want renamed record %#v", updated, created)
+	}
+
+	got, err := database.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Status overview" || got.FolderName != "status-page" {
+		t.Fatalf("Get() after rename = %#v, want new name with unchanged folder", got)
+	}
+
+	if _, err := database.UpdateApplicationName(t.Context(), created.ID, other.Name); !errors.Is(err, application.ErrAlreadyExists) {
+		t.Fatalf("UpdateApplicationName(duplicate) error = %v, want %v", err, application.ErrAlreadyExists)
+	}
+	if _, err := database.UpdateApplicationName(t.Context(), 999, "Missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateApplicationName(missing) error = %v, want %v", err, ErrNotFound)
+	}
+}
+
 func TestStoreAuthorizedEmailsRoundTrip(t *testing.T) {
 	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
 	if err != nil {

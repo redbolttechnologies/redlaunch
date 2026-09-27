@@ -245,6 +245,24 @@ func (s *applicationRepositoryStub) Create(_ context.Context, item application.A
 	return item, nil
 }
 
+func (s *applicationRepositoryStub) UpdateApplicationName(_ context.Context, id int64, name string) (application.Application, error) {
+	if s.err != nil {
+		return application.Application{}, s.err
+	}
+	for index := range s.applications {
+		if s.applications[index].ID == id {
+			for _, item := range s.applications {
+				if item.ID != id && item.Name == name {
+					return application.Application{}, application.ErrAlreadyExists
+				}
+			}
+			s.applications[index].Name = name
+			return s.applications[index], nil
+		}
+	}
+	return application.Application{}, application.ErrNotFound
+}
+
 func (s *applicationRepositoryStub) Get(_ context.Context, id int64) (application.Application, error) {
 	for _, item := range s.applications {
 		if item.ID == id {
