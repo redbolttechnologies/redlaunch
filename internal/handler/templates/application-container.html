@@ -61,7 +61,7 @@
         <div class="field">
           <label for="application-container-image-name">Image name</label>
           <input id="application-container-image-name" name="image_name" type="text" maxlength="255" value="{{.ApplicationContainerPage.ImageName}}" autocomplete="off" autocapitalize="none" spellcheck="false">
-          <span class="field-help">The image name and tag, for example <code>app:latest</code>. The local registry prefix is added automatically when the option below is left unchecked.</span>
+          <span class="field-help">The image name and tag, for example <code>app:latest</code> or <code>app:${API_VERSION}</code>. The tag may use a <code>vars.env</code> variable. The local registry prefix is added automatically when the option below is left unchecked.</span>
         </div>
 
         <div class="field">

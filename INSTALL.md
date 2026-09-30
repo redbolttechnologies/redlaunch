@@ -469,6 +469,10 @@ the image reference is interpreted:
 - turn it on to use the image reference exactly as entered, for example
   <code>ghcr.io/example/status-page:1.2.0</code>.
 
+The tag may use a <code>vars.env</code> variable, for example
+<code>my-app:${API_VERSION}</code> or <code>my-app:${API_VERSION:-latest}</code>.
+Set the variable on the application's Variables tab before starting the service.
+
 The custom application service must be running before a domain route can serve
 traffic successfully.
 

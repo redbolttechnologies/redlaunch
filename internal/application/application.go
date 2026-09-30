@@ -639,7 +639,12 @@ func DefaultApplicationImageName(serviceName string) string {
 
 // ValidateImageName validates a Docker image reference before it is written to
 // a Compose file. It accepts common registry, repository, tag, and digest
-// forms while excluding syntax that could alter generated YAML.
+// forms while excluding syntax that could alter generated YAML. Compose
+// interpolation from the managed environment files (vars.env/secrets.env) is
+// supported in the tag (for example my-app:${API_VERSION}) and as a single
+// whole-image placeholder (for example ${FULL_IMAGE}). Registry, repository,
+// and digest interpolation is rejected so the stored reference keeps an
+// explicit, auditable pull source.
 func ValidateImageName(value string) (string, error) {
 	image := strings.TrimSpace(value)
 	if image == "" {
@@ -651,10 +656,19 @@ func ValidateImageName(value string) (string, error) {
 	if containsControlCharacter(image) || strings.IndexFunc(image, unicode.IsSpace) >= 0 {
 		return "", ErrImageNameInvalid
 	}
-	if strings.ContainsAny(image, "\"'\\$;{}#") || strings.Contains(image, "://") {
+	if strings.ContainsAny(image, "\"'\\;#") || strings.Contains(image, "://") {
 		return "", ErrImageNameInvalid
 	}
+	if !strings.ContainsAny(image, "${}") {
+		return validateImageNameLiteral(image)
+	}
+	return validateImageNameWithInterpolation(image)
+}
 
+func validateImageNameLiteral(image string) (string, error) {
+	if strings.ContainsAny(image, "$;{}") {
+		return "", ErrImageNameInvalid
+	}
 	name := image
 	if digestIndex := strings.IndexByte(image, '@'); digestIndex >= 0 {
 		if strings.IndexByte(image[digestIndex+1:], '@') >= 0 || !validImageDigest(image[digestIndex+1:]) {
@@ -676,6 +690,218 @@ func ValidateImageName(value string) (string, error) {
 		return "", ErrImageNameInvalid
 	}
 	return image, nil
+}
+
+// validateImageNameWithInterpolation accepts Compose $VAR and ${VAR} forms in
+// the tag, including ${VAR:-default} style fallbacks whose default stays
+// within the Docker tag charset. A lone whole-image placeholder is also
+// accepted. Anything else containing $/{/} is rejected.
+func validateImageNameWithInterpolation(image string) (string, error) {
+	name := image
+	if digestIndex := strings.IndexByte(image, '@'); digestIndex >= 0 {
+		if strings.IndexByte(image[digestIndex+1:], '@') >= 0 {
+			return "", ErrImageNameInvalid
+		}
+		digest := image[digestIndex+1:]
+		if strings.ContainsAny(digest, "${}") {
+			return "", ErrImageNameInvalid
+		}
+		if !validImageDigest(digest) {
+			return "", ErrImageNameInvalid
+		}
+		name = image[:digestIndex]
+	}
+
+	if isSingleImagePlaceholder(name) {
+		return image, nil
+	}
+
+	lastSlash, lastColon := lastImageSeparatorsOutsideInterpolation(name)
+	if lastColon <= lastSlash {
+		return "", ErrImageNameInvalid
+	}
+	repository := name[:lastColon]
+	tag := name[lastColon+1:]
+	if strings.ContainsAny(repository, "${}") {
+		return "", ErrImageNameInvalid
+	}
+	if !validImageRepositoryName(repository) {
+		return "", ErrImageNameInvalid
+	}
+	if !validImageTagWithInterpolation(tag) {
+		return "", ErrImageNameInvalid
+	}
+	return image, nil
+}
+
+// lastImageSeparatorsOutsideInterpolation returns the last slash and colon
+// that are not inside a ${...} block. Colons in ${VAR:-default} fallbacks
+// must not be mistaken for the tag separator.
+func lastImageSeparatorsOutsideInterpolation(name string) (lastSlash, lastColon int) {
+	lastSlash, lastColon = -1, -1
+	for index := 0; index < len(name); {
+		if name[index] == '$' && index+1 < len(name) && name[index+1] == '{' {
+			closing := strings.IndexByte(name[index+2:], '}')
+			if closing < 0 {
+				return lastSlash, lastColon
+			}
+			index += 2 + closing + 1
+			continue
+		}
+		if name[index] == '/' {
+			lastSlash = index
+		}
+		if name[index] == ':' {
+			lastColon = index
+		}
+		index++
+	}
+	return lastSlash, lastColon
+}
+
+// isSingleImagePlaceholder reports whether the value is exactly one Compose
+// variable ($VAR or ${VAR}) without a fallback. Whole-image defaults would
+// contain image separators that cannot be validated safely here.
+func isSingleImagePlaceholder(value string) bool {
+	if value == "" {
+		return false
+	}
+	if value[0] != '$' {
+		return false
+	}
+	if len(value) >= 2 && value[1] == '{' {
+		if value[len(value)-1] != '}' {
+			return false
+		}
+		inner := value[2 : len(value)-1]
+		return validImageEnvVarName(inner)
+	}
+	return validImageEnvVarName(value[1:])
+}
+
+func validImageEnvVarName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		if character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isImageEnvVarStart(character byte) bool {
+	return character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+}
+
+func isImageEnvVarChar(character byte) bool {
+	return isImageEnvVarStart(character) || character >= '0' && character <= '9'
+}
+
+func isImageTagChar(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '_' || character == '.' || character == '-'
+}
+
+// validImageTagWithInterpolation allows literal tag characters mixed with
+// $VAR and ${VAR} placeholders. Braced placeholders may carry a Compose
+// fallback (:-, -, :?, ?, :+, +, :=, =) whose default stays within the tag
+// charset so the written `image:` line remains safe YAML.
+func validImageTagWithInterpolation(tag string) bool {
+	if tag == "" || len(tag) > MaxImageNameLength {
+		return false
+	}
+	var substituted strings.Builder
+	substituted.Grow(len(tag))
+	for index := 0; index < len(tag); {
+		character := tag[index]
+		if character != '$' {
+			if character == '{' || character == '}' {
+				return false
+			}
+			if !isImageTagChar(character) {
+				return false
+			}
+			substituted.WriteByte(character)
+			index++
+			continue
+		}
+		if index+1 >= len(tag) {
+			return false
+		}
+		next := tag[index+1]
+		if next == '$' {
+			return false
+		}
+		if next == '{' {
+			closing := strings.IndexByte(tag[index+2:], '}')
+			if closing < 0 {
+				return false
+			}
+			closing += index + 2
+			inner := tag[index+2 : closing]
+			if !validImageTagPlaceholderInner(inner) {
+				return false
+			}
+			substituted.WriteByte('x')
+			index = closing + 1
+			continue
+		}
+		if !isImageEnvVarStart(next) {
+			return false
+		}
+		end := index + 2
+		for end < len(tag) && isImageEnvVarChar(tag[end]) {
+			end++
+		}
+		if !validImageEnvVarName(tag[index+1 : end]) {
+			return false
+		}
+		substituted.WriteByte('x')
+		index = end
+	}
+	result := substituted.String()
+	if result == "" || len(result) > 128 {
+		return false
+	}
+	return validImageTag(result)
+}
+
+func validImageTagPlaceholderInner(inner string) bool {
+	if inner == "" || strings.ContainsAny(inner, "${} \t\r\n\"'\\;#/") || strings.Contains(inner, "://") {
+		return false
+	}
+	end := 0
+	for end < len(inner) && ((end == 0 && isImageEnvVarStart(inner[end])) || (end > 0 && isImageEnvVarChar(inner[end]))) {
+		end++
+	}
+	if end == 0 || !validImageEnvVarName(inner[:end]) {
+		return false
+	}
+	rest := inner[end:]
+	if rest == "" {
+		return true
+	}
+	var def string
+	switch {
+	case strings.HasPrefix(rest, ":-"), strings.HasPrefix(rest, ":?"), strings.HasPrefix(rest, ":+"), strings.HasPrefix(rest, ":="):
+		def = rest[2:]
+	case strings.HasPrefix(rest, "-"), strings.HasPrefix(rest, "?"), strings.HasPrefix(rest, "+"), strings.HasPrefix(rest, "="):
+		def = rest[1:]
+	default:
+		return false
+	}
+	if len(def) > 128 {
+		return false
+	}
+	for index := 0; index < len(def); index++ {
+		if !isImageTagChar(def[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func validImageRepositoryName(name string) bool {

@@ -244,6 +244,23 @@ func TestValidateImageName(t *testing.T) {
 		{name: "whitespace", value: "registry.example.com/app:latest tag", wantErr: ErrImageNameInvalid},
 		{name: "yaml syntax", value: "registry.example.com/app:latest\nlabels:", wantErr: ErrImageNameInvalid},
 		{name: "uppercase repository", value: "Example/App:latest", wantErr: ErrImageNameInvalid},
+		{name: "tag interpolation", value: "my-app:${API_VERSION}", want: "my-app:${API_VERSION}"},
+		{name: "tag interpolation unbraced", value: "my-app:$API_VERSION", want: "my-app:$API_VERSION"},
+		{name: "tag interpolation with default", value: "my-app:${API_VERSION:-latest}", want: "my-app:${API_VERSION:-latest}"},
+		{name: "tag interpolation with prefix", value: "ghcr.io/example/app:v${API_VERSION}", want: "ghcr.io/example/app:v${API_VERSION}"},
+		{name: "tag interpolation local registry", value: "localhost:5000/app:${API_VERSION}", want: "localhost:5000/app:${API_VERSION}"},
+		{name: "whole image interpolation", value: "${FULL_IMAGE}", want: "${FULL_IMAGE}"},
+		{name: "whole image interpolation unbraced", value: "$FULL_IMAGE", want: "$FULL_IMAGE"},
+		{name: "tag interpolation digest", value: "my-app:${API_VERSION}@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", want: "my-app:${API_VERSION}@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+		{name: "repository interpolation rejected", value: "${REGISTRY}/app:latest", wantErr: ErrImageNameInvalid},
+		{name: "repository interpolation rejected unbraced", value: "$REGISTRY/app:latest", wantErr: ErrImageNameInvalid},
+		{name: "digest interpolation rejected", value: "my-app@sha256:${DIGEST}", wantErr: ErrImageNameInvalid},
+		{name: "escaped dollar rejected", value: "my-app:$$TAG", wantErr: ErrImageNameInvalid},
+		{name: "unclosed interpolation rejected", value: "my-app:${API_VERSION", wantErr: ErrImageNameInvalid},
+		{name: "invalid variable rejected", value: "my-app:${9LIVES}", wantErr: ErrImageNameInvalid},
+		{name: "empty interpolation rejected", value: "my-app:${}", wantErr: ErrImageNameInvalid},
+		{name: "stray brace rejected", value: "my-app:{latest}", wantErr: ErrImageNameInvalid},
+		{name: "interpolation comment rejected", value: "my-app:${API_VERSION}#comment", wantErr: ErrImageNameInvalid},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

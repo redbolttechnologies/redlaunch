@@ -4588,6 +4588,12 @@ func applicationContainerImageName(imageName string, useDockerRegistry bool) str
 	if useDockerRegistry || imageName == "" {
 		return imageName
 	}
+	// A whole-image placeholder (for example ${FULL_IMAGE}) already resolves
+	// to a complete reference; prefixing it with the local registry would
+	// produce an unusable repository interpolation.
+	if strings.HasPrefix(imageName, "$") {
+		return imageName
+	}
 
 	localRegistryPrefix := application.LocalRegistryAddress + "/"
 	if strings.HasPrefix(imageName, localRegistryPrefix) {

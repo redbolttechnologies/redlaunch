@@ -189,6 +189,50 @@ func TestApplicationsValidateApplicationServiceInput(t *testing.T) {
 	if err := applications.ValidateApplicationServiceInput(application.ApplicationServiceInput{ServiceName: "worker"}); err != nil {
 		t.Fatalf("ValidateApplicationServiceInput(default image) error = %v, want nil", err)
 	}
+	if err := applications.ValidateApplicationServiceInput(application.ApplicationServiceInput{ServiceName: "worker", ImageName: "my-app:${API_VERSION}"}); err != nil {
+		t.Fatalf("ValidateApplicationServiceInput(interpolated tag) error = %v, want nil", err)
+	}
+	if err := applications.ValidateApplicationServiceInput(application.ApplicationServiceInput{ServiceName: "worker", ImageName: "my-app:${API_VERSION:-latest}"}); err != nil {
+		t.Fatalf("ValidateApplicationServiceInput(interpolated tag default) error = %v, want nil", err)
+	}
+	if err := applications.ValidateApplicationServiceInput(application.ApplicationServiceInput{ServiceName: "worker", ImageName: "${REGISTRY}/app:latest"}); !errors.Is(err, application.ErrImageNameInvalid) {
+		t.Fatalf("ValidateApplicationServiceInput(repository interpolation) error = %v, want %v", err, application.ErrImageNameInvalid)
+	}
+}
+
+func TestApplicationsCreateApplicationServiceWithInterpolatedTag(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{}
+	applications, err := NewApplications(repository, root, &recordingRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := applications.Create(t.Context(), "Status page", "status-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := applications.CreateApplicationService(t.Context(), created.ID, application.ApplicationServiceInput{
+		ServiceName: "worker",
+		ImageName:   "ghcr.io/example/worker:${API_VERSION}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.ImageName != "ghcr.io/example/worker:${API_VERSION}" {
+		t.Fatalf("created service image = %q, want interpolated reference", service.ImageName)
+	}
+	composeContents := readServiceFile(t, filepath.Join(root, applicationsDir, "status-page", "compose.yml"))
+	if !strings.Contains(composeContents, "image: ghcr.io/example/worker:${API_VERSION}") {
+		t.Fatalf("Compose file does not contain interpolated image:\n%s", composeContents)
+	}
+	config, err := applications.GetApplicationServiceConfig(t.Context(), created.ID, "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ImageName != "ghcr.io/example/worker:${API_VERSION}" {
+		t.Fatalf("service config image = %q, want interpolated reference", config.ImageName)
+	}
 }
 
 func TestApplicationsCreateApplicationServiceWritesAdvancedComposeSettings(t *testing.T) {
