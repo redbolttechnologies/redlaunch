@@ -6,9 +6,10 @@ ARG GO_VERSION
 WORKDIR /src
 
 # Download module dependencies first so source edits do not invalidate the
-# cached dependency layer. Only the module manifests and Go sources enter the
-# build context (see .dockerignore); repository history, local environment
-# files, and host credential variants are never sent to the builder.
+# cached dependency layer. Only the module manifests, Go sources, and public
+# operator guides enter the build context (see .dockerignore). Repository
+# history, local environment files, and host credential variants are never
+# sent to the builder.
 # The module cache mount below persists across builds on the same builder so
 # the layer stays small and the compile step below can reuse downloads.
 COPY go.mod go.sum ./
@@ -17,6 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
+COPY documentation.go README.md INSTALL.md RECIPES.md SSH_KEYS.md API_TOKENS.md ./
 
 # The Go build cache mount keeps recompiles incremental across image builds:
 # without it every build recompiles all dependencies (notably the large

@@ -86,6 +86,14 @@ For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
 
+Open **Help** in the sidebar (or visit `/help`) for Getting started, First
+steps, how-to guides, and troubleshooting. The online help includes these
+Markdown guides with a section index and copyable commands, scripts, and code
+examples. It is bundled with the application, works without internet access,
+and is available after signing in, including before first-run setup is complete.
+External documentation links still require internet access. Replace example
+hostnames, application IDs, paths, and GitHub variables before running examples.
+
 ## What it can do
 
 - Create and manage Docker Compose applications.

@@ -1,0 +1,84 @@
+{{define "help-content.html"}}
+<section class="help-page">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">{{with .HelpPage.Guide}}{{.Title}}{{else}}Help{{end}}</h1>
+      <p>{{with .HelpPage.Guide}}{{.Description}}{{else}}Install, configure, and operate Redlaunch. Start with the basics or jump to a practical guide.{{end}}</p>
+    </div>
+    {{if .HelpPage.Guide}}<a class="button button-secondary" href="/help">All help topics</a>{{end}}
+  </header>
+
+  <div class="help-layout">
+    <aside class="help-navigation">
+      <nav aria-label="Help navigation">
+        <a class="side-menu-item{{if not .HelpPage.Guide}} side-menu-item-active{{end}}" href="/help"{{if not .HelpPage.Guide}} aria-current="page"{{end}}>Help overview</a>
+        {{range .HelpPage.Guides}}{{$slug := .Slug}}
+        <a class="side-menu-item{{with $.HelpPage.Guide}}{{if eq .Slug $slug}} side-menu-item-active{{end}}{{end}}" href="/help/{{.Slug}}"{{with $.HelpPage.Guide}}{{if eq .Slug $slug}} aria-current="page"{{end}}{{end}}>{{.Title}}</a>
+        {{end}}
+      </nav>
+      {{with .HelpPage.Guide}}
+      <details class="help-toc" open>
+        <summary>On this page</summary>
+        <nav aria-label="On this page">
+          {{range .TOC}}<a class="help-toc-link{{if eq .Level 3}} help-toc-nested{{end}}" href="#{{.ID}}">{{.Title}}</a>{{end}}
+        </nav>
+      </details>
+      {{else}}
+      <nav class="help-toc" aria-label="Help categories">
+        {{range .HelpPage.Sections}}<a class="help-toc-link" href="#{{.ID}}">{{.Title}}</a>{{end}}
+      </nav>
+      {{end}}
+    </aside>
+
+    <div class="help-main">
+      {{with .HelpPage.Guide}}
+      <p class="help-source">From <code>{{.File}}</code> · bundled with this version of Redlaunch</p>
+      <div class="application-form-note">Examples use placeholders. Replace hostnames, paths, application IDs, and GitHub variables with your values before running commands. Keep credentials in your secret store.</div>
+      <article class="help-article" aria-labelledby="page-title">{{.Content}}</article>
+      <a class="button button-secondary" href="#page-title">Back to top</a>
+      {{else}}
+      <section class="service-widget" aria-labelledby="help-quick-start">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="help-quick-start">Quick start</h2>
+            <p>Run on your VPS after installing Docker Engine, Compose, and the host tools.</p>
+          </div>
+          <a class="button button-secondary" href="/help/installation">Installation guide</a>
+        </header>
+        <div class="service-widget-body help-quick-start">
+          <p>The installer asks for an installation directory, Google OAuth credentials, and your first authorized email. The default directory is <code>/opt/redlaunch</code>.</p>
+          <div class="help-code-block">
+            <div class="help-code-toolbar"><span>sh · on the VPS</span><button class="button button-secondary" type="button" data-copy-target="help-install-command" aria-label="Copy installation commands"><span>Copy</span></button></div>
+            <pre tabindex="0"><code id="help-install-command">wget https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh
+bash install.sh
+</code></pre>
+          </div>
+          <p>On your computer, replace <code>your-user@your-server</code> and open an SSH tunnel. Keep it running while you use <a href="http://localhost:8080">http://localhost:8080</a>, then sign in with your authorized Google account.</p>
+          <div class="help-code-block">
+            <div class="help-code-toolbar"><span>sh · on your computer</span><button class="button button-secondary" type="button" data-copy-target="help-tunnel-command" aria-label="Copy SSH tunnel command"><span>Copy</span></button></div>
+            <pre tabindex="0"><code id="help-tunnel-command">ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
+</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <div class="help-sections">
+        {{range .HelpPage.Sections}}
+        <section class="service-widget" aria-labelledby="{{.ID}}">
+          <header class="service-widget-header">
+            <div class="service-widget-heading"><h2 id="{{.ID}}">{{.Title}}</h2><p>{{.Description}}</p></div>
+          </header>
+          <ul class="help-topic-list">
+            {{range .Links}}
+            <li><a class="help-topic" href="{{.URL}}"><strong>{{.Title}}</strong><span>{{.Description}}</span></a></li>
+            {{end}}
+          </ul>
+        </section>
+        {{end}}
+      </div>
+      <p class="help-source">Help is bundled from README, INSTALL, RECIPES, SSH_KEYS, and API_TOKENS. Commands and workflows match the documentation shipped with this version.</p>
+      {{end}}
+    </div>
+  </div>
+</section>
+{{end}}

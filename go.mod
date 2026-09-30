@@ -2,7 +2,10 @@ module redlaunch
 
 go 1.26.8
 
-require modernc.org/sqlite v1.57.0
+require (
+	github.com/yuin/goldmark v1.8.6
+	modernc.org/sqlite v1.57.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

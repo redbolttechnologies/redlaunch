@@ -737,6 +737,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing", h.saveApplicationRouting)
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing/delete", h.deleteApplicationRouting)
 	mux.HandleFunc("GET /settings", h.settingsPage)
+	mux.HandleFunc("GET /help", h.helpPage)
+	mux.HandleFunc("GET /help/{guide}", h.helpPage)
 	mux.HandleFunc("POST /settings/domains", h.createRedlaunchDomain)
 	mux.HandleFunc("POST /settings/domains/delete", h.deleteRedlaunchDomain)
 	mux.HandleFunc("POST /settings/ssh-keys", h.createServerSSHKey)
@@ -4761,6 +4763,7 @@ type pageData struct {
 	ApplicationContainerPage     *applicationContainerPageData
 	DashboardPage                *dashboardPageData
 	SettingsPage                 *settingsPageData
+	HelpPage                     *helpPageData
 }
 
 type sidebarUserData struct {
