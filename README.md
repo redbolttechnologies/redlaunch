@@ -106,6 +106,9 @@ from GitHub Actions via the registry or via direct image copy), see the
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Schedule, restore, download, and remove PostgreSQL backups.
+- Update a PostgreSQL service's database user and password from its service
+  details page. The live database role is updated first, then the managed
+  environment files, and the service restarts to apply them.
 - Create and revoke server SSH keys for external automation from Settings.
 - Create and revoke per-application API tokens from Settings for
   machine-triggered one-off service runs.

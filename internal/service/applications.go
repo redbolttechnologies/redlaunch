@@ -1229,14 +1229,19 @@ func (s *Applications) StartService(ctx context.Context, applicationID int64, se
 			return fmt.Errorf("list services for service action: %w", err)
 		}
 		registered := false
+		var target application.Service
 		for _, service := range services {
 			if service.Name == validatedName {
 				registered = true
+				target = service
 				break
 			}
 		}
 		if !registered {
 			return application.ErrServiceNotFound
+		}
+		if err := s.checkPostgresCredentialsDrift(ctx, applicationID, target); err != nil {
+			return err
 		}
 		directory, err := s.managedApplicationDirectory(item)
 		if err != nil {
@@ -1261,6 +1266,20 @@ func (s *Applications) StopService(ctx context.Context, applicationID int64, ser
 
 // RestartService restarts one registered service in an application.
 func (s *Applications) RestartService(ctx context.Context, applicationID int64, serviceName string) error {
+	if s.detailsRepository != nil {
+		if validated, err := application.ValidateServiceName(serviceName); err == nil {
+			if services, err := s.detailsRepository.ListServices(ctx, applicationID); err == nil {
+				for _, service := range services {
+					if service.Name == validated {
+						if driftErr := s.checkPostgresCredentialsDrift(ctx, applicationID, service); driftErr != nil {
+							return driftErr
+						}
+						break
+					}
+				}
+			}
+		}
+	}
 	return s.runServiceAction(ctx, applicationID, serviceName, "restart", func(controller composeServiceController, directory, name string) error {
 		return controller.Restart(ctx, directory, name)
 	})

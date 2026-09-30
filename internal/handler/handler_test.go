@@ -640,6 +640,16 @@ func (s *fakeApplicationService) RunServiceOnce(_ context.Context, id int64, ser
 	return err
 }
 
+func (s *fakeApplicationService) UpdatePostgreSQLCredentials(_ context.Context, id int64, serviceName string, input application.PostgreSQLCredentialsInput) (application.Service, error) {
+	s.serviceActionMu.Lock()
+	s.serviceAction = "credentials"
+	s.serviceActionID = id
+	s.serviceActionName = serviceName
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return application.Service{}, err
+}
+
 func (s *fakeApplicationService) getServiceAction() (string, int64, string) {
 	s.serviceActionMu.Lock()
 	defer s.serviceActionMu.Unlock()
@@ -3624,13 +3634,18 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 		`id="backups-panel"`,
 		`server ready &lt;healthy&gt;`,
 		`class="service-dashboard"`,
+		`Database credentials`,
+		`data-postgres-credentials-open`,
+		`Update credentials`,
+		`action="/applications/7/services/db/credentials"`,
+		`id="postgres-credentials-dialog"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /applications/7/services/db did not render %q: %s", expected, body)
 		}
 	}
-	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 4 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 4", got)
+	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 5 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 5", got)
 	}
 	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 4 {
 		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 4", got)

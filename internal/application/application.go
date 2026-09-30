@@ -106,6 +106,9 @@ var (
 	ErrDatabaseServiceTypeAlreadyExists = errors.New("application already has a database service of this type")
 	ErrDatabaseCredentialsAmbiguous     = errors.New("database service credentials are ambiguous")
 	ErrDatabaseCredentialsConflict      = errors.New("database service credentials conflict with existing data")
+	ErrDatabaseCredentialsUnchanged     = errors.New("database credentials are unchanged")
+	ErrDatabaseCredentialsDrift         = errors.New("database credentials do not match the running database")
+	ErrDatabaseServiceNotRunning        = errors.New("database service is not running")
 	ErrServiceNotFound                  = errors.New("service not found")
 	ErrEnvironmentVariableNameRequired  = errors.New("environment variable name is required")
 	ErrEnvironmentVariableNameInvalid   = errors.New("environment variable name is invalid")
@@ -487,6 +490,15 @@ type RedisServiceInput struct {
 	Port          string
 	Password      string
 	PersistToDisk bool
+}
+
+// PostgreSQLCredentialsInput contains the desired database role and password
+// for a credential rotation. An empty DatabasePassword keeps the existing
+// password; the password itself is transient input and is never persisted in
+// service metadata.
+type PostgreSQLCredentialsInput struct {
+	DatabaseUser     string
+	DatabasePassword string
 }
 
 // ApplicationHealthcheck contains the optional healthcheck command and Compose

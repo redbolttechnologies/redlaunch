@@ -130,6 +130,9 @@
   {{if .ServiceDetailsPage.Details.Backup}}
   {{template "service-details-backup-dialogs.html" .}}
   {{end}}
+  {{if eq .ServiceDetailsPage.Details.Service.Type "postgresql"}}
+  {{template "service-details-credentials-dialog.html" .}}
+  {{end}}
   {{else}}
   {{template "service-details-dashboard.html" .}}
   {{template "service-details-logs.html" .}}
@@ -243,6 +246,44 @@
         </div>
         {{end}}
       </div>
+    </div>
+  </section>
+  {{end}}
+  {{if eq .ServiceDetailsPage.Details.Service.Type "postgresql"}}
+  <section class="service-widget service-credentials-widget" aria-labelledby="database-credentials-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading-with-icon">
+        <span class="service-widget-section-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4.5" y="10" width="15" height="10" rx="2"></rect>
+            <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+          </svg>
+        </span>
+        <div class="service-widget-heading">
+          <h2 id="database-credentials-title">Database credentials</h2>
+          <p>Role and password from <code>{{.ServiceDetailsPage.Details.Service.Name}}.vars.env</code> and <code>{{.ServiceDetailsPage.Details.Service.Name}}.secrets.env</code>.</p>
+        </div>
+      </div>
+      <div class="service-details-actions" role="group" aria-label="Database credential actions">
+        <button class="button button-secondary" type="button" data-postgres-credentials-open>Update credentials</button>
+      </div>
+    </header>
+    <div class="service-widget-body">
+      <dl class="service-general-grid">
+        <div class="service-general-item">
+          <div class="service-general-copy">
+            <dt>Database user</dt>
+            <dd><code>{{.ServiceDetailsPage.Details.Service.DatabaseUser}}</code></dd>
+          </div>
+        </div>
+        <div class="service-general-item">
+          <div class="service-general-copy">
+            <dt>Database password</dt>
+            <dd><code aria-label="Hidden password">••••••••</code></dd>
+          </div>
+        </div>
+      </dl>
+      <p class="field-help">Updating credentials changes the live database role first and then the managed environment files, and restarts the service to apply them. The service must be running. Edit the environment files directly only if you also update the database role yourself.</p>
     </div>
   </section>
   {{end}}
@@ -584,6 +625,48 @@
       <footer class="application-form-actions">
         <button class="button button-secondary" type="button" data-backup-disable-close>Cancel</button>
         <button class="button button-destructive" type="submit" data-backup-disable-submit>Turn off scheduled backups</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}
+
+{{define "service-details-credentials-dialog.html"}}
+<dialog class="application-dialog postgres-credentials-dialog" id="postgres-credentials-dialog" data-postgres-credentials-dialog role="dialog" aria-modal="true" aria-labelledby="postgres-credentials-dialog-title" aria-describedby="postgres-credentials-dialog-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="postgres-credentials-dialog-title">Update database credentials</h2>
+        <p id="postgres-credentials-dialog-description">Updates the live PostgreSQL role first, then the managed environment files, and restarts the service to apply them. The service must be running.</p>
+      </div>
+      <button class="icon-button" type="button" data-postgres-credentials-close aria-label="Close update database credentials dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form postgres-credentials-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/credentials" data-postgres-credentials-form>
+      <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
+      <div class="field">
+        <label for="postgres-credentials-user">Database user</label>
+        <input id="postgres-credentials-user" name="database_user" type="text" maxlength="63" value="{{.ServiceDetailsPage.Details.Service.DatabaseUser}}" autocomplete="username" required>
+        <span class="field-help">Letters, numbers, and underscores, starting with a letter or underscore.</span>
+      </div>
+      <div class="field">
+        <label for="postgres-credentials-password">New password</label>
+        <input id="postgres-credentials-password" name="new_password" type="password" maxlength="256" value="" autocomplete="new-password" data-postgres-credentials-password>
+        <span class="field-help">Leave empty to keep the current password when only renaming the user.</span>
+      </div>
+      <div class="field">
+        <label for="postgres-credentials-confirm">Confirm new password</label>
+        <input id="postgres-credentials-confirm" name="confirm_password" type="password" maxlength="256" value="" autocomplete="new-password" data-postgres-credentials-confirm>
+      </div>
+      <p class="application-alert service-form-alert" role="alert" data-postgres-credentials-error hidden></p>
+
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-postgres-credentials-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-postgres-credentials-submit>Update credentials</button>
       </footer>
     </form>
   </div>

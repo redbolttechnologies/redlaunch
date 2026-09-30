@@ -918,6 +918,44 @@ func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, servic
 	return nil
 }
 
+// postgresExecWrapper runs one SQL statement through psql using the container's
+// existing POSTGRES_USER/POSTGRES_DB environment for authentication. The SQL
+// text travels as "$0" (a single exec argument) so user-controlled values are
+// never parsed by the container shell; callers remain responsible for SQL
+// literal/identifier escaping.
+const postgresExecWrapper = `exec psql --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" -t -A -c "$0"`
+
+// ExecPostgresSQL runs one SQL statement inside the PostgreSQL service
+// container and returns its trimmed stdout. Credentials never pass through
+// the host command line: authentication reuses the container environment and
+// the statement itself is a single exec argument.
+func (r CommandRunner) ExecPostgresSQL(ctx context.Context, projectDir, serviceName, sql string) (string, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return "", errors.New("Compose service name is required")
+	}
+	if strings.TrimSpace(sql) == "" {
+		return "", errors.New("PostgreSQL statement is required")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return "", fmt.Errorf("find Compose file: %w", err)
+	}
+	if err := r.verifyProjectOwnership(ctx, projectDir); err != nil {
+		return "", err
+	}
+	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresExecWrapper, sql)
+	output, err := runStructuredCommand(command, "run PostgreSQL statement", projectDir)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func openManagedOutput(path string) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err == nil {

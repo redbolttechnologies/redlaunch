@@ -1252,6 +1252,59 @@ func (s *Store) UpdateServiceImage(ctx context.Context, applicationID int64, ser
 	return item, nil
 }
 
+// UpdateServiceDatabaseUser changes one PostgreSQL service's database role
+// metadata. It is used by credential rotation; the Compose environment files
+// remain the runtime source of truth.
+func (s *Store) UpdateServiceDatabaseUser(ctx context.Context, applicationID int64, serviceName, databaseUser string) (application.Service, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE services
+		SET database_user = ?
+		WHERE application_id = ? AND name = ?`, databaseUser, applicationID, serviceName)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("update application service: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return application.Service{}, fmt.Errorf("read updated application service count: %w", err)
+	}
+	if affected == 0 {
+		return application.Service{}, application.ErrServiceNotFound
+	}
+	var item application.Service
+	var createdAt string
+	var redisPersistToDisk int
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id, application_id, name, service_type, image_name, postgres_version, database_name, database_user,
+			redis_version, redis_port, redis_persist_to_disk, created_at
+		FROM services
+		WHERE application_id = ? AND name = ?`, applicationID, serviceName).Scan(
+		&item.ID,
+		&item.ApplicationID,
+		&item.Name,
+		&item.Type,
+		&item.ImageName,
+		&item.PostgresVersion,
+		&item.DatabaseName,
+		&item.DatabaseUser,
+		&item.RedisVersion,
+		&item.RedisPort,
+		&redisPersistToDisk,
+		&createdAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return application.Service{}, application.ErrServiceNotFound
+		}
+		return application.Service{}, fmt.Errorf("get updated application service: %w", err)
+	}
+	item.RedisPersistToDisk = redisPersistToDisk != 0
+	item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return application.Service{}, fmt.Errorf("parse application service timestamp: %w", err)
+	}
+	return item, nil
+}
+
 // DeleteService removes one service's metadata from an application.
 func (s *Store) DeleteService(ctx context.Context, applicationID int64, serviceName string) error {
 	result, err := s.db.ExecContext(ctx, `

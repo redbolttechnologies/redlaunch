@@ -28,14 +28,17 @@ type serviceActionJobStore struct {
 type serviceActionJob struct {
 	mu sync.RWMutex
 
-	id              string
-	applicationID   int64
-	serviceName     string
-	operation       string
-	state           string
-	errorDetail     string
-	errorTechnical  string
-	finishedAt      time.Time
+	id             string
+	applicationID  int64
+	serviceName    string
+	operation      string
+	credentialUser string
+	credentialPass string
+	hasCredentials bool
+	state          string
+	errorDetail    string
+	errorTechnical string
+	finishedAt     time.Time
 }
 
 type serviceActionProgressData struct {
@@ -193,6 +196,31 @@ func (j *serviceActionJob) snapshot() serviceActionProgressData {
 	}
 }
 
+// setCredentials attaches the desired database credentials to a credentials
+// job. The values live only in process memory and are wiped when the job
+// finishes; they never reach logs or templates.
+func (j *serviceActionJob) setCredentials(user, password string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.credentialUser = user
+	j.credentialPass = password
+	j.hasCredentials = true
+}
+
+func (j *serviceActionJob) takeCredentials() (string, string, bool) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.credentialUser, j.credentialPass, j.hasCredentials
+}
+
+func (j *serviceActionJob) wipeCredentials() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.credentialUser = ""
+	j.credentialPass = ""
+	j.hasCredentials = false
+}
+
 func (h *Handler) runServiceActionJob(ctx context.Context, job *serviceActionJob) {
 	var err error
 	switch job.operation {
@@ -204,6 +232,8 @@ func (h *Handler) runServiceActionJob(ctx context.Context, job *serviceActionJob
 		err = h.serviceActions.RestartService(ctx, job.applicationID, job.serviceName)
 	case "run":
 		err = h.serviceActions.RunServiceOnce(ctx, job.applicationID, job.serviceName)
+	case "credentials":
+		err = h.runPostgresCredentialsJob(ctx, job)
 	default:
 		err = errors.New("unknown service operation")
 	}

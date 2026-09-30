@@ -201,6 +201,7 @@ type serviceActionService interface {
 	StopService(context.Context, int64, string) error
 	RestartService(context.Context, int64, string) error
 	RunServiceOnce(context.Context, int64, string) error
+	UpdatePostgreSQLCredentials(context.Context, int64, string, application.PostgreSQLCredentialsInput) (application.Service, error)
 }
 
 type serviceDeletionService interface {
@@ -749,6 +750,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/stop", h.stopService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/restart", h.restartService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
+	mux.HandleFunc("POST /applications/{id}/services/{service}/credentials", h.updatePostgresCredentials)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/action/status", h.serviceActionStatus)
@@ -2945,6 +2947,8 @@ func serviceActionPastTense(action string) string {
 		return "restarted"
 	case "run":
 		return "run"
+	case "credentials":
+		return "updated"
 	default:
 		return "changed"
 	}
@@ -2960,6 +2964,8 @@ func serviceActionPresentTense(action string) string {
 		return "Restarting"
 	case "run":
 		return "Running"
+	case "credentials":
+		return "Updating credentials"
 	default:
 		return "Updating"
 	}
@@ -5271,6 +5277,10 @@ func (noApplicationService) RestartService(context.Context, int64, string) error
 
 func (noApplicationService) RunServiceOnce(context.Context, int64, string) error {
 	return errors.New("application service is not configured")
+}
+
+func (noApplicationService) UpdatePostgreSQLCredentials(context.Context, int64, string, application.PostgreSQLCredentialsInput) (application.Service, error) {
+	return application.Service{}, errors.New("application service is not configured")
 }
 
 func (noApplicationService) DeleteService(context.Context, int64, string) error {
