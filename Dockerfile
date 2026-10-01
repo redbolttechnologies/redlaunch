@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-COPY documentation.go README.md INSTALL.md RECIPES.md SSH_KEYS.md API_TOKENS.md ./
+COPY documentation.go README.md INSTALL.md RECIPES.md SSH_KEYS.md API_TOKENS.md MCP.md ./
 
 # The Go build cache mount keeps recompiles incremental across image builds:
 # without it every build recompiles all dependencies (notably the large

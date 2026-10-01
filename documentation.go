@@ -6,5 +6,5 @@ import "embed"
 // Files contains only the public, versioned operator guides. Local configuration
 // and environment files must never be included in the online help.
 //
-//go:embed README.md INSTALL.md RECIPES.md SSH_KEYS.md API_TOKENS.md
+//go:embed README.md INSTALL.md RECIPES.md SSH_KEYS.md API_TOKENS.md MCP.md
 var Files embed.FS

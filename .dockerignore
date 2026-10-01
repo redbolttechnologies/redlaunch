@@ -1,5 +1,5 @@
 # Keep repository history, local state, and credential variants out of the
-# Docker build context. Only module manifests, Go sources, and the five public
+# Docker build context. Only module manifests, Go sources, and the public
 # operator guides embedded by documentation.go are copied
 # into the builder (see Dockerfile); this file is defense in depth so a
 # future COPY cannot pick them up.

@@ -21,6 +21,7 @@ import (
 	"redlaunch/internal/compose"
 	"redlaunch/internal/config"
 	"redlaunch/internal/handler"
+	"redlaunch/internal/mcp"
 	"redlaunch/internal/metrics"
 	"redlaunch/internal/service"
 	"redlaunch/internal/store"
@@ -46,6 +47,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return run(ctx)
 	}
 	switch args[0] {
+	case "mcp":
+		return runMCP(ctx, args[1:], os.Stdin, os.Stdout)
 	case "backup-run":
 		return runBackup(ctx, args[1:])
 	case "selfupdate-run":
@@ -57,6 +60,28 @@ func dispatch(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runMCP(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
+	flags := flag.NewFlagSet("redlaunch mcp", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	allowRun := flags.Bool("allow-run", false, "expose the one-off service run tool")
+	if err := flags.Parse(args); err != nil {
+		return errors.New("usage: redlaunch mcp [--allow-run]")
+	}
+	if flags.NArg() != 0 {
+		return errors.New("mcp accepts no positional arguments")
+	}
+	server, err := mcp.New(os.Getenv("REDLAUNCH_URL"), os.Getenv("REDLAUNCH_RUN_TOKEN"), *allowRun)
+	if err != nil {
+		return err
+	}
+	// A signal must interrupt an idle stdin read as well as an API request.
+	if input == os.Stdin {
+		stop := context.AfterFunc(ctx, func() { _ = os.Stdin.Close() })
+		defer stop()
+	}
+	return server.Serve(ctx, input, output)
 }
 
 func runComposeProjectName(args []string, output io.Writer) error {

@@ -86,6 +86,10 @@ For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
 
+For agents building GitHub Actions workflows and integrations, use the local
+stdio server with `redlaunch mcp`. See the [MCP server guide](MCP.md) for client
+configuration, bundled guides, workflow generation, and optional API tools.
+
 Open **Help** in the sidebar (or visit `/help`) for Getting started, First
 steps, how-to guides, and troubleshooting. The online help includes these
 Markdown guides with a section index and copyable commands, scripts, and code

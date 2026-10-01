@@ -31,6 +31,8 @@ func TestHelpAvailableBeforeSetupAndInSidebar(t *testing.T) {
 		`<h1 id="page-title">Help</h1>`, "Getting started", "First steps", "How-to guides",
 		"Operations &amp; troubleshooting", `data-copy-target="help-install-command"`,
 		`data-copy-target="help-tunnel-command"`, `href="/help" aria-current="page"`,
+		"How to connect agents with MCP", `href="/help/mcp#build-and-connect"`,
+		"How to enable live MCP tools", `href="/help/mcp#optional-live-api-tools"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q", want)
@@ -60,6 +62,13 @@ func TestHelpGuidesAndLinks(t *testing.T) {
 		for _, want := range []string{guide.Title, guide.File, `aria-label="On this page"`, `data-copy-target="help-code-1"`, `href="` + path + `" aria-current="page"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing %q", path, want)
+			}
+		}
+		if guide.Slug == "mcp" {
+			for _, want := range []string{"redlaunch mcp", "mcpServers", "generate_run_workflow", "REDLAUNCH_RUN_TOKEN", "--allow-run", `href="/help/api-tokens"`, `href="/help/recipes"`} {
+				if !strings.Contains(body, want) {
+					t.Errorf("MCP help missing usage instruction %q", want)
+				}
 			}
 		}
 		if strings.Count(body, "<h1") != 1 {
@@ -180,7 +189,7 @@ func TestHelpUnknownGuideAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/help", "/help/recipes"} {
+	for _, path := range []string{"/help", "/help/recipes", "/help/mcp"} {
 		response := httptest.NewRecorder()
 		web.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusSeeOther || !strings.HasPrefix(response.Header().Get("Location"), "/login?next=") {
