@@ -54,6 +54,7 @@ type Handler struct {
 	postgresManager                postgresqlService
 	redisManager                   redisService
 	applicationContainerManager    applicationContainerService
+	managedDatabases               managedDatabasesService
 	serverSSHKeys                  serverSSHKeyService
 	apiTokens                      apiTokenService
 	apiRunJobs                     *apiRunJobStore
@@ -70,6 +71,7 @@ type Handler struct {
 	serviceDeleteJobs              *serviceDeleteJobStore
 	applicationDeleteJobs          *applicationDeleteJobStore
 	backupJobs                     *backupJobStore
+	managedDatabasesJobs           *managedDatabasesJobStore
 	selfUpdateJobs                 *selfUpdateJobStore
 	serviceActionJobs              *serviceActionJobStore
 	proxyActionJobs                *proxyActionJobStore
@@ -338,6 +340,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryTime":                registryTimeText,
 		"registryTimeISO":             registryTimeISO,
 		"registryTimeTitle":           registryTimeTitle,
+		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -366,6 +369,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	postgres := postgresqlService(noApplicationService{})
 	redis := redisService(noApplicationService{})
 	applicationContainer := applicationContainerService(noApplicationService{})
+	var managedDatabases managedDatabasesService
 	var serverSSHKeys serverSSHKeyService
 	var apiTokens apiTokenService
 	proxy := proxyDetailsService(noProxyService{})
@@ -561,6 +565,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				backupManager = dependency
 			}
+		case managedDatabasesService:
+			if dependency != nil {
+				managedDatabases = dependency
+			}
 		case postgresqlService:
 			if dependency != nil {
 				postgres = dependency
@@ -628,6 +636,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	serviceDeleteJobs := newServiceDeleteJobStore()
 	applicationDeleteJobs := newApplicationDeleteJobStore()
 	backupJobs := newBackupJobStore()
+	managedDatabasesJobs := newManagedDatabasesJobStore()
 	selfUpdateJobs := newSelfUpdateJobStore()
 	apiRunJobs := newAPIRunJobStore()
 	serviceActionJobs := newServiceActionJobStore()
@@ -640,6 +649,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(serviceDeleteJobs.expire)
 	jobs.registerCleanup(applicationDeleteJobs.expire)
 	jobs.registerCleanup(backupJobs.expire)
+	jobs.registerCleanup(managedDatabasesJobs.expire)
 	jobs.registerCleanup(selfUpdateJobs.expire)
 	jobs.registerCleanup(apiRunJobs.expire)
 	jobs.registerCleanup(serviceActionJobs.expire)
@@ -668,6 +678,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		postgresManager:                postgres,
 		redisManager:                   redis,
 		applicationContainerManager:    applicationContainer,
+		managedDatabases:               managedDatabases,
 		serverSSHKeys:                  serverSSHKeys,
 		apiTokens:                      apiTokens,
 		apiRunJobs:                     apiRunJobs,
@@ -684,6 +695,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		serviceDeleteJobs:              serviceDeleteJobs,
 		applicationDeleteJobs:          applicationDeleteJobs,
 		backupJobs:                     backupJobs,
+		managedDatabasesJobs:           managedDatabasesJobs,
 		selfUpdateJobs:                 selfUpdateJobs,
 		serviceActionJobs:              serviceActionJobs,
 		proxyActionJobs:                proxyActionJobs,
@@ -716,6 +728,26 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /registry", h.registryPage)
 	mux.HandleFunc("POST /registry/purge", h.purgeRegistryRepository)
+	mux.HandleFunc("GET /databases", h.databasesPage)
+	mux.HandleFunc("POST /databases/enable", h.enableManagedDatabases)
+	mux.HandleFunc("GET /databases/enable/status", h.managedDatabasesEnableStatus)
+	mux.HandleFunc("POST /databases/disable", h.disableManagedDatabases)
+	mux.HandleFunc("POST /databases/start", h.managedDatabasesClusterAction("start"))
+	mux.HandleFunc("POST /databases/stop", h.managedDatabasesClusterAction("stop"))
+	mux.HandleFunc("POST /databases/restart", h.managedDatabasesClusterAction("restart"))
+	mux.HandleFunc("POST /databases/create", h.createManagedDatabase)
+	mux.HandleFunc("POST /databases/drop", h.dropManagedDatabase)
+	mux.HandleFunc("POST /databases/users/create", h.createManagedDatabaseUser)
+	mux.HandleFunc("POST /databases/users/password", h.updateManagedDatabaseUserPassword)
+	mux.HandleFunc("POST /databases/users/permissions", h.setManagedDatabaseUserPermissions)
+	mux.HandleFunc("POST /databases/users/delete", h.deleteManagedDatabaseUser)
+	mux.HandleFunc("POST /databases/backups/schedule", h.updateManagedBackupSchedule)
+	mux.HandleFunc("POST /databases/backups/run", h.runManagedBackupNow)
+	mux.HandleFunc("POST /databases/backups/restore", h.restoreManagedBackup)
+	mux.HandleFunc("POST /databases/backups/delete", h.deleteManagedBackup)
+	mux.HandleFunc("GET /databases/backups/download", h.downloadManagedBackup)
+	mux.HandleFunc("GET /databases/backups/status", h.managedBackupStatus)
+	mux.HandleFunc("GET /databases/logs/download", h.downloadManagedLogs)
 	mux.HandleFunc("GET /applications/{id}", h.applicationDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/import", h.importDockerComposeProject)
 	mux.HandleFunc("POST /applications/{id}/import/preview", h.previewDockerComposeProject)
@@ -4747,6 +4779,7 @@ type pageData struct {
 	ServiceDeleteProgress        *serviceDeleteProgressData
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
+	ManagedDatabasesProgress     *managedDatabasesProgressData
 	SelfUpdateProgress           *selfUpdateProgressData
 	ServiceActionProgress        *serviceActionProgressData
 	ServiceActionToasts          []*serviceActionProgressData
@@ -4762,6 +4795,8 @@ type pageData struct {
 	RedisServicePage             *redisServicePageData
 	ApplicationContainerPage     *applicationContainerPageData
 	DashboardPage                *dashboardPageData
+	DatabasesPage                *databasesPageData
+	ManagedDatabasesBackup       *managedDatabasesBackupFragment
 	SettingsPage                 *settingsPageData
 	HelpPage                     *helpPageData
 }

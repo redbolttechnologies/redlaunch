@@ -2022,6 +2022,99 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record registry retention migration: %w", err)
 		}
 	}
+
+	var managedDatabasesMigrationApplied int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM schema_migrations
+		WHERE version = 21`).Scan(&managedDatabasesMigrationApplied); err != nil {
+		return fmt.Errorf("check managed databases migration: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_cluster (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+			provider TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
+			default_user TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+		return fmt.Errorf("create managed database cluster table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_databases (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			owner TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create managed databases table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_users (
+			username TEXT PRIMARY KEY,
+			created_at TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create managed database users table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_grants (
+			username TEXT NOT NULL,
+			database_name TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (username, database_name),
+			FOREIGN KEY (username) REFERENCES managed_database_users (username) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create managed database grants table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_backup_schedules (
+			database_id INTEGER PRIMARY KEY,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			schedule_type TEXT NOT NULL DEFAULT 'daily',
+			hour INTEGER NOT NULL DEFAULT 3,
+			minute INTEGER NOT NULL DEFAULT 0,
+			weekday TEXT NOT NULL DEFAULT '',
+			retention_days INTEGER NOT NULL DEFAULT 14,
+			backup_location TEXT NOT NULL,
+			last_backup_at TEXT NOT NULL DEFAULT '',
+			last_backup_status TEXT NOT NULL DEFAULT '',
+			last_backup_size INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (database_id) REFERENCES managed_databases (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create managed database backup schedules table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_backups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			service_id INTEGER NOT NULL,
+			file_name TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			UNIQUE (service_id, file_name),
+			FOREIGN KEY (service_id) REFERENCES managed_databases (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create managed database backups table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS managed_database_backup_leases (
+			database_id INTEGER PRIMARY KEY,
+			operation TEXT NOT NULL,
+			token TEXT NOT NULL,
+			acquired_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			FOREIGN KEY (database_id) REFERENCES managed_databases (id) ON DELETE CASCADE
+		)`); err != nil {
+		return fmt.Errorf("create managed database backup leases table: %w", err)
+	}
+	if managedDatabasesMigrationApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO schema_migrations (version, applied_at)
+			VALUES (21, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record managed databases migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

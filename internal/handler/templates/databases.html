@@ -1,0 +1,431 @@
+{{define "databases.html"}}
+{{template "layout" .}}
+{{end}}
+
+{{define "databases-content.html"}}
+<section class="proxy-page" aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <h1 id="page-title">Databases</h1>
+      {{if .DatabasesPage.Enabled}}
+      <p>Server-level Postgres cluster{{with .DatabasesPage.Status.ContainerName}} · <code>{{.}}</code>{{end}}.</p>
+      {{else}}
+      <p>Server-level databases live outside applications.</p>
+      {{end}}
+    </div>
+    {{if .DatabasesPage.Enabled}}
+    <div class="service-details-actions" role="group" aria-label="Cluster actions">
+      <form class="service-details-action-form" method="post" action="/databases/start">
+        <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-start" type="submit"{{if .DatabasesPage.Status.Running}} disabled{{end}}>
+          <span>Start</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="/databases/stop">
+        <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-stop" type="submit"{{if not .DatabasesPage.Status.Running}} disabled{{end}}>
+          <span>Stop</span>
+        </button>
+      </form>
+      <form class="service-details-action-form" method="post" action="/databases/restart">
+        <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+        <button class="button button-secondary service-details-action service-details-action-restart" type="submit">
+          <span>Restart</span>
+        </button>
+      </form>
+    </div>
+    {{end}}
+  </header>
+
+  {{if .DatabasesPage.Error}}
+  <div class="application-alert" role="alert">
+    <span>{{.DatabasesPage.Error}}</span>
+  </div>
+  {{end}}
+  {{if .DatabasesPage.Notice}}
+  <div class="application-alert" role="status">
+    <span>{{.DatabasesPage.Notice}}</span>
+  </div>
+  {{end}}
+
+  {{if not .DatabasesPage.Enabled}}
+  <section class="service-widget" aria-labelledby="managed-databases-enable-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="managed-databases-enable-title">Managed databases</h2>
+        <p>Disabled by default. Enable to run one shared Postgres container for the whole server.</p>
+      </div>
+      <label class="switch-field" for="managed-databases-enabled">
+        <span class="sr-only">Enable managed databases</span>
+        <input class="switch-input sr-only" id="managed-databases-enabled" type="checkbox" role="switch" aria-controls="managed-databases-enable-dialog" aria-expanded="false" data-managed-databases-toggle>
+        <span class="switch-visual" aria-hidden="true"><span></span></span>
+      </label>
+    </header>
+    <div class="service-widget-body">
+      <p><span>Enable managed databases</span></p>
+    </div>
+  </section>
+
+  <dialog class="application-dialog" id="managed-databases-enable-dialog" role="dialog" aria-modal="true" aria-labelledby="managed-databases-enable-dialog-title"{{if .DatabasesPage.EnableOpen}} open{{end}}>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header">
+        <div>
+          <h2 id="managed-databases-enable-dialog-title">Enable managed databases</h2>
+          <p>Configure the shared Postgres container.</p>
+        </div>
+      </header>
+      {{if .DatabasesPage.EnableError}}
+      <div class="application-alert application-dialog-alert" role="alert">
+        <span>{{.DatabasesPage.EnableError}}</span>
+      </div>
+      {{end}}
+      <form class="application-form" method="post" action="/databases/enable">
+        <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+        <div class="field">
+          <label for="managed-provider">Database provider</label>
+          <select id="managed-provider" name="provider" disabled>
+            <option value="postgres" selected>Postgres</option>
+          </select>
+          <input type="hidden" name="provider" value="postgres">
+          <span class="field-help">Only Postgres is supported for now.</span>
+        </div>
+        <div class="field">
+          <label for="managed-version">Version</label>
+          <input id="managed-version" name="version" type="text" maxlength="64" value="{{.DatabasesPage.Version}}" autocomplete="off" required>
+          <span class="field-help">The official image tag, for example <code>17</code>.</span>
+        </div>
+        <div class="field">
+          <label for="managed-default-user">Default user</label>
+          <input id="managed-default-user" name="default_user" type="text" maxlength="63" value="{{.DatabasesPage.DefaultUser}}" autocomplete="username" required>
+          <span class="field-help">The initial role and default database.</span>
+        </div>
+        <div class="field">
+          <label for="managed-password">Password</label>
+          <input id="managed-password" name="password" type="password" maxlength="256" value="" autocomplete="new-password">
+          <span class="field-help">Leave empty and Redlaunch will generate a secure random password.</span>
+        </div>
+        <footer class="application-form-actions">
+          <a class="button button-secondary" href="/databases">Cancel</a>
+          <button class="button button-primary" type="submit">Enable and start</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+  {{else}}
+  <div class="application-tabs" data-application-tabs>
+    <div class="application-tablist" role="tablist" aria-label="Managed databases">
+      <button class="application-tab" id="managed-databases-tab" type="button" role="tab" aria-controls="managed-databases-panel" aria-selected="true" tabindex="0" data-application-tab="managed-databases-panel">Databases</button>
+      <button class="application-tab" id="managed-users-tab" type="button" role="tab" aria-controls="managed-users-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-users-panel">Users</button>
+      <button class="application-tab" id="managed-backups-tab" type="button" role="tab" aria-controls="managed-backups-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-backups-panel">Backups</button>
+      <button class="application-tab" id="managed-logs-tab" type="button" role="tab" aria-controls="managed-logs-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-logs-panel">Logs</button>
+      <button class="application-tab" id="managed-settings-tab" type="button" role="tab" aria-controls="managed-settings-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-settings-panel">Settings</button>
+    </div>
+
+    <section class="application-tab-panel" id="managed-databases-panel" role="tabpanel" aria-labelledby="managed-databases-tab" tabindex="0">
+      <section class="service-widget" aria-labelledby="managed-databases-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="managed-databases-title">Databases</h2>
+            <p>Logical databases inside the shared cluster.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <form class="application-form" method="post" action="/databases/create">
+            <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+            <div class="service-form-grid">
+              <div class="field">
+                <label for="managed-db-name">Database name</label>
+                <input id="managed-db-name" name="name" type="text" maxlength="63" autocomplete="off" required>
+              </div>
+              <div class="field">
+                <label for="managed-db-owner">Owner</label>
+                <input id="managed-db-owner" name="owner" type="text" maxlength="63" value="{{.DatabasesPage.Cluster.DefaultUser}}" autocomplete="off">
+                <span class="field-help">Defaults to <code>{{.DatabasesPage.Cluster.DefaultUser}}</code>.</span>
+              </div>
+            </div>
+            <footer class="application-form-actions">
+              <button class="button button-primary" type="submit">Create database</button>
+            </footer>
+          </form>
+          {{if .DatabasesPage.Databases}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <caption class="sr-only">Managed databases</caption>
+              <thead>
+                <tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+              </thead>
+              <tbody>
+                {{range .DatabasesPage.Databases}}
+                <tr>
+                  <th scope="row"><code>{{.Name}}</code></th>
+                  <td><code>{{.Owner}}</code></td>
+                  <td>
+                    <form method="post" action="/databases/drop" data-managed-drop>
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="name" value="{{.Name}}">
+                      <button class="button button-destructive" type="submit">Drop</button>
+                    </form>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="service-widget-empty" role="status"><p>No managed databases yet.</p></div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="managed-users-panel" role="tabpanel" aria-labelledby="managed-users-tab" tabindex="0" hidden>
+      <section class="service-widget" aria-labelledby="managed-users-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="managed-users-title">Users</h2>
+            <p>Login roles and which databases they may access.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <form class="application-form" method="post" action="/databases/users/create">
+            <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+            <div class="service-form-grid">
+              <div class="field">
+                <label for="managed-user-name">Username</label>
+                <input id="managed-user-name" name="username" type="text" maxlength="63" autocomplete="off" required>
+              </div>
+              <div class="field">
+                <label for="managed-user-password">Password</label>
+                <input id="managed-user-password" name="password" type="password" maxlength="256" autocomplete="new-password" required>
+              </div>
+            </div>
+            <div class="field">
+              <label for="managed-user-databases">Allowed databases (comma separated)</label>
+              <input id="managed-user-databases" name="databases" type="text" autocomplete="off" placeholder="e.g. app, analytics">
+              <span class="field-help">Use one input per database or separate names with commas.</span>
+            </div>
+            <footer class="application-form-actions">
+              <button class="button button-primary" type="submit">Create user</button>
+            </footer>
+          </form>
+          {{if .DatabasesPage.Users}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <caption class="sr-only">Managed database users</caption>
+              <thead>
+                <tr><th scope="col">Username</th><th scope="col">Allowed databases</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+              </thead>
+              <tbody>
+                {{range .DatabasesPage.Users}}
+                <tr>
+                  <th scope="row"><code>{{.User.Username}}</code></th>
+                  <td>{{if .Databases}}{{range $i, $d := .Databases}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}{{else}}—{{end}}</td>
+                  <td>
+                    <form method="post" action="/databases/users/password">
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="username" value="{{.User.Username}}">
+                      <input name="password" type="password" maxlength="256" placeholder="New password" aria-label="New password for {{.User.Username}}" required>
+                      <button class="button button-secondary" type="submit">Change password</button>
+                    </form>
+                    <form method="post" action="/databases/users/permissions">
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="username" value="{{.User.Username}}">
+                      <input name="databases" type="text" placeholder="db1, db2" aria-label="Allowed databases for {{.User.Username}}" value="{{range $i, $d := .Databases}}{{if $i}}, {{end}}{{$d}}{{end}}">
+                      <button class="button button-secondary" type="submit">Set permissions</button>
+                    </form>
+                    <form method="post" action="/databases/users/delete" data-managed-drop>
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="username" value="{{.User.Username}}">
+                      <button class="button button-destructive" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="service-widget-empty" role="status"><p>No managed users yet.</p></div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="managed-backups-panel" role="tabpanel" aria-labelledby="managed-backups-tab" tabindex="0" hidden>
+      <section class="service-widget" aria-labelledby="managed-backups-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="managed-backups-title">Backups</h2>
+            <p>Scheduled and manual backups per database.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <form class="application-form" method="get" action="/databases">
+            <div class="field">
+              <label for="managed-backup-database">Database</label>
+              <select id="managed-backup-database" name="database" onchange="this.form.submit()">
+                {{range .DatabasesPage.Databases}}
+                <option value="{{.Name}}"{{if eq $.DatabasesPage.SelectedDatabase .Name}} selected{{end}}>{{.Name}}</option>
+                {{end}}
+              </select>
+            </div>
+          </form>
+          {{with .DatabasesPage.Backup}}
+          <form class="application-form" method="post" action="/databases/backups/schedule">
+            <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+            <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
+            <div class="field">
+              <label for="managed-schedule-enabled">Schedule backups</label>
+              <input id="managed-schedule-enabled" name="enabled" type="checkbox" value="on"{{if .Schedule.Enabled}} checked{{end}}>
+            </div>
+            <div class="service-form-grid">
+              <div class="field">
+                <label for="managed-schedule-type">Schedule type</label>
+                <select id="managed-schedule-type" name="schedule_type">
+                  <option value="hourly"{{if eq .Schedule.ScheduleType "hourly"}} selected{{end}}>hourly</option>
+                  <option value="daily"{{if eq .Schedule.ScheduleType "daily"}} selected{{end}}>daily</option>
+                  <option value="weekly"{{if eq .Schedule.ScheduleType "weekly"}} selected{{end}}>weekly</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="managed-schedule-hour">Hour</label>
+                <input id="managed-schedule-hour" name="hour" type="number" min="0" max="23" value="{{.Schedule.Hour}}">
+              </div>
+              <div class="field">
+                <label for="managed-schedule-minute">Minute</label>
+                <input id="managed-schedule-minute" name="minute" type="number" min="0" max="59" value="{{.Schedule.Minute}}">
+              </div>
+              <div class="field">
+                <label for="managed-schedule-weekday">Weekday</label>
+                <select id="managed-schedule-weekday" name="weekday">
+                  <option value="">—</option>
+                  <option value="monday"{{if eq .Schedule.Weekday "monday"}} selected{{end}}>monday</option>
+                  <option value="tuesday"{{if eq .Schedule.Weekday "tuesday"}} selected{{end}}>tuesday</option>
+                  <option value="wednesday"{{if eq .Schedule.Weekday "wednesday"}} selected{{end}}>wednesday</option>
+                  <option value="thursday"{{if eq .Schedule.Weekday "thursday"}} selected{{end}}>thursday</option>
+                  <option value="friday"{{if eq .Schedule.Weekday "friday"}} selected{{end}}>friday</option>
+                  <option value="saturday"{{if eq .Schedule.Weekday "saturday"}} selected{{end}}>saturday</option>
+                  <option value="sunday"{{if eq .Schedule.Weekday "sunday"}} selected{{end}}>sunday</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="managed-schedule-retention">Retention (days)</label>
+                <input id="managed-schedule-retention" name="retention_days" type="number" min="1" max="3650" value="{{.Schedule.RetentionDays}}">
+              </div>
+            </div>
+            <footer class="application-form-actions">
+              <button class="button button-secondary" type="submit">Save schedule</button>
+            </footer>
+          </form>
+          <form method="post" action="/databases/backups/run">
+            <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+            <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
+            <button class="button button-primary" type="submit">Run backup now</button>
+          </form>
+          {{if .Backups}}
+          <div class="service-environment-table-wrap">
+            <table class="service-environment-table">
+              <thead><tr><th scope="col">Completed</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody>
+                {{range .Backups}}
+                <tr>
+                  <th scope="row"><time datetime="{{backupTimeISO .}}">{{backupTime .}}</time></th>
+                  <td><code>{{backupSize .SizeBytes}}</code></td>
+                  <td>
+                    <a class="button button-secondary" href="{{managedBackupDownloadPath $.DatabasesPage.BackupDatabaseName .FileName}}">Download</a>
+                    <form method="post" action="/databases/backups/restore">
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
+                      <input type="hidden" name="backup_file" value="{{.FileName}}">
+                      <button class="button button-secondary" type="submit">Restore</button>
+                    </form>
+                    <form method="post" action="/databases/backups/delete">
+                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
+                      <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
+                      <input type="hidden" name="backup_file" value="{{.FileName}}">
+                      <button class="button button-destructive" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+          {{else}}
+          <div class="service-widget-empty" role="status"><p>No backups yet.</p></div>
+          {{end}}
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="managed-logs-panel" role="tabpanel" aria-labelledby="managed-logs-tab" tabindex="0" hidden>
+      <section class="service-widget" aria-labelledby="managed-logs-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="managed-logs-title">Logs</h2>
+            <p>Most recent 1,000 lines from the shared container.</p>
+          </div>
+          {{if .DatabasesPage.LogsAvailable}}
+          <a class="button button-secondary" href="/databases/logs/download" download><span>Download full logs</span></a>
+          {{end}}
+        </header>
+        <div class="service-widget-body">
+          {{if .DatabasesPage.LogsAvailable}}
+          <ol class="service-logs" tabindex="0">
+            {{range serviceLogLines .DatabasesPage.Logs}}<li><code>{{.}}</code></li>{{end}}
+          </ol>
+          {{else}}
+          <div class="service-widget-empty" role="status"><p>Logs are unavailable right now.</p></div>
+          {{end}}
+        </div>
+      </section>
+    </section>
+
+    <section class="application-tab-panel" id="managed-settings-panel" role="tabpanel" aria-labelledby="managed-settings-tab" tabindex="0" hidden>
+      <section class="service-widget" aria-labelledby="managed-settings-title">
+        <header class="service-widget-header">
+          <div class="service-widget-heading">
+            <h2 id="managed-settings-title">Settings</h2>
+            <p>Provider <code>{{.DatabasesPage.Cluster.Provider}}</code> · version <code>{{.DatabasesPage.Cluster.Version}}</code> · default user <code>{{.DatabasesPage.Cluster.DefaultUser}}</code> · status <code>{{if .DatabasesPage.Status.Status}}{{.DatabasesPage.Status.Status}}{{else}}Unknown{{end}}</code>.</p>
+          </div>
+        </header>
+        <div class="service-widget-body">
+          <p>Applications reach this cluster over the <code>redlaunch-common</code> network at <code>redbolt-databases:5432</code>.</p>
+          <form method="post" action="/databases/disable" data-managed-drop>
+            <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
+            <button class="button button-destructive" type="submit">Disable managed databases</button>
+          </form>
+          <p class="field-help">Disabling stops the container but retains data, files, and backup artifacts.</p>
+        </div>
+      </section>
+    </section>
+  </div>
+  {{end}}
+</section>
+
+{{template "managed-databases-progress.html" .}}
+{{end}}
+
+{{define "managed-databases-progress.html"}}
+{{with .ManagedDatabasesProgress}}
+<div class="setup-progress" role="status" aria-label="Managed databases progress">
+  <p>{{.CurrentStage}}</p>
+  {{if .ErrorDetail}}<p>{{.ErrorDetail}}</p>{{end}}
+</div>
+{{end}}
+{{with .DatabasesPage}}
+{{with .Progress}}
+<div class="setup-progress" role="status" aria-label="Managed databases progress">
+  <p>{{.CurrentStage}}</p>
+  {{if .ErrorDetail}}<p>{{.ErrorDetail}}</p>{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{define "managed-databases-backup-status.html"}}
+{{with .ManagedDatabasesBackup}}
+<p>{{.Database}} · {{len .Details.Backups}} backups</p>
+{{end}}
+{{end}}

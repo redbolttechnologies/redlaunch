@@ -117,6 +117,9 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
+- Enable one server-level managed Postgres cluster from the Databases page,
+  then create/drop databases, manage users and per-database access, and
+  schedule, restore, download, and remove PostgreSQL backups.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed

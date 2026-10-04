@@ -5,15 +5,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Redlaunch application control plane">
-  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .RegistryPage}} · Registry{{else if .HelpPage}} · Help{{with .HelpPage.Guide}} · {{.Title}}{{end}}{{else if .SettingsPage}} · Settings{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
+  <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxyPage}} · Proxy{{else if .RegistryPage}} · Registry{{else if .DatabasesPage}} · Databases{{else if .HelpPage}} · Help{{with .HelpPage.Guide}} · {{.Title}}{{end}}{{else if .SettingsPage}} · Settings{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
   {{if .DashboardPage}}<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>{{end}}
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
   {{if or .DashboardPage .ApplicationDetailsPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
-  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
+  {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .ManagedDatabasesProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if or .ServiceActionToasts .ProxyActionToasts}}<script src="/static/toasts.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
-  {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage .SettingsPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
+  {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage .SettingsPage .DatabasesPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/service-catalog.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-clone.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script><script src="/static/application-name.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ServiceDetailsPage}}<script src="/static/service-action-error.js" defer></script>{{end}}
   {{if .SettingsPage}}<script src="/static/application-domains.js" defer></script><script src="/static/ssh-keys.js" defer></script><script src="/static/api-tokens.js" defer></script>{{end}}
@@ -47,6 +47,14 @@
             <rect x="14" y="14" width="6.5" height="6.5" rx="1"></rect>
           </svg>
           <span>Applications</span>
+        </a>
+        <a class="side-menu-item{{if eq .ActivePage "databases"}} side-menu-item-active{{end}}" href="/databases"{{if eq .ActivePage "databases"}} aria-current="page"{{end}}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+            <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path>
+            <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path>
+          </svg>
+          <span>Databases</span>
         </a>
         <a class="side-menu-item{{if eq .ActivePage "proxy"}} side-menu-item-active{{end}}" href="/proxy"{{if eq .ActivePage "proxy"}} aria-current="page"{{end}}>
           <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -142,7 +150,7 @@
       </section>
     </header>
 
-    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .RegistryPage}} aria-labelledby="page-title"{{else if .HelpPage}} aria-labelledby="page-title"{{else if .SettingsPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
+    <main class="main-content{{if .Setup}} setup-page{{end}}"{{if .Setup}} aria-labelledby="setup-title"{{else if .DashboardPage}} aria-labelledby="page-title"{{else if .PostgreSQLServicePage}} aria-labelledby="page-title"{{else if .RedisServicePage}} aria-labelledby="page-title"{{else if .ApplicationContainerPage}} aria-labelledby="page-title"{{else if .ApplicationRoutingPage}} aria-labelledby="page-title"{{else if .ServiceDetailsPage}} aria-labelledby="page-title"{{else if .ApplicationDetailsPage}} aria-labelledby="page-title"{{else if .ProxyPage}} aria-labelledby="page-title"{{else if .RegistryPage}} aria-labelledby="page-title"{{else if .DatabasesPage}} aria-labelledby="page-title"{{else if .HelpPage}} aria-labelledby="page-title"{{else if .SettingsPage}} aria-labelledby="page-title"{{else if .ApplicationDeleteProgress}} aria-labelledby="application-delete-progress-title"{{else if eq .ActivePage "applications"}} aria-labelledby="page-title"{{end}}>
       {{if .Setup}}
       {{template "setup.html" .}}
       {{else if .DashboardPage}}
@@ -163,12 +171,17 @@
       {{template "proxy-content.html" .}}
       {{else if .RegistryPage}}
       {{template "registry-content.html" .}}
+      {{else if .DatabasesPage}}
+      {{template "databases-content.html" .}}
       {{else if .HelpPage}}
       {{template "help-content.html" .}}
       {{else if .SettingsPage}}
       {{template "settings-content.html" .}}
       {{else if eq .ActivePage "applications"}}
       {{template "applications-content.html" .}}
+      {{end}}
+      {{if .ManagedDatabasesProgress}}
+      {{template "managed-databases-progress.html" .}}
       {{end}}
       {{if .SetupProgress}}
       {{template "setup-progress.html" .}}

@@ -51,6 +51,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return runMCP(ctx, args[1:], os.Stdin, os.Stdout)
 	case "backup-run":
 		return runBackup(ctx, args[1:])
+	case "managed-backup-run":
+		return runManagedBackup(ctx, args[1:])
 	case "selfupdate-run":
 		return runSelfUpdate(ctx, args[1:])
 	case "auth-add-email", "add-authorized-email":
@@ -168,6 +170,19 @@ func run(ctx context.Context) error {
 	}
 	applications.SetApplicationDeletionDependencies(backupManager)
 
+	managedDatabases, err := service.NewManagedDatabases(database, service.ManagedDatabaseConfig{
+		ProjectsRoot:     cfg.ProjectsRoot,
+		BackupRoot:       cfg.BackupRoot,
+		DatabasePath:     cfg.DatabasePath,
+		Executable:       executable,
+		ExecutablePrefix: executablePrefix,
+		Runner:           compose.CommandRunner{},
+		Scheduler:        systemdManager,
+	})
+	if err != nil {
+		return fmt.Errorf("create managed databases service: %w", err)
+	}
+
 	registry, err := service.NewRegistryService(service.RegistryContainerName, compose.CommandRunner{})
 	if err != nil {
 		return fmt.Errorf("create registry service: %w", err)
@@ -209,13 +224,14 @@ func run(ctx context.Context) error {
 	}
 
 	dependencies := handler.Dependencies{
-		Setup:         setupService,
-		Applications:  applications,
-		Backups:       backupManager,
-		ServerSSHKeys: serverSSHKeys,
-		APITokens:     apiTokens,
-		Registry:      registry,
-		SelfUpdate:    selfUpdater,
+		Setup:            setupService,
+		Applications:     applications,
+		Backups:          backupManager,
+		ManagedDatabases: managedDatabases,
+		ServerSSHKeys:    serverSSHKeys,
+		APITokens:        apiTokens,
+		Registry:         registry,
+		SelfUpdate:       selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,
 			ProcRoot:       cfg.MetricsProcRoot,
@@ -348,6 +364,42 @@ func runBackup(ctx context.Context, args []string) error {
 		return fmt.Errorf("create backup service: %w", err)
 	}
 	if _, err := backups.RunScheduledBackup(ctx, *applicationID, *serviceID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runManagedBackup(ctx context.Context, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	flags := flag.NewFlagSet("redlaunch managed-backup-run", flag.ContinueOnError)
+	databaseID := flags.Int64("database-id", 0, "managed database ID")
+	databasePath := flags.String("db-path", cfg.DatabasePath, "SQLite database path")
+	projectsRoot := flags.String("projects-root", cfg.ProjectsRoot, "managed projects root")
+	backupRoot := flags.String("backup-root", cfg.BackupRoot, "managed backup root")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *databaseID < 1 {
+		return errors.New("database-id must be positive")
+	}
+	database, err := store.Open(ctx, *databasePath)
+	if err != nil {
+		return fmt.Errorf("open application database: %w", err)
+	}
+	defer database.Close()
+	managed, err := service.NewManagedDatabases(database, service.ManagedDatabaseConfig{
+		ProjectsRoot: *projectsRoot,
+		BackupRoot:   *backupRoot,
+		DatabasePath: *databasePath,
+		Runner:       compose.CommandRunner{},
+	})
+	if err != nil {
+		return fmt.Errorf("create managed databases service: %w", err)
+	}
+	if _, err := managed.RunScheduledBackup(ctx, *databaseID); err != nil {
 		return err
 	}
 	return nil

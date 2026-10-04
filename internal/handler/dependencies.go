@@ -14,16 +14,17 @@ import (
 // assemble partial fakes without authentication. Production startup must use
 // NewWithDependencies, which fails fast when required services are missing.
 type Dependencies struct {
-	Setup          setupManager
-	Applications   applicationService
-	Backups        serviceBackupService
-	ServerSSHKeys  serverSSHKeyService
-	APITokens      apiTokenService
-	Registry       registryImageService
-	Metrics        dashboardMetricsService
-	Authentication authenticationService
-	SelfUpdate     selfUpdateService
-	Security       SecurityConfig
+	Setup            setupManager
+	Applications     applicationService
+	Backups          serviceBackupService
+	ManagedDatabases managedDatabasesService
+	ServerSSHKeys    serverSSHKeyService
+	APITokens        apiTokenService
+	Registry         registryImageService
+	Metrics          dashboardMetricsService
+	Authentication   authenticationService
+	SelfUpdate       selfUpdateService
+	Security         SecurityConfig
 
 	// AllowUnauthenticatedForTests permits construction without an enabled
 	// authentication service. Production code must leave this false so a
@@ -58,6 +59,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	assembled := []any{deps.Setup, deps.Applications}
 	if deps.Backups != nil {
 		assembled = append(assembled, deps.Backups)
+	}
+	if deps.ManagedDatabases != nil {
+		assembled = append(assembled, deps.ManagedDatabases)
 	}
 	if deps.ServerSSHKeys != nil {
 		assembled = append(assembled, deps.ServerSSHKeys)
