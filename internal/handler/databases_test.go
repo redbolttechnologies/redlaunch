@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"redlaunch/internal/application"
 )
@@ -25,6 +26,7 @@ type fakeManagedDatabases struct {
 	deletedUser  string
 	passwordUser string
 	permsUser    string
+	status       *application.ManagedDatabaseStatus
 }
 
 func (f *fakeManagedDatabases) GetCluster(context.Context) (application.ManagedDatabaseCluster, error) {
@@ -47,6 +49,9 @@ func (f *fakeManagedDatabases) StartCluster(context.Context) error   { return ni
 func (f *fakeManagedDatabases) StopCluster(context.Context) error    { return nil }
 func (f *fakeManagedDatabases) RestartCluster(context.Context) error { return nil }
 func (f *fakeManagedDatabases) GetStatus(context.Context) (application.ManagedDatabaseStatus, error) {
+	if f.status != nil {
+		return *f.status, nil
+	}
 	return application.ManagedDatabaseStatus{Running: true, Status: "running", ContainerName: "redbolt-databases", ImageName: "postgres:17"}, nil
 }
 func (f *fakeManagedDatabases) GetLogs(context.Context) (string, bool, error) {
@@ -222,5 +227,139 @@ func TestDatabasesNavBelowApplications(t *testing.T) {
 	}
 	if !(apps < dbs && dbs < proxy) {
 		t.Fatalf("databases nav order wrong: applications=%d databases=%d proxy=%d", apps, dbs, proxy)
+	}
+}
+
+func TestDatabasesOverviewFiltersKeepTotals(t *testing.T) {
+	fake := &fakeManagedDatabases{
+		cluster: application.ManagedDatabaseCluster{Enabled: true, Version: "17"},
+		databases: []application.ManagedDatabase{
+			{Name: "app_production", Owner: "admin", CreatedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)},
+			{Name: "app_staging", Owner: "developer"},
+			{Name: "analytics", Owner: "admin"},
+		},
+	}
+	h := newDatabasesTestHandler(t, fake)
+	for _, test := range []struct {
+		query string
+		names []string
+	}{
+		{"", []string{"app_production", "app_staging", "analytics"}},
+		{"?q=APP", []string{"app_production", "app_staging"}},
+		{"?owner=admin", []string{"app_production", "analytics"}},
+		{"?q=app&owner=admin", []string{"app_production"}},
+		{"?q=missing", nil},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			data, err := h.loadDatabasesPageData(context.Background(), mustParseDatabaseQuery(t, test.query))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data.Databases) != 3 {
+				t.Fatal("filter changed overview total")
+			}
+			if len(data.VisibleDatabases) != len(test.names) {
+				t.Fatalf("filtered databases = %v", data.VisibleDatabases)
+			}
+			for i, name := range test.names {
+				if data.VisibleDatabases[i].Name != name {
+					t.Fatalf("filtered database = %q, want %q", data.VisibleDatabases[i].Name, name)
+				}
+			}
+			if strings.Join(data.DatabaseOwners, ",") != "admin,developer" {
+				t.Fatalf("owners = %v", data.DatabaseOwners)
+			}
+		})
+	}
+	body := databasesRequest(t, h, "GET", "/databases?q=missing", nil).Body.String()
+	if !strings.Contains(body, "No databases match your filters.") {
+		t.Fatal("missing filtered empty state")
+	}
+	body = databasesRequest(t, h, "GET", "/databases", nil).Body.String()
+	for _, want := range []string{"Users &amp; access", "Postgres 17", "Oct 01, 2026", `datetime="2026-10-01T12:00:00Z"`, `href="/databases?tab=managed-backups&amp;database=app_production"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("overview missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Connection details") || strings.Contains(body, "Healthy") {
+		t.Fatal("overview contains unsupported connection or health widget")
+	}
+}
+
+func mustParseDatabaseQuery(t *testing.T, query string) url.Values {
+	t.Helper()
+	values, err := url.ParseQuery(strings.TrimPrefix(query, "?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return values
+}
+
+func TestDatabasesOverviewEmptyAndUnavailable(t *testing.T) {
+	fake := &fakeManagedDatabases{
+		cluster: application.ManagedDatabaseCluster{Enabled: true, Version: "17"},
+		status:  &application.ManagedDatabaseStatus{},
+	}
+	body := databasesRequest(t, newDatabasesTestHandler(t, fake), "GET", "/databases", nil).Body.String()
+	for _, want := range []string{"No managed databases yet.", "No managed users yet.", "Unavailable", "Check cluster settings and logs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("empty overview missing %q", want)
+		}
+	}
+	if strings.Contains(body, "running and ready to use") {
+		t.Fatal("unavailable cluster advertised as ready")
+	}
+}
+
+func TestDatabasesOverviewEscapesFiltersAndResourceNames(t *testing.T) {
+	value := `<script>alert("xss")</script>`
+	fake := &fakeManagedDatabases{
+		cluster:   application.ManagedDatabaseCluster{Enabled: true, Version: "17"},
+		databases: []application.ManagedDatabase{{Name: value, Owner: value}},
+		users:     []application.ManagedDatabaseUserDetail{{User: application.ManagedDatabaseUser{Username: value}}},
+	}
+	h := newDatabasesTestHandler(t, fake)
+	for _, target := range []string{"/databases", "/databases?q=" + url.QueryEscape(value)} {
+		body := databasesRequest(t, h, "GET", target, nil).Body.String()
+		if strings.Contains(body, value) {
+			t.Fatal("unescaped user input in database overview")
+		}
+		if !strings.Contains(body, "&lt;script&gt;") {
+			t.Fatal("missing escaped input")
+		}
+	}
+}
+
+func TestDatabasesOverviewDialogsHaveHTTPFallbacks(t *testing.T) {
+	h := newDatabasesTestHandler(t, &fakeManagedDatabases{cluster: application.ManagedDatabaseCluster{Enabled: true}})
+	for _, test := range []struct{ query, id, action string }{
+		{"create", "managed-database-create-dialog", "/databases/create"},
+		{"disable", "managed-database-disable-dialog", "/databases/disable"},
+	} {
+		body := databasesRequest(t, h, "GET", "/databases?"+test.query+"=1", nil).Body.String()
+		start := strings.Index(body, `<dialog class="application-dialog" id="`+test.id+`"`)
+		if start < 0 {
+			t.Fatal("missing dialog")
+		}
+		end := strings.Index(body[start:], "</dialog>")
+		dialog := body[start : start+end]
+		if !strings.Contains(dialog, " open>") || !strings.Contains(dialog, `method="post" action="`+test.action+`"`) || !strings.Contains(dialog, `name="csrf_token"`) || !strings.Contains(dialog, `data-managed-dialog-close`) {
+			t.Fatalf("dialog %s missing fallback, POST form, CSRF or cancel", test.id)
+		}
+	}
+}
+
+func TestDatabasesOverviewRecognizesStoppedContainer(t *testing.T) {
+	for _, status := range []string{"stopped", "exited", "Exited (0) 2 minutes ago"} {
+		t.Run(status, func(t *testing.T) {
+			fake := &fakeManagedDatabases{
+				cluster: application.ManagedDatabaseCluster{Enabled: true},
+				status:  &application.ManagedDatabaseStatus{Status: status},
+			}
+			body := databasesRequest(t, newDatabasesTestHandler(t, fake), "GET", "/databases", nil).Body.String()
+			if !strings.Contains(body, `<p class="databases-stat-value">Stopped</p>`) {
+				t.Fatal("stopped container missing accurate overview status")
+			}
+		})
 	}
 }

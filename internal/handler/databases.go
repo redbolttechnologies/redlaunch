@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,12 @@ type databasesPageData struct {
 	Logs               string
 	LogsAvailable      bool
 	Databases          []application.ManagedDatabase
+	VisibleDatabases   []application.ManagedDatabase
+	DatabaseOwners     []string
+	DatabaseQuery      string
+	DatabaseOwner      string
+	CreateOpen         bool
+	DisableOpen        bool
 	Users              []application.ManagedDatabaseUserDetail
 	SelectedDatabase   string
 	Backup             *application.BackupDetails
@@ -142,6 +149,23 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 		return data, err
 	}
 	data.Databases = databases
+	data.DatabaseQuery = strings.TrimSpace(query.Get("q"))
+	data.DatabaseOwner = query.Get("owner")
+	data.CreateOpen = query.Get("create") == "1"
+	data.DisableOpen = query.Get("disable") == "1"
+	owners := make(map[string]bool)
+	search := strings.ToLower(data.DatabaseQuery)
+	for _, database := range databases {
+		owners[database.Owner] = true
+		if strings.Contains(strings.ToLower(database.Name), search) &&
+			(data.DatabaseOwner == "" || database.Owner == data.DatabaseOwner) {
+			data.VisibleDatabases = append(data.VisibleDatabases, database)
+		}
+	}
+	for owner := range owners {
+		data.DatabaseOwners = append(data.DatabaseOwners, owner)
+	}
+	sort.Strings(data.DatabaseOwners)
 	users, err := h.managedDatabases.ListUsers(ctx)
 	if err != nil {
 		return data, err

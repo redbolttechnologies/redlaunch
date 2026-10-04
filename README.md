@@ -119,7 +119,11 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   an HTTPS hostname for Redlaunch itself.
 - Enable one server-level managed Postgres cluster from the Databases page,
   then create/drop databases, manage users and per-database access, and
-  schedule, restore, download, and remove PostgreSQL backups.
+  schedule, restore, download, and remove PostgreSQL backups. The enabled
+  overview shows database/user totals, the Postgres version, container status,
+  and a database list searchable by name and filterable by owner. Use Create
+  database to open the creation dialog, Manage users for access management,
+  and Settings for cluster start/stop/restart controls.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed

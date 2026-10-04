@@ -5322,3 +5322,274 @@ h1 {
   font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
+
+/* Enabled managed databases compose the existing cards, tables and dialogs. */
+.databases-enabled-card {
+  margin-top: var(--space-4);
+  padding: var(--space-4) var(--space-6);
+}
+
+.databases-enabled-card .databases-enable-hero {
+  grid-template-columns: minmax(12rem, 20%) minmax(0, 1fr) auto;
+  gap: var(--space-6);
+}
+
+.databases-enabled-card .databases-enable-visual img {
+  width: min(100%, 15rem);
+}
+
+.databases-enabled-card .databases-enable-copy {
+  gap: var(--space-2);
+}
+
+.databases-enabled-card .databases-enable-copy h2 {
+  font-size: 1.5rem;
+}
+
+.databases-enabled-card .databases-enable-description,
+.databases-enabled-card .databases-docs-link {
+  font-size: 0.875rem;
+}
+
+.databases-enabled-card .databases-enable-actions {
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.databases-page .databases-enabled-card .service-status-running .status-dot {
+  background: hsl(var(--success));
+}
+
+.databases-enabled-card .databases-enable-hint {
+  max-width: none;
+  font-size: 0.75rem;
+}
+
+.databases-enabled-card .databases-enable-button,
+.databases-page .application-dialog .databases-enable-button,
+.databases-page .service-widget-empty .databases-enable-button {
+  min-height: 2.25rem;
+  padding: 0 var(--space-4);
+  font-size: 0.875rem;
+}
+
+.databases-enabled-switch {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.databases-enabled-switch .switch-visual {
+  border-color: hsl(var(--brand));
+  background: hsl(var(--brand));
+}
+
+.databases-enabled-switch .switch-visual > span {
+  background: hsl(var(--brand-foreground));
+  transform: translateX(var(--space-5));
+}
+
+.databases-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.databases-stat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+}
+
+.databases-stat .databases-feature-icon {
+  width: 3rem;
+  height: 3rem;
+}
+
+.databases-stat h3 {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.databases-stat-value {
+  margin: var(--space-1) 0 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.databases-stat .dashboard-metric-help {
+  margin-top: var(--space-1);
+}
+
+.databases-engine-icon {
+  color: hsl(var(--primary));
+  background: hsl(var(--muted));
+}
+
+.databases-running-icon {
+  color: hsl(var(--success));
+  background: hsl(var(--success) / 0.1);
+}
+
+.databases-neutral-icon {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+}
+
+.databases-page .application-tabs {
+  margin-top: var(--space-4);
+}
+
+.databases-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.databases-overview-grid .service-widget-header {
+  flex-wrap: wrap;
+  border-bottom: 0;
+  padding: var(--space-4) var(--space-5) 0;
+}
+
+.databases-overview-grid .service-widget-body {
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.databases-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.databases-filters .field {
+  flex: 1 1 auto;
+}
+
+.databases-filters input {
+  font-family: var(--font-sans);
+}
+
+.databases-name {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.databases-name svg {
+  flex: 0 0 auto;
+  color: hsl(var(--brand));
+}
+
+.databases-row-actions {
+  white-space: nowrap;
+}
+
+.databases-row-actions form {
+  display: inline-block;
+}
+
+.databases-drop-button {
+  color: hsl(var(--destructive-foreground));
+  background: hsl(var(--destructive));
+}
+
+.databases-drop-button:hover {
+  color: hsl(var(--destructive-foreground));
+  background: hsl(var(--destructive) / 0.9);
+}
+
+.databases-users-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  list-style: none;
+}
+
+.databases-users-list li {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+}
+
+.databases-users-list li + li {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.databases-users-list li > div {
+  display: grid;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.databases-users-list code {
+  font-size: 0.75rem;
+}
+
+.databases-user-avatar {
+  display: grid;
+  width: var(--space-6);
+  height: var(--space-6);
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+}
+
+.databases-view-link {
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 80rem) {
+  .databases-overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 64rem) {
+  .databases-enabled-card .databases-enable-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .databases-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .databases-enabled-card,
+  .databases-stat {
+    padding: var(--space-4);
+  }
+
+  .databases-stat {
+    gap: var(--space-3);
+  }
+
+  .databases-stat .databases-feature-icon {
+    display: none;
+  }
+
+  .databases-enabled-card .databases-enable-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .databases-enabled-switch {
+    grid-row: 1;
+    justify-self: end;
+  }
+}

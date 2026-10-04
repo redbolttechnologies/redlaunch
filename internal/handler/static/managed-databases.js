@@ -110,3 +110,82 @@
     openDialog(toggle);
   }
 })();
+
+// Enabled overview: reuse the native dialog and existing tab interactions.
+(() => {
+  document.querySelectorAll("[data-managed-dialog]").forEach((dialog) => {
+    let returnFocus = null;
+    const closeDialog = () => dialog.close();
+    const openDialog = (source) => {
+      returnFocus = source;
+      if (!dialog.open) dialog.showModal();
+      document.body.classList.add("dialog-open");
+      const target = dialog.querySelector("input:not([type=hidden]), [data-managed-dialog-close]");
+      if (target) target.focus();
+    };
+    document.querySelectorAll("[data-managed-dialog-open]").forEach((link) => {
+      if (link.getAttribute("data-managed-dialog-open") !== dialog.id) return;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        openDialog(link);
+      });
+      if (link.getAttribute("role") === "switch") {
+        link.addEventListener("keydown", (event) => {
+          if (event.key === " ") {
+            event.preventDefault();
+            link.click();
+          }
+        });
+      }
+    });
+    dialog.querySelectorAll("[data-managed-dialog-close]").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        closeDialog();
+      });
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) closeDialog();
+    });
+    dialog.addEventListener("close", () => {
+      document.body.classList.remove("dialog-open");
+      // Query-based links provide a working fallback without JavaScript.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("create");
+      url.searchParams.delete("disable");
+      window.history.replaceState(null, "", url);
+      if (returnFocus) returnFocus.focus();
+    });
+    dialog.querySelector("form").addEventListener("submit", () => {
+      const button = dialog.querySelector("button[type=submit]");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Working…";
+      }
+    });
+    if (dialog.open) {
+      dialog.removeAttribute("open");
+      openDialog(document.querySelector(`[data-managed-dialog-open="${dialog.id}"]`));
+    }
+  });
+
+  document.querySelectorAll("[data-managed-tab-link]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const tab = document.getElementById(link.getAttribute("data-managed-tab-link"));
+      if (!tab) return;
+      event.preventDefault();
+      tab.click();
+      tab.focus();
+      tab.scrollIntoView({ block: "nearest" });
+    });
+  });
+
+  document.querySelectorAll("[data-managed-drop]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      const message = form.action.endsWith("/disable")
+        ? "Disable managed databases? Applications will lose access. Data and backups are retained."
+        : "Remove this managed database or user? This action cannot be undone.";
+      if (!window.confirm(message)) event.preventDefault();
+    });
+  });
+})();
