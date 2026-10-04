@@ -84,11 +84,21 @@ Never introduce a new color directly in a component.
 
 If a new semantic color is required, update the design system first.
 
+Use `brand` and `brand-foreground` for the red activation action and matching
+feature icons in the managed-databases introduction. Keep destructive actions
+on the `destructive` tokens. The brand action supports white text at normal
+body sizes in both themes.
+
 ## Typography
 
 Use the design system typography scale consistently.
 
 Do not use arbitrary font sizes.
+
+Inter 4.1 is bundled locally as `InterVariable.woff2` under the SIL Open Font
+License (`Inter-LICENSE.txt`), so the existing font stack renders consistently
+without fetching fonts from a third-party service. Source:
+https://github.com/rsms/inter/tree/v4.1.
 
 Use typography hierarchy for:
 

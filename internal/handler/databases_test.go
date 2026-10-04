@@ -160,6 +160,31 @@ func TestDatabasesDisabledShowsEnableSwitch(t *testing.T) {
 	if !strings.Contains(body, `href="/databases"`) {
 		t.Fatalf("nav missing databases link")
 	}
+	if !strings.Contains(body, `<img src="/static/managed-databases.svg" alt="" width="320" height="300">`) {
+		t.Fatal("disabled page missing the decorative database illustration")
+	}
+}
+
+func TestDatabasesVisualAssetsServed(t *testing.T) {
+	h := newDatabasesTestHandler(t, &fakeManagedDatabases{})
+	for _, asset := range []struct {
+		path   string
+		marker string
+	}{
+		{"/static/managed-databases.svg", `viewBox="0 0 320 300"`},
+		{"/static/InterVariable.woff2", "wOF2"},
+		{"/static/Inter-LICENSE.txt", "SIL OPEN FONT LICENSE"},
+	} {
+		t.Run(asset.path, func(t *testing.T) {
+			rr := databasesRequest(t, h, http.MethodGet, asset.path, nil)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("asset status = %d, want 200", rr.Code)
+			}
+			if !strings.Contains(rr.Body.String(), asset.marker) {
+				t.Fatal("asset response missing expected format marker")
+			}
+		})
+	}
 }
 
 func TestDatabasesEnabledShowsDashboard(t *testing.T) {

@@ -1,3 +1,12 @@
+/* Inter 4.1, bundled under the SIL Open Font License (Inter-LICENSE.txt). */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/static/InterVariable.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light dark;
   --background: 0 0% 100%;
@@ -8,6 +17,8 @@
   --popover-foreground: 222.2 47.4% 11.2%;
   --primary: 222.2 47.4% 11.2%;
   --primary-foreground: 210 40% 98%;
+  --brand: 355 90% 48%;
+  --brand-foreground: 0 0% 100%;
   --secondary: 210 40% 96.1%;
   --secondary-foreground: 222.2 47.4% 11.2%;
   --muted: 210 40% 96.1%;
@@ -298,13 +309,13 @@ button {
 
 .side-menu-item {
   display: flex;
-  min-height: 2.25rem;
+  min-height: 2.5rem;
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);
   border-radius: var(--radius);
   color: hsl(var(--muted-foreground));
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 500;
   text-decoration: none;
   transition: color 120ms ease, background-color 120ms ease;
@@ -4933,23 +4944,45 @@ h1 {
   margin-bottom: var(--space-5);
 }
 
+.main-content:has(.databases-page) {
+  background: hsl(var(--muted) / 0.25);
+}
+
+.databases-page {
+  width: 100%;
+}
+
+.databases-page .page-heading-copy h1 {
+  font-size: 2rem;
+}
+
+.databases-page .page-heading-copy p {
+  font-size: 1rem;
+}
+
 .databases-enable-card {
   margin-top: var(--space-6);
-  padding: var(--space-8) var(--space-8) var(--space-6);
+  padding: var(--space-6);
 }
 
 .databases-enable-hero {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(16rem, 27%) minmax(0, 1fr) auto;
   gap: var(--space-8);
   align-items: start;
 }
 
 .databases-enable-visual {
   display: grid;
-  flex: 0 0 auto;
-  width: 13.75rem;
+  min-width: 0;
+  align-self: center;
   place-items: center;
+}
+
+.databases-enable-visual img {
+  display: block;
+  width: min(100%, 20rem);
+  height: auto;
 }
 
 .databases-enable-copy {
@@ -4958,12 +4991,23 @@ h1 {
   min-width: 0;
   align-content: start;
   justify-items: start;
+  padding-top: var(--space-2);
+}
+
+.databases-enable-copy .service-status-badge {
+  border-color: transparent;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.databases-enable-copy .service-status-badge .status-dot {
+  background: hsl(var(--muted-foreground) / 0.4);
 }
 
 .databases-enable-copy h2 {
   margin: 0;
   color: hsl(var(--foreground));
-  font-size: 1.5rem;
+  font-size: 1.875rem;
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -4973,7 +5017,7 @@ h1 {
   max-width: 38rem;
   margin: 0;
   color: hsl(var(--muted-foreground));
-  font-size: 0.9375rem;
+  font-size: 1.125rem;
   line-height: 1.6;
 }
 
@@ -4981,20 +5025,22 @@ h1 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4) var(--space-5);
-  margin-top: var(--space-2);
+  gap: var(--space-4) var(--space-6);
+  margin-top: var(--space-3);
 }
 
 .databases-enable-button {
-  min-height: 2.5rem;
-  padding: 0 var(--space-5);
-  border-color: hsl(var(--destructive));
-  background: hsl(var(--destructive));
-  color: hsl(var(--destructive-foreground));
+  min-height: 3rem;
+  padding: 0 var(--space-6);
+  border-color: hsl(var(--brand));
+  background: hsl(var(--brand));
+  color: hsl(var(--brand-foreground));
+  font-size: 1rem;
+  font-weight: 600;
 }
 
 .databases-enable-button:hover {
-  background: hsl(var(--destructive) / 0.9);
+  background: hsl(var(--brand) / 0.9);
 }
 
 .databases-docs-link {
@@ -5002,7 +5048,7 @@ h1 {
   align-items: center;
   gap: var(--space-2);
   color: hsl(var(--foreground));
-  font-size: 0.8125rem;
+  font-size: 1rem;
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
@@ -5015,7 +5061,8 @@ h1 {
 
 .databases-enable-hint {
   max-width: 38rem;
-  margin-top: var(--space-1);
+  margin: 0;
+  font-size: 0.875rem;
 }
 
 .databases-enable-switch {
@@ -5024,24 +5071,38 @@ h1 {
 
 .databases-switch-field {
   min-height: 0;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-5);
+}
+
+.databases-switch-field .switch-visual {
+  width: 3rem;
+  height: 1.75rem;
+}
+
+.databases-switch-field .switch-visual > span {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.databases-switch-field .switch-input:checked + .switch-visual > span {
+  transform: translateX(var(--space-5));
 }
 
 .databases-enable-features {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin-top: var(--space-8);
-  padding-top: var(--space-6);
+  gap: var(--space-6);
+  margin-top: var(--space-4);
+  padding-top: var(--space-5);
   border-top: 1px solid hsl(var(--border));
 }
 
 .databases-feature-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--space-8);
   align-items: start;
-  padding: var(--space-5);
+  padding: var(--space-6);
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   background: hsl(var(--card));
@@ -5049,13 +5110,18 @@ h1 {
 
 .databases-feature-icon {
   display: grid;
-  width: 2.75rem;
-  height: 2.75rem;
+  width: calc(var(--space-8) * 2);
+  height: calc(var(--space-8) * 2);
   flex: 0 0 auto;
   place-items: center;
-  border-radius: calc(var(--radius) - 0.125rem);
-  color: hsl(var(--destructive));
-  background: hsl(var(--destructive) / 0.08);
+  border-radius: var(--radius);
+  color: hsl(var(--brand));
+  background: hsl(var(--brand) / 0.08);
+}
+
+.databases-feature-icon svg {
+  width: var(--space-6);
+  height: var(--space-6);
 }
 
 .databases-feature-copy {
@@ -5067,16 +5133,17 @@ h1 {
 .databases-feature-copy h3 {
   margin: 0;
   color: hsl(var(--foreground));
-  font-size: 0.9375rem;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
+  line-height: 1.25;
 }
 
 .databases-feature-copy p {
   margin: 0;
   color: hsl(var(--muted-foreground));
-  font-size: 0.8125rem;
-  line-height: 1.6;
+  font-size: 1.125rem;
+  line-height: 1.5;
 }
 
 @media (max-width: 64rem) {
@@ -5087,9 +5154,44 @@ h1 {
   .databases-enable-visual {
     display: none;
   }
+}
 
+@media (max-width: 80rem) {
   .databases-enable-features {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .databases-enable-card {
+    padding: var(--space-4);
+  }
+
+  .databases-enable-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .databases-feature-card {
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .databases-enable-button {
+    max-width: 100%;
+    padding: var(--space-3) var(--space-4);
+    font-size: 0.875rem;
+    white-space: normal;
+  }
+
+  .databases-feature-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .databases-feature-copy h3,
+  .databases-feature-copy p {
+    font-size: 1rem;
   }
 }
 
