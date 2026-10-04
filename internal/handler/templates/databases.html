@@ -66,7 +66,7 @@
     </div>
   </section>
 
-  <dialog class="application-dialog" id="managed-databases-enable-dialog" role="dialog" aria-modal="true" aria-labelledby="managed-databases-enable-dialog-title"{{if .DatabasesPage.EnableOpen}} open{{end}}>
+  <dialog class="application-dialog" id="managed-databases-enable-dialog" data-managed-databases-dialog{{if .DatabasesPage.EnableOpen}} data-managed-databases-enable-open{{end}} role="dialog" aria-modal="true" aria-labelledby="managed-databases-enable-dialog-title"{{if .DatabasesPage.EnableOpen}} open{{end}}>
     <div class="application-dialog-panel">
       <header class="application-dialog-header">
         <div>
@@ -79,7 +79,7 @@
         <span>{{.DatabasesPage.EnableError}}</span>
       </div>
       {{end}}
-      <form class="application-form" method="post" action="/databases/enable">
+      <form class="application-form" method="post" action="/databases/enable" data-managed-databases-form>
         <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
         <div class="field">
           <label for="managed-provider">Database provider</label>
@@ -105,8 +105,8 @@
           <span class="field-help">Leave empty and Redlaunch will generate a secure random password.</span>
         </div>
         <footer class="application-form-actions">
-          <a class="button button-secondary" href="/databases">Cancel</a>
-          <button class="button button-primary" type="submit">Enable and start</button>
+          <a class="button button-secondary" href="/databases" data-managed-databases-close>Cancel</a>
+          <button class="button button-primary" type="submit" data-managed-databases-submit>Enable and start</button>
         </footer>
       </form>
     </div>
