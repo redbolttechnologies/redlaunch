@@ -49,20 +49,101 @@
   {{end}}
 
   {{if not .DatabasesPage.Enabled}}
-  <section class="service-widget" aria-labelledby="managed-databases-enable-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-        <h2 id="managed-databases-enable-title">Managed databases</h2>
-        <p>Disabled by default. Enable to run one shared Postgres container for the whole server.</p>
+  <section class="service-widget databases-enable-card" aria-labelledby="managed-databases-enable-title">
+    <div class="databases-enable-hero">
+      <div class="databases-enable-visual" aria-hidden="true">
+        <svg viewBox="0 0 220 200" width="220" height="200" role="presentation" focusable="false">
+          <circle cx="110" cy="100" r="84" fill="none" stroke="hsl(var(--border))" stroke-width="1.5" stroke-dasharray="4 7" />
+          <circle cx="110" cy="16" r="4" fill="hsl(var(--destructive) / 0.45)" />
+          <circle cx="36" cy="72" r="4" fill="hsl(var(--destructive) / 0.65)" />
+          <circle cx="52" cy="170" r="3" fill="hsl(var(--border))" />
+          <circle cx="60" cy="186" r="3" fill="hsl(var(--destructive) / 0.35)" />
+          <circle cx="188" cy="150" r="3" fill="hsl(var(--border))" />
+          <g>
+            <ellipse cx="92" cy="142" rx="42" ry="12" fill="#dbe3ec" />
+            <path d="M50 106v24c0 6.6 18.8 12 42 12s42-5.4 42-12v-24c0 6.6-18.8 12-42 12s-42-5.4-42-12z" fill="#e6edf4" />
+            <path d="M50 82v24c0 6.6 18.8 12 42 12s42-5.4 42-12V82c0 6.6-18.8 12-42 12s-42-5.4-42-12z" fill="#eef3f8" />
+            <path d="M50 58v24c0 6.6 18.8 12 42 12s42-5.4 42-12V58c0 6.6-18.8 12-42 12s-42-5.4-42-12z" fill="#f4f7fb" />
+            <ellipse cx="92" cy="58" rx="42" ry="12" fill="#f8fafc" stroke="#d7e0ea" stroke-width="1.5" />
+            <ellipse cx="92" cy="58" rx="30" ry="7" fill="#e8eef5" />
+          </g>
+          <g>
+            <rect x="118" y="108" width="64" height="56" rx="10" fill="#ffffff" stroke="hsl(var(--border))" stroke-width="1.5" />
+            <g transform="translate(130 118)" fill="none" stroke="#336791" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 4c-2.5 0-4 2-4 4.5C2 11 3.5 14 5 16c-1 3-1.5 6-1 9 0.3 1.8 2.2 2 2.8 0.5L8 22c1-2.5 3-3.5 5.5-3.5h3c3.5 0 6-2.5 6-6V8c0-2.5-2-4-4.5-4H6z" fill="#eaf1f8" />
+              <path d="M22.5 5.5c2 0 3.5 1.8 3.5 4 0 2.5-1.5 5-3.5 6.5" />
+              <path d="M10 8.5c0.5 3 0 6-1 8.5" />
+              <circle cx="13.5" cy="9.5" r="0.6" fill="#1f3a5f" stroke="none" />
+              <path d="M4 21.5c-1 1-2.5 0.8-2.5-0.8" />
+            </g>
+          </g>
+        </svg>
       </div>
-      <label class="switch-field" for="managed-databases-enabled">
-        <span class="sr-only">Enable managed databases</span>
-        <input class="switch-input sr-only" id="managed-databases-enabled" type="checkbox" role="switch" aria-controls="managed-databases-enable-dialog" aria-expanded="false" data-managed-databases-toggle>
-        <span class="switch-visual" aria-hidden="true"><span></span></span>
-      </label>
-    </header>
-    <div class="service-widget-body">
-      <p><span>Enable managed databases</span></p>
+      <div class="databases-enable-copy">
+        <span class="service-status-badge service-status-neutral"><span class="status-dot" aria-hidden="true"></span><span>Disabled</span></span>
+        <h2 id="managed-databases-enable-title">Managed databases</h2>
+        <p class="databases-enable-description">Run one shared Postgres container for the whole server. Create multiple databases, manage users, and connect from your applications.</p>
+        <div class="databases-enable-actions">
+          <button class="button button-primary databases-enable-button" type="button" data-managed-databases-open aria-controls="managed-databases-enable-dialog" aria-haspopup="dialog">Enable managed databases</button>
+          <a class="databases-docs-link" href="/help/reference">
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 7v14M3 3h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5v17h-5a4 4 0 0 0-4 1 4 4 0 0 0-4-1H3V3Z"></path>
+            </svg>
+            <span>View documentation</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+        </div>
+        <p class="field-help databases-enable-hint">You can enable this feature at any time. It will start one shared Postgres container for the entire server.</p>
+      </div>
+      <div class="databases-enable-switch">
+        <label class="switch-field databases-switch-field" for="managed-databases-enabled">
+          <span class="sr-only">Enable managed databases</span>
+          <input class="switch-input sr-only" id="managed-databases-enabled" type="checkbox" role="switch" aria-controls="managed-databases-enable-dialog" aria-expanded="false" data-managed-databases-toggle>
+          <span class="switch-visual" aria-hidden="true"><span></span></span>
+        </label>
+      </div>
+    </div>
+    <div class="databases-enable-features">
+      <article class="databases-feature-card">
+        <span class="databases-feature-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+            <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"></path>
+            <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"></path>
+          </svg>
+        </span>
+        <div class="databases-feature-copy">
+          <h3>Create multiple databases</h3>
+          <p>Spin up as many databases as you need for different projects or applications, all within one Postgres instance.</p>
+        </div>
+      </article>
+      <article class="databases-feature-card">
+        <span class="databases-feature-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M19 8v6M22 11h-6"></path>
+          </svg>
+        </span>
+        <div class="databases-feature-copy">
+          <h3>Manage users &amp; credentials</h3>
+          <p>Create and manage database users, set permissions, and rotate credentials with ease.</p>
+        </div>
+      </article>
+      <article class="databases-feature-card">
+        <span class="databases-feature-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"></path>
+          </svg>
+        </span>
+        <div class="databases-feature-copy">
+          <h3>One shared Postgres instance</h3>
+          <p>A single, reliable Postgres container running at the server level, optimized for simplicity and resource efficiency.</p>
+        </div>
+      </article>
     </div>
   </section>
 

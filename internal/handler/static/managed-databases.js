@@ -66,6 +66,12 @@
     }
   });
 
+  document.querySelectorAll("[data-managed-databases-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openDialog(button);
+    });
+  });
+
   closeButtons.forEach((button) => {
     button.addEventListener("click", (event) => {
       event.preventDefault();

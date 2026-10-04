@@ -4617,6 +4617,23 @@ h1 {
   .registry-repository-details {
     padding: var(--space-4);
   }
+
+  .databases-enable-card {
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .databases-enable-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .databases-enable-switch {
+    order: -1;
+    justify-self: end;
+  }
+
+  .databases-enable-actions .button {
+    width: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4914,6 +4931,166 @@ h1 {
 
 .service-form-preset-note {
   margin-bottom: var(--space-5);
+}
+
+.databases-enable-card {
+  margin-top: var(--space-6);
+  padding: var(--space-8) var(--space-8) var(--space-6);
+}
+
+.databases-enable-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.databases-enable-visual {
+  display: grid;
+  flex: 0 0 auto;
+  width: 13.75rem;
+  place-items: center;
+}
+
+.databases-enable-copy {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  align-content: start;
+  justify-items: start;
+}
+
+.databases-enable-copy h2 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.databases-enable-description {
+  max-width: 38rem;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.databases-enable-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-5);
+  margin-top: var(--space-2);
+}
+
+.databases-enable-button {
+  min-height: 2.5rem;
+  padding: 0 var(--space-5);
+  border-color: hsl(var(--destructive));
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+
+.databases-enable-button:hover {
+  background: hsl(var(--destructive) / 0.9);
+}
+
+.databases-docs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.databases-docs-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.databases-enable-hint {
+  max-width: 38rem;
+  margin-top: var(--space-1);
+}
+
+.databases-enable-switch {
+  flex: 0 0 auto;
+}
+
+.databases-switch-field {
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.databases-enable-features {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid hsl(var(--border));
+}
+
+.databases-feature-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  padding: var(--space-5);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+
+.databases-feature-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: calc(var(--radius) - 0.125rem);
+  color: hsl(var(--destructive));
+  background: hsl(var(--destructive) / 0.08);
+}
+
+.databases-feature-copy {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.databases-feature-copy h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.databases-feature-copy p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 64rem) {
+  .databases-enable-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .databases-enable-visual {
+    display: none;
+  }
+
+  .databases-enable-features {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 48rem) {
