@@ -219,16 +219,16 @@
       </form>
     </div>
   </dialog>
-  <div class="application-tabs" data-application-tabs>
+  <div class="application-tabs" data-application-tabs data-application-initial-tab="{{.DatabasesPage.ActiveTab}}" data-managed-tabs>
     <div class="application-tablist" role="tablist" aria-label="Managed databases">
-      <button class="application-tab" id="managed-databases-tab" type="button" role="tab" aria-controls="managed-databases-panel" aria-selected="true" tabindex="0" data-application-tab="managed-databases-panel">Databases</button>
-      <button class="application-tab" id="managed-users-tab" type="button" role="tab" aria-controls="managed-users-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-users-panel">Users</button>
-      <button class="application-tab" id="managed-backups-tab" type="button" role="tab" aria-controls="managed-backups-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-backups-panel">Backups</button>
-      <button class="application-tab" id="managed-logs-tab" type="button" role="tab" aria-controls="managed-logs-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-logs-panel">Logs</button>
-      <button class="application-tab" id="managed-settings-tab" type="button" role="tab" aria-controls="managed-settings-panel" aria-selected="false" tabindex="-1" data-application-tab="managed-settings-panel">Settings</button>
+      <button class="application-tab" id="managed-databases-tab" type="button" role="tab" aria-controls="managed-databases-panel" aria-selected="{{if eq .DatabasesPage.ActiveTab "managed-databases"}}true{{else}}false{{end}}" tabindex="{{if eq .DatabasesPage.ActiveTab "managed-databases"}}0{{else}}-1{{end}}" data-application-tab="managed-databases-panel">Databases</button>
+      <button class="application-tab" id="managed-users-tab" type="button" role="tab" aria-controls="managed-users-panel" aria-selected="{{if eq .DatabasesPage.ActiveTab "managed-users"}}true{{else}}false{{end}}" tabindex="{{if eq .DatabasesPage.ActiveTab "managed-users"}}0{{else}}-1{{end}}" data-application-tab="managed-users-panel">Users</button>
+      <button class="application-tab" id="managed-backups-tab" type="button" role="tab" aria-controls="managed-backups-panel" aria-selected="{{if eq .DatabasesPage.ActiveTab "managed-backups"}}true{{else}}false{{end}}" tabindex="{{if eq .DatabasesPage.ActiveTab "managed-backups"}}0{{else}}-1{{end}}" data-application-tab="managed-backups-panel">Backups</button>
+      <button class="application-tab" id="managed-logs-tab" type="button" role="tab" aria-controls="managed-logs-panel" aria-selected="{{if eq .DatabasesPage.ActiveTab "managed-logs"}}true{{else}}false{{end}}" tabindex="{{if eq .DatabasesPage.ActiveTab "managed-logs"}}0{{else}}-1{{end}}" data-application-tab="managed-logs-panel">Logs</button>
+      <button class="application-tab" id="managed-settings-tab" type="button" role="tab" aria-controls="managed-settings-panel" aria-selected="{{if eq .DatabasesPage.ActiveTab "managed-settings"}}true{{else}}false{{end}}" tabindex="{{if eq .DatabasesPage.ActiveTab "managed-settings"}}0{{else}}-1{{end}}" data-application-tab="managed-settings-panel">Settings</button>
     </div>
 
-    <section class="application-tab-panel databases-overview-grid" id="managed-databases-panel" role="tabpanel" aria-labelledby="managed-databases-tab" tabindex="0">
+    <section class="application-tab-panel databases-overview-grid" id="managed-databases-panel" role="tabpanel" aria-labelledby="managed-databases-tab" tabindex="0"{{if ne .DatabasesPage.ActiveTab "managed-databases"}} hidden{{end}}>
       <section class="service-widget" aria-labelledby="managed-databases-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">
@@ -290,188 +290,11 @@
       </aside>
     </section>
 
-    <section class="application-tab-panel" id="managed-users-panel" role="tabpanel" aria-labelledby="managed-users-tab" tabindex="0" hidden>
-      <section class="service-widget" aria-labelledby="managed-users-title">
-        <header class="service-widget-header">
-          <div class="service-widget-heading">
-            <h2 id="managed-users-title">Users</h2>
-            <p>Login roles and which databases they may access.</p>
-          </div>
-        </header>
-        <div class="service-widget-body">
-          <form class="application-form" method="post" action="/databases/users/create">
-            <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
-            <div class="service-form-grid">
-              <div class="field">
-                <label for="managed-user-name">Username</label>
-                <input id="managed-user-name" name="username" type="text" maxlength="63" autocomplete="off" required>
-              </div>
-              <div class="field">
-                <label for="managed-user-password">Password</label>
-                <input id="managed-user-password" name="password" type="password" maxlength="256" autocomplete="new-password" required>
-              </div>
-            </div>
-            <div class="field">
-              <label for="managed-user-databases">Allowed databases (comma separated)</label>
-              <input id="managed-user-databases" name="databases" type="text" autocomplete="off" placeholder="e.g. app, analytics">
-              <span class="field-help">Use one input per database or separate names with commas.</span>
-            </div>
-            <footer class="application-form-actions">
-              <button class="button button-primary" type="submit">Create user</button>
-            </footer>
-          </form>
-          {{if .DatabasesPage.Users}}
-          <div class="service-environment-table-wrap">
-            <table class="service-environment-table">
-              <caption class="sr-only">Managed database users</caption>
-              <thead>
-                <tr><th scope="col">Username</th><th scope="col">Allowed databases</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
-              </thead>
-              <tbody>
-                {{range .DatabasesPage.Users}}
-                <tr>
-                  <th scope="row"><code>{{.User.Username}}</code></th>
-                  <td>{{if .Databases}}{{range $i, $d := .Databases}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}{{else}}—{{end}}</td>
-                  <td>
-                    <form method="post" action="/databases/users/password">
-                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-                      <input type="hidden" name="username" value="{{.User.Username}}">
-                      <input name="password" type="password" maxlength="256" placeholder="New password" aria-label="New password for {{.User.Username}}" required>
-                      <button class="button button-secondary" type="submit">Change password</button>
-                    </form>
-                    <form method="post" action="/databases/users/permissions">
-                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-                      <input type="hidden" name="username" value="{{.User.Username}}">
-                      <input name="databases" type="text" placeholder="db1, db2" aria-label="Allowed databases for {{.User.Username}}" value="{{range $i, $d := .Databases}}{{if $i}}, {{end}}{{$d}}{{end}}">
-                      <button class="button button-secondary" type="submit">Set permissions</button>
-                    </form>
-                    <form method="post" action="/databases/users/delete" data-managed-drop>
-                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-                      <input type="hidden" name="username" value="{{.User.Username}}">
-                      <button class="button button-destructive" type="submit">Delete</button>
-                    </form>
-                  </td>
-                </tr>
-                {{end}}
-              </tbody>
-            </table>
-          </div>
-          {{else}}
-          <div class="service-widget-empty" role="status"><p>No managed users yet.</p></div>
-          {{end}}
-        </div>
-      </section>
-    </section>
+    {{template "managed-databases-users.html" .DatabasesPage}}
 
-    <section class="application-tab-panel" id="managed-backups-panel" role="tabpanel" aria-labelledby="managed-backups-tab" tabindex="0" hidden>
-      <section class="service-widget" aria-labelledby="managed-backups-title">
-        <header class="service-widget-header">
-          <div class="service-widget-heading">
-            <h2 id="managed-backups-title">Backups</h2>
-            <p>Scheduled and manual backups per database.</p>
-          </div>
-        </header>
-        <div class="service-widget-body">
-          <form class="application-form" method="get" action="/databases">
-            <div class="field">
-              <label for="managed-backup-database">Database</label>
-              <select id="managed-backup-database" name="database" onchange="this.form.submit()">
-                {{range .DatabasesPage.Databases}}
-                <option value="{{.Name}}"{{if eq $.DatabasesPage.SelectedDatabase .Name}} selected{{end}}>{{.Name}}</option>
-                {{end}}
-              </select>
-            </div>
-          </form>
-          {{with .DatabasesPage.Backup}}
-          <form class="application-form" method="post" action="/databases/backups/schedule">
-            <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-            <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
-            <div class="field">
-              <label for="managed-schedule-enabled">Schedule backups</label>
-              <input id="managed-schedule-enabled" name="enabled" type="checkbox" value="on"{{if .Schedule.Enabled}} checked{{end}}>
-            </div>
-            <div class="service-form-grid">
-              <div class="field">
-                <label for="managed-schedule-type">Schedule type</label>
-                <select id="managed-schedule-type" name="schedule_type">
-                  <option value="hourly"{{if eq .Schedule.ScheduleType "hourly"}} selected{{end}}>hourly</option>
-                  <option value="daily"{{if eq .Schedule.ScheduleType "daily"}} selected{{end}}>daily</option>
-                  <option value="weekly"{{if eq .Schedule.ScheduleType "weekly"}} selected{{end}}>weekly</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="managed-schedule-hour">Hour</label>
-                <input id="managed-schedule-hour" name="hour" type="number" min="0" max="23" value="{{.Schedule.Hour}}">
-              </div>
-              <div class="field">
-                <label for="managed-schedule-minute">Minute</label>
-                <input id="managed-schedule-minute" name="minute" type="number" min="0" max="59" value="{{.Schedule.Minute}}">
-              </div>
-              <div class="field">
-                <label for="managed-schedule-weekday">Weekday</label>
-                <select id="managed-schedule-weekday" name="weekday">
-                  <option value="">—</option>
-                  <option value="monday"{{if eq .Schedule.Weekday "monday"}} selected{{end}}>monday</option>
-                  <option value="tuesday"{{if eq .Schedule.Weekday "tuesday"}} selected{{end}}>tuesday</option>
-                  <option value="wednesday"{{if eq .Schedule.Weekday "wednesday"}} selected{{end}}>wednesday</option>
-                  <option value="thursday"{{if eq .Schedule.Weekday "thursday"}} selected{{end}}>thursday</option>
-                  <option value="friday"{{if eq .Schedule.Weekday "friday"}} selected{{end}}>friday</option>
-                  <option value="saturday"{{if eq .Schedule.Weekday "saturday"}} selected{{end}}>saturday</option>
-                  <option value="sunday"{{if eq .Schedule.Weekday "sunday"}} selected{{end}}>sunday</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="managed-schedule-retention">Retention (days)</label>
-                <input id="managed-schedule-retention" name="retention_days" type="number" min="1" max="3650" value="{{.Schedule.RetentionDays}}">
-              </div>
-            </div>
-            <footer class="application-form-actions">
-              <button class="button button-secondary" type="submit">Save schedule</button>
-            </footer>
-          </form>
-          <form method="post" action="/databases/backups/run">
-            <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-            <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
-            <button class="button button-primary" type="submit">Run backup now</button>
-          </form>
-          {{if .Backups}}
-          <div class="service-environment-table-wrap">
-            <table class="service-environment-table">
-              <thead><tr><th scope="col">Completed</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
-              <tbody>
-                {{range .Backups}}
-                <tr>
-                  <th scope="row"><time datetime="{{backupTimeISO .}}">{{backupTime .}}</time></th>
-                  <td><code>{{backupSize .SizeBytes}}</code></td>
-                  <td>
-                    <a class="button button-secondary" href="{{managedBackupDownloadPath $.DatabasesPage.BackupDatabaseName .FileName}}">Download</a>
-                    <form method="post" action="/databases/backups/restore">
-                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-                      <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
-                      <input type="hidden" name="backup_file" value="{{.FileName}}">
-                      <button class="button button-secondary" type="submit">Restore</button>
-                    </form>
-                    <form method="post" action="/databases/backups/delete">
-                      <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
-                      <input type="hidden" name="database" value="{{$.DatabasesPage.BackupDatabaseName}}">
-                      <input type="hidden" name="backup_file" value="{{.FileName}}">
-                      <button class="button button-destructive" type="submit">Delete</button>
-                    </form>
-                  </td>
-                </tr>
-                {{end}}
-              </tbody>
-            </table>
-          </div>
-          {{else}}
-          <div class="service-widget-empty" role="status"><p>No backups yet.</p></div>
-          {{end}}
-          {{end}}
-        </div>
-      </section>
-    </section>
+    {{template "managed-databases-backups.html" .DatabasesPage}}
 
-    <section class="application-tab-panel" id="managed-logs-panel" role="tabpanel" aria-labelledby="managed-logs-tab" tabindex="0" hidden>
+    <section class="application-tab-panel" id="managed-logs-panel" role="tabpanel" aria-labelledby="managed-logs-tab" tabindex="0"{{if ne .DatabasesPage.ActiveTab "managed-logs"}} hidden{{end}}>
       <section class="service-widget" aria-labelledby="managed-logs-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">
@@ -494,44 +317,7 @@
       </section>
     </section>
 
-    <section class="application-tab-panel" id="managed-settings-panel" role="tabpanel" aria-labelledby="managed-settings-tab" tabindex="0" hidden>
-      <section class="service-widget" aria-labelledby="managed-settings-title">
-        <header class="service-widget-header">
-          <div class="service-widget-heading">
-            <h2 id="managed-settings-title">Settings</h2>
-            <p>Provider <code>{{.DatabasesPage.Cluster.Provider}}</code> · version <code>{{.DatabasesPage.Cluster.Version}}</code> · default user <code>{{.DatabasesPage.Cluster.DefaultUser}}</code> · status <code>{{if .DatabasesPage.Status.Status}}{{.DatabasesPage.Status.Status}}{{else}}Unknown{{end}}</code>.</p>
-          </div>
-        </header>
-        <div class="service-widget-body">
-          <div class="service-details-actions" role="group" aria-label="Cluster actions">
-            <form class="service-details-action-form" method="post" action="/databases/start">
-              <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
-              <button class="button button-secondary service-details-action service-details-action-start" type="submit"{{if .DatabasesPage.Status.Running}} disabled{{end}}>
-                <span>Start</span>
-              </button>
-            </form>
-            <form class="service-details-action-form" method="post" action="/databases/stop">
-              <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
-              <button class="button button-secondary service-details-action service-details-action-stop" type="submit"{{if not .DatabasesPage.Status.Running}} disabled{{end}}>
-                <span>Stop</span>
-              </button>
-            </form>
-            <form class="service-details-action-form" method="post" action="/databases/restart">
-              <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
-              <button class="button button-secondary service-details-action service-details-action-restart" type="submit">
-                <span>Restart</span>
-              </button>
-            </form>
-          </div>
-
-          <form method="post" action="/databases/disable" data-managed-drop>
-            <input type="hidden" name="csrf_token" value="{{.DatabasesPage.CSRFToken}}">
-            <button class="button button-destructive" type="submit">Disable managed databases</button>
-          </form>
-          <p class="field-help">Disabling stops the container but retains data, files, and backup artifacts.</p>
-        </div>
-      </section>
-    </section>
+    {{template "managed-databases-settings.html" .DatabasesPage}}
   </div>
   {{end}}
 </section>
@@ -577,3 +363,7 @@
 {{define "managed-backup-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="5" rx="1"></rect><path d="M5 8v13h14V8M10 12h4"></path></svg>{{end}}
 
 {{define "managed-trash-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M5 6l1 15h12l1-15M9 6V3h6v3M10 10v7M14 10v7"></path></svg>{{end}}
+
+{{define "managed-download-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"></path></svg>{{end}}
+
+{{define "managed-restore-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"></path></svg>{{end}}

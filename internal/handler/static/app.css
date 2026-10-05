@@ -5366,6 +5366,8 @@ h1 {
 }
 
 .databases-enabled-card .databases-enable-button,
+.databases-page .databases-management-widget .databases-enable-button,
+.databases-page .service-tab-heading .databases-enable-button,
 .databases-page .application-dialog .databases-enable-button,
 .databases-page .service-widget-empty .databases-enable-button {
   min-height: 2.25rem;
@@ -5592,4 +5594,128 @@ h1 {
     grid-row: 1;
     justify-self: end;
   }
+}
+
+.databases-management-widget .service-widget-header {
+  flex-wrap: wrap;
+  border-bottom: 0;
+  padding: var(--space-4) var(--space-5) 0;
+}
+
+.databases-management-widget .service-widget-body {
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.databases-table-toolbar {
+  align-items: end;
+  margin-bottom: var(--space-4);
+}
+
+.databases-access-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.databases-default-label {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.databases-row-actions .button {
+  min-height: var(--space-8);
+  padding: 0 var(--space-3);
+  font-size: 0.75rem;
+}
+
+.databases-access-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.databases-access-fieldset legend {
+  margin-bottom: var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.databases-access-choices {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 16rem;
+  overflow: auto;
+  padding: var(--space-1);
+}
+
+.databases-backup-grid,
+.databases-settings-grid {
+  display: grid;
+  gap: var(--space-4);
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr);
+}
+
+.databases-settings-grid {
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+}
+
+.databases-widget-stack {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.databases-widget-stack > p {
+  margin: 0;
+}
+
+.databases-technical-value {
+  overflow-wrap: anywhere;
+}
+
+.databases-details-grid {
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.databases-settings-grid .service-details-actions {
+  margin-left: 0;
+}
+
+@media (max-width: 80rem) {
+  .databases-backup-grid,
+  .databases-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .databases-details-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.databases-table-toolbar .field {
+  flex: 0 1 24rem;
+}
+
+.databases-page .field[hidden] {
+  display: none;
+}
+
+.databases-page .databases-schedule-fields {
+  display: grid;
+  align-items: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.databases-name .databases-user-avatar svg {
+  color: inherit;
+}
+
+.databases-page .application-danger-zone-header h3 {
+  color: hsl(var(--foreground));
 }

@@ -117,7 +117,7 @@
     let returnFocus = null;
     const closeDialog = () => dialog.close();
     const openDialog = (source) => {
-      returnFocus = source;
+      returnFocus = source || document.querySelector("[role=tab][aria-selected=true]");
       if (!dialog.open) dialog.showModal();
       document.body.classList.add("dialog-open");
       const target = dialog.querySelector("input:not([type=hidden]), [data-managed-dialog-close]");
@@ -153,6 +153,14 @@
       const url = new URL(window.location.href);
       url.searchParams.delete("create");
       url.searchParams.delete("disable");
+      url.searchParams.delete("dialog");
+      url.searchParams.delete("user");
+      url.searchParams.delete("backup_file");
+      url.pathname = "/databases";
+      const activeTab = document.querySelector("[data-managed-tabs] [role=tab][aria-selected=true]");
+      if (activeTab) url.searchParams.set("tab", activeTab.id.replace(/-tab$/, ""));
+      const selectedDatabase = document.querySelector("[data-managed-database-select]");
+      if (selectedDatabase && activeTab?.id === "managed-backups-tab") url.searchParams.set("database", selectedDatabase.value);
       window.history.replaceState(null, "", url);
       if (returnFocus) returnFocus.focus();
     });
@@ -186,6 +194,63 @@
         ? "Disable managed databases? Applications will lose access. Data and backups are retained."
         : "Remove this managed database or user? This action cannot be undone.";
       if (!window.confirm(message)) event.preventDefault();
+    });
+  });
+})();
+
+(() => {
+  document.querySelectorAll("[data-managed-submit]").forEach((form) => {
+    form.addEventListener("submit", () => {
+      const button = form.querySelector("button[type=submit]");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Working…";
+      }
+    });
+  });
+  const databaseSelect = document.querySelector("[data-managed-database-select]");
+  if (databaseSelect) databaseSelect.addEventListener("change", () => databaseSelect.form.requestSubmit());
+
+  const schedule = document.querySelector("[data-managed-schedule-form]");
+  if (!schedule) return;
+  const enabled = schedule.querySelector("[name=enabled]");
+  const frequency = schedule.querySelector("[name=schedule_type]");
+  const fields = schedule.querySelector("#managed-schedule-fields");
+  const updateSchedule = () => {
+    const weekly = frequency.value === "weekly";
+    const hourly = frequency.value === "hourly";
+    schedule.querySelector("[data-managed-schedule-hour]").hidden = hourly;
+    schedule.querySelector("[data-managed-schedule-weekday]").hidden = !weekly;
+    fields.querySelectorAll("input, select").forEach((input) => {
+      input.disabled = !enabled.checked;
+      input.required = enabled.checked && input.name !== "weekday";
+    });
+    schedule.querySelector("[name=hour]").required = enabled.checked && !hourly;
+    schedule.querySelector("[name=hour]").disabled = !enabled.checked || hourly;
+    schedule.querySelector("[name=weekday]").required = enabled.checked && weekly;
+    schedule.querySelector("[name=weekday]").disabled = !enabled.checked || !weekly;
+  };
+  enabled.addEventListener("change", updateSchedule);
+  frequency.addEventListener("change", updateSchedule);
+  updateSchedule();
+})();
+
+(() => {
+  const tabs = document.querySelector("[data-managed-tabs]");
+  if (!tabs) return;
+  const syncTabURL = () => {
+    const selected = tabs.querySelector("[role=tab][aria-selected=true]");
+    if (!selected) return;
+    const url = new URL(window.location.href);
+    url.pathname = "/databases";
+    url.searchParams.set("tab", selected.id.replace(/-tab$/, ""));
+    ["dialog", "user", "backup_file", "notice"].forEach((key) => url.searchParams.delete(key));
+    window.history.replaceState(null, "", url);
+  };
+  tabs.querySelectorAll("[role=tab]").forEach((tab) => {
+    tab.addEventListener("click", syncTabURL);
+    tab.addEventListener("keydown", (event) => {
+      if (["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) queueMicrotask(syncTabURL);
     });
   });
 })();

@@ -44,7 +44,8 @@
       });
     });
 
-    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    const requestedTab = tabs.getAttribute("data-application-initial-tab") ||
+      new URLSearchParams(window.location.search).get("tab");
     const initialTab = tabButtons.find((tab) => tab.id === `${requestedTab}-tab`);
     if (initialTab) {
       activateTab(initialTab, false);

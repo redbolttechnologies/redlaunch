@@ -1,0 +1,88 @@
+{{define "managed-databases-users.html"}}
+<section class="application-tab-panel" id="managed-users-panel" role="tabpanel" aria-labelledby="managed-users-tab" tabindex="0"{{if ne .ActiveTab "managed-users"}} hidden{{end}}>
+  <section class="service-widget databases-management-widget" aria-labelledby="managed-users-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading"><h2 id="managed-users-title">Users &amp; access</h2><p>Manage login roles and access to your databases.</p></div>
+      <a class="button button-primary databases-enable-button" href="/databases?tab=managed-users&amp;dialog=user-create" data-managed-dialog-open="managed-user-create-dialog" aria-haspopup="dialog" aria-controls="managed-user-create-dialog">{{template "managed-users-icon"}}<span>Create user</span></a>
+    </header>
+    <div class="service-widget-body">
+      <form class="databases-filters databases-table-toolbar" method="get" action="/databases" role="search" aria-label="Search database users">
+        <input type="hidden" name="tab" value="managed-users">
+        <div class="field"><label class="sr-only" for="managed-user-search">Search users</label><input id="managed-user-search" type="search" name="user_q" value="{{.UserQuery}}" placeholder="Search users…"></div>
+        <button class="button button-secondary" type="submit">Search</button>
+        <span class="field-help">{{len .Users}} managed {{if eq (len .Users) 1}}user{{else}}users{{end}}</span>
+      </form>
+      {{if .VisibleUsers}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table">
+          <caption class="sr-only">Managed database users</caption>
+          <thead><tr><th scope="col">User</th><th scope="col">Allowed databases</th><th scope="col">Created</th><th scope="col">Actions</th></tr></thead>
+          <tbody>
+            {{range .VisibleUsers}}
+            <tr>
+              <th scope="row"><span class="databases-name"><span class="databases-user-avatar" aria-hidden="true">{{template "managed-user-icon"}}</span><code>{{.User.Username}}</code></span>{{if eq .User.Username $.Cluster.DefaultUser}}<span class="field-help databases-default-label">Default user</span>{{end}}</th>
+              <td><div class="databases-access-badges">{{range .Databases}}<span class="service-status-badge service-status-neutral"><code>{{.}}</code></span>{{else}}<span class="field-help">No database grants</span>{{end}}</div></td>
+              <td>{{if .User.CreatedAt.IsZero}}—{{else}}<time datetime="{{.User.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.User.CreatedAt.Format "Jan 02, 2006"}}</time>{{end}}</td>
+              <td class="databases-row-actions">
+                <a class="button button-secondary" href="/databases?tab=managed-users&amp;dialog=user-permissions&amp;user={{.User.Username}}" aria-label="Edit access for {{.User.Username}}" aria-haspopup="dialog">Access</a>
+                <a class="button button-secondary" href="/databases?tab=managed-users&amp;dialog=user-password&amp;user={{.User.Username}}" aria-label="Change password for {{.User.Username}}" aria-haspopup="dialog">Password</a>
+                {{if ne .User.Username $.Cluster.DefaultUser}}<a class="icon-button databases-drop-button" href="/databases?tab=managed-users&amp;dialog=user-delete&amp;user={{.User.Username}}" aria-label="Delete user {{.User.Username}}" title="Delete user" aria-haspopup="dialog">{{template "managed-trash-icon"}}</a>{{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="service-widget-empty" role="status">{{if .Users}}<p>No users match your search.</p><a class="button button-secondary" href="/databases?tab=managed-users">Clear search</a>{{else}}<p>No managed users yet.</p><p class="field-help">Create a login role and choose the databases it can access.</p><a class="button button-primary databases-enable-button" href="/databases?tab=managed-users&amp;dialog=user-create" data-managed-dialog-open="managed-user-create-dialog">Create user</a>{{end}}</div>
+      {{end}}
+    </div>
+  </section>
+
+  <dialog class="application-dialog" id="managed-user-create-dialog" aria-labelledby="managed-user-create-title" data-managed-dialog{{if eq .Dialog "user-create"}} open{{end}}>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header"><div><h2 id="managed-user-create-title">Create user</h2><p>Create a Postgres login role with its own credentials.</p></div></header>
+      {{if and (eq .Dialog "user-create") .DialogError}}<div class="application-alert application-dialog-alert" role="alert">{{.DialogError}}</div>{{end}}
+      <form class="application-form" method="post" action="/databases/users/create">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <div class="field"><label for="managed-user-name">Username</label><input id="managed-user-name" name="username" type="text" maxlength="63" value="{{.UserName}}" autocomplete="off" required><span class="field-help">Use letters, numbers, and underscores. Start with a letter or underscore.</span></div>
+        <div class="field"><label for="managed-user-password">Password</label><input id="managed-user-password" name="password" type="password" maxlength="256" autocomplete="new-password" required><span class="field-help">Stored in Postgres; never shown in this interface.</span></div>
+        {{template "managed-database-access-choices.html" .CreateAccessChoices}}
+        <footer class="application-form-actions"><a class="button button-secondary" href="/databases?tab=managed-users" data-managed-dialog-close>Cancel</a><button class="button button-primary databases-enable-button" type="submit">Create user</button></footer>
+      </form>
+    </div>
+  </dialog>
+
+  {{if or (eq .Dialog "user-password") (eq .Dialog "user-permissions") (eq .Dialog "user-delete")}}
+  <dialog class="application-dialog" id="managed-user-action-dialog" aria-labelledby="managed-user-action-title" data-managed-dialog open>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header"><div><h2 id="managed-user-action-title">{{if eq .Dialog "user-password"}}Change password{{else if eq .Dialog "user-permissions"}}Edit database access{{else}}Delete user?{{end}}</h2><p>For <code class="databases-technical-value">{{.SelectedUser.User.Username}}</code>.</p></div></header>
+      {{if .DialogError}}<div class="application-alert application-dialog-alert" role="alert">{{.DialogError}}</div>{{end}}
+      <form class="application-form" method="post" action="{{if eq .Dialog "user-password"}}/databases/users/password{{else if eq .Dialog "user-permissions"}}/databases/users/permissions{{else}}/databases/users/delete{{end}}">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <input type="hidden" name="username" value="{{.SelectedUser.User.Username}}">
+        {{if eq .Dialog "user-password"}}
+        <div class="field"><label for="managed-user-new-password">New password</label><input id="managed-user-new-password" name="password" type="password" maxlength="256" autocomplete="new-password" required><span class="field-help">Update applications using this user to use the new password.</span></div>
+        {{else if eq .Dialog "user-permissions"}}
+        {{template "managed-database-access-choices.html" .AccessChoices}}
+        <p class="field-help">Saving replaces this user's database grants. Database ownership and other Postgres privileges remain in effect.</p>
+        {{else}}
+        <p class="field-help">This removes the login role. Applications using this user will lose access. This action cannot be undone.</p>
+        {{if eq .SelectedUser.User.Username .Cluster.DefaultUser}}<div class="application-alert" role="alert">The cluster's default user cannot be deleted.</div>{{end}}
+        {{end}}
+        <footer class="application-form-actions"><a class="button button-secondary" href="/databases?tab=managed-users" data-managed-dialog-close>Cancel</a><button class="button {{if eq .Dialog "user-delete"}}button-destructive{{else}}button-primary databases-enable-button{{end}}" type="submit"{{if and (eq .Dialog "user-delete") (eq .SelectedUser.User.Username .Cluster.DefaultUser)}} disabled{{end}}>{{if eq .Dialog "user-password"}}Update password{{else if eq .Dialog "user-permissions"}}Save access{{else}}Delete user{{end}}</button></footer>
+      </form>
+    </div>
+  </dialog>
+  {{end}}
+</section>
+{{end}}
+
+{{define "managed-database-access-choices.html"}}
+<fieldset class="databases-access-fieldset">
+  <legend>Allowed databases</legend>
+  <div class="databases-access-choices">
+    {{range .}}<label class="checkbox-field"><input type="checkbox" name="databases" value="{{.Name}}"{{if .Checked}} checked{{end}}><span class="checkbox-field-copy"><span class="checkbox-field-title"><code class="databases-technical-value">{{.Name}}</code></span></span></label>{{else}}<p class="field-help">No databases available. You can grant access after creating a database.</p>{{end}}
+  </div>
+</fieldset>
+{{end}}

@@ -43,36 +43,50 @@ type managedDatabasesService interface {
 	OpenBackup(context.Context, string, string) (io.ReadCloser, application.Backup, error)
 }
 
+type managedDatabaseAccessChoice struct {
+	Name    string
+	Checked bool
+}
+
 type databasesPageData struct {
-	Cluster            application.ManagedDatabaseCluster
-	Enabled            bool
-	Status             application.ManagedDatabaseStatus
-	Logs               string
-	LogsAvailable      bool
-	Databases          []application.ManagedDatabase
-	VisibleDatabases   []application.ManagedDatabase
-	DatabaseOwners     []string
-	DatabaseQuery      string
-	DatabaseOwner      string
-	CreateOpen         bool
-	DisableOpen        bool
-	Users              []application.ManagedDatabaseUserDetail
-	SelectedDatabase   string
-	Backup             *application.BackupDetails
-	BackupDatabaseName string
-	CSRFToken          string
-	Error              string
-	Notice             string
-	EnableOpen         bool
-	EnableError        string
-	Provider           string
-	Version            string
-	DefaultUser        string
-	CreateName         string
-	CreateOwner        string
-	UserName           string
-	UserDatabases      string
-	Progress           *managedDatabasesProgressData
+	Cluster             application.ManagedDatabaseCluster
+	Enabled             bool
+	Status              application.ManagedDatabaseStatus
+	Logs                string
+	LogsAvailable       bool
+	Databases           []application.ManagedDatabase
+	VisibleDatabases    []application.ManagedDatabase
+	DatabaseOwners      []string
+	DatabaseQuery       string
+	DatabaseOwner       string
+	CreateOpen          bool
+	DisableOpen         bool
+	Users               []application.ManagedDatabaseUserDetail
+	ActiveTab           string
+	UserQuery           string
+	VisibleUsers        []application.ManagedDatabaseUserDetail
+	Dialog              string
+	DialogError         string
+	SelectedUser        *application.ManagedDatabaseUserDetail
+	SelectedBackup      *application.Backup
+	AccessChoices       []managedDatabaseAccessChoice
+	CreateAccessChoices []managedDatabaseAccessChoice
+	SelectedDatabase    string
+	Backup              *application.BackupDetails
+	BackupDatabaseName  string
+	CSRFToken           string
+	Error               string
+	Notice              string
+	EnableOpen          bool
+	EnableError         string
+	Provider            string
+	Version             string
+	DefaultUser         string
+	CreateName          string
+	CreateOwner         string
+	UserName            string
+	UserDatabases       string
+	Progress            *managedDatabasesProgressData
 }
 
 func (h *Handler) databasesPage(w http.ResponseWriter, r *http.Request) {
@@ -171,17 +185,90 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 		return data, err
 	}
 	data.Users = users
+	data.ActiveTab = managedDatabasesTab(query.Get("tab"))
+	data.UserQuery = strings.TrimSpace(query.Get("user_q"))
+	userSearch := strings.ToLower(data.UserQuery)
+	for i := range users {
+		if strings.Contains(strings.ToLower(users[i].User.Username), userSearch) {
+			data.VisibleUsers = append(data.VisibleUsers, users[i])
+		}
+		if users[i].User.Username == query.Get("user") {
+			data.SelectedUser = &users[i]
+		}
+	}
+	switch query.Get("dialog") {
+	case "cluster-stop", "cluster-restart":
+		data.Dialog = query.Get("dialog")
+		data.ActiveTab = "managed-settings"
+	case "user-create":
+		data.Dialog = "user-create"
+		data.ActiveTab = "managed-users"
+	case "user-password", "user-permissions", "user-delete":
+		data.ActiveTab = "managed-users"
+		if data.SelectedUser != nil {
+			data.Dialog = query.Get("dialog")
+		} else {
+			data.Error = "The database user could not be found."
+		}
+	}
+	for _, database := range databases {
+		choice := managedDatabaseAccessChoice{Name: database.Name}
+		if data.SelectedUser != nil {
+			for _, name := range data.SelectedUser.Databases {
+				if name == database.Name {
+					choice.Checked = true
+				}
+			}
+		}
+		data.AccessChoices = append(data.AccessChoices, choice)
+		data.CreateAccessChoices = append(data.CreateAccessChoices, managedDatabaseAccessChoice{Name: database.Name})
+	}
 	selected := strings.TrimSpace(query.Get("database"))
 	if selected == "" && len(databases) > 0 {
 		selected = databases[0].Name
 	}
 	if selected != "" {
+		data.SelectedDatabase = selected
 		if details, err := h.managedDatabases.GetBackupDetails(ctx, selected); err == nil {
 			backup := details
 			data.Backup = &backup
 			data.BackupDatabaseName = selected
-			data.SelectedDatabase = selected
 		}
+	}
+	if query.Get("dialog") == "backup-restore" || query.Get("dialog") == "backup-delete" {
+		data.ActiveTab = "managed-backups"
+		if data.Backup != nil {
+			for i := range data.Backup.Backups {
+				if data.Backup.Backups[i].FileName == query.Get("backup_file") {
+					data.SelectedBackup = &data.Backup.Backups[i]
+					data.Dialog = query.Get("dialog")
+					break
+				}
+			}
+		}
+		if data.SelectedBackup == nil {
+			data.Error = "The backup could not be found."
+		}
+	}
+	switch query.Get("notice") {
+	case "user-created":
+		data.Notice = "Database user created."
+	case "password-updated":
+		data.Notice = "Password updated."
+	case "permissions-updated":
+		data.Notice = "Database access updated."
+	case "user-deleted":
+		data.Notice = "Database user deleted."
+	case "schedule-saved":
+		data.Notice = "Backup schedule saved."
+	case "backup-created":
+		data.Notice = "Backup completed."
+	case "backup-restored":
+		data.Notice = "Backup restored."
+	case "backup-deleted":
+		data.Notice = "Backup deleted."
+	case "start", "stop", "restart":
+		data.Notice = "Cluster action completed."
 	}
 	return data, nil
 }
@@ -189,6 +276,9 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 func (h *Handler) writeDatabasesPage(w http.ResponseWriter, r *http.Request, status int, data databasesPageData) {
 	csrfToken := h.setCSRFCookie(w, r)
 	data.CSRFToken = csrfToken
+	if data.ActiveTab == "" {
+		data.ActiveTab = managedDatabasesTab(r.URL.Query().Get("tab"))
+	}
 	if data.Provider == "" {
 		data.Provider = application.ManagedDatabaseProviderPostgres
 	}
@@ -305,7 +395,7 @@ func (h *Handler) disableManagedDatabases(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.managedDatabases.DisableCluster(r.Context()); err != nil {
-		h.writeDatabasesPage(w, r, managedDatabasesStatus(err), databasesPageData{Error: managedDatabasesUserMessage(err)})
+		h.renderManagedDatabasesActionError(w, r, err, "managed-settings", "")
 		return
 	}
 	http.Redirect(w, r, "/databases", http.StatusSeeOther)
@@ -338,10 +428,10 @@ func (h *Handler) managedDatabasesClusterAction(action string) http.HandlerFunc 
 		}
 		if err != nil {
 			h.logger.Error("managed databases cluster action", "action", action, "error", err)
-			http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+			h.renderManagedDatabasesActionError(w, r, err, "managed-settings", "")
 			return
 		}
-		http.Redirect(w, r, "/databases", http.StatusSeeOther)
+		managedDatabasesRedirect(w, r, "managed-settings", action, "")
 	}
 }
 
@@ -409,10 +499,10 @@ func (h *Handler) createManagedDatabaseUser(w http.ResponseWriter, r *http.Reque
 	}
 	if err := h.managedDatabases.CreateUser(r.Context(), input); err != nil {
 		h.logger.Error("create managed database user", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-users", "user-create")
 		return
 	}
-	http.Redirect(w, r, "/databases", http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-users", "user-created", "")
 }
 
 func (h *Handler) updateManagedDatabaseUserPassword(w http.ResponseWriter, r *http.Request) {
@@ -431,10 +521,10 @@ func (h *Handler) updateManagedDatabaseUserPassword(w http.ResponseWriter, r *ht
 	password := r.Form.Get("password")
 	if err := h.managedDatabases.UpdateUserPassword(r.Context(), username, password); err != nil {
 		h.logger.Error("update managed database password", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-users", "user-password")
 		return
 	}
-	http.Redirect(w, r, "/databases", http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-users", "password-updated", "")
 }
 
 func (h *Handler) setManagedDatabaseUserPermissions(w http.ResponseWriter, r *http.Request) {
@@ -452,10 +542,10 @@ func (h *Handler) setManagedDatabaseUserPermissions(w http.ResponseWriter, r *ht
 	username := r.Form.Get("username")
 	if err := h.managedDatabases.SetUserPermissions(r.Context(), username, r.Form["databases"]); err != nil {
 		h.logger.Error("set managed database permissions", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-users", "user-permissions")
 		return
 	}
-	http.Redirect(w, r, "/databases", http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-users", "permissions-updated", "")
 }
 
 func (h *Handler) deleteManagedDatabaseUser(w http.ResponseWriter, r *http.Request) {
@@ -473,10 +563,10 @@ func (h *Handler) deleteManagedDatabaseUser(w http.ResponseWriter, r *http.Reque
 	username := r.Form.Get("username")
 	if err := h.managedDatabases.DeleteUser(r.Context(), username); err != nil {
 		h.logger.Error("delete managed database user", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-users", "user-delete")
 		return
 	}
-	http.Redirect(w, r, "/databases", http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-users", "user-deleted", "")
 }
 
 func (h *Handler) updateManagedBackupSchedule(w http.ResponseWriter, r *http.Request) {
@@ -494,15 +584,15 @@ func (h *Handler) updateManagedBackupSchedule(w http.ResponseWriter, r *http.Req
 	database := r.Form.Get("database")
 	input, err := managedBackupScheduleInput(r)
 	if err != nil {
-		http.Error(w, managedDatabasesUserMessage(err), http.StatusBadRequest)
+		h.renderManagedDatabasesActionError(w, r, err, "managed-backups", "")
 		return
 	}
 	if err := h.managedDatabases.UpdateBackupSchedule(r.Context(), database, input); err != nil {
 		h.logger.Error("update managed backup schedule", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-backups", "")
 		return
 	}
-	http.Redirect(w, r, "/databases?database="+url.QueryEscape(database), http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-backups", "schedule-saved", database)
 }
 
 func (h *Handler) runManagedBackupNow(w http.ResponseWriter, r *http.Request) {
@@ -520,10 +610,10 @@ func (h *Handler) runManagedBackupNow(w http.ResponseWriter, r *http.Request) {
 	database := r.Form.Get("database")
 	if _, err := h.managedDatabases.RunBackupNow(r.Context(), database); err != nil {
 		h.logger.Error("run managed backup", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-backups", "")
 		return
 	}
-	http.Redirect(w, r, "/databases?database="+url.QueryEscape(database), http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-backups", "backup-created", database)
 }
 
 func (h *Handler) restoreManagedBackup(w http.ResponseWriter, r *http.Request) {
@@ -542,10 +632,10 @@ func (h *Handler) restoreManagedBackup(w http.ResponseWriter, r *http.Request) {
 	file := r.Form.Get("backup_file")
 	if err := h.managedDatabases.RestoreBackup(r.Context(), database, file); err != nil {
 		h.logger.Error("restore managed backup", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-backups", "backup-restore")
 		return
 	}
-	http.Redirect(w, r, "/databases?database="+url.QueryEscape(database), http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-backups", "backup-restored", database)
 }
 
 func (h *Handler) deleteManagedBackup(w http.ResponseWriter, r *http.Request) {
@@ -564,10 +654,10 @@ func (h *Handler) deleteManagedBackup(w http.ResponseWriter, r *http.Request) {
 	file := r.Form.Get("backup_file")
 	if err := h.managedDatabases.DeleteBackup(r.Context(), database, file); err != nil {
 		h.logger.Error("delete managed backup", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderManagedDatabasesActionError(w, r, err, "managed-backups", "backup-delete")
 		return
 	}
-	http.Redirect(w, r, "/databases?database="+url.QueryEscape(database), http.StatusSeeOther)
+	managedDatabasesRedirect(w, r, "managed-backups", "backup-deleted", database)
 }
 
 func (h *Handler) downloadManagedBackup(w http.ResponseWriter, r *http.Request) {
@@ -811,3 +901,62 @@ func managedDatabasesBackupDownloadPath(database, file string) string {
 }
 
 var _ = time.Now
+
+func managedDatabasesTab(tab string) string {
+	switch tab {
+	case "managed-users", "managed-backups", "managed-logs", "managed-settings":
+		return tab
+	default:
+		return "managed-databases"
+	}
+}
+
+func managedDatabasesRedirect(w http.ResponseWriter, r *http.Request, tab, notice, database string) {
+	query := url.Values{"tab": {tab}, "notice": {notice}}
+	if database != "" {
+		query.Set("database", database)
+	}
+	http.Redirect(w, r, "/databases?"+query.Encode(), http.StatusSeeOther)
+}
+
+func (h *Handler) renderManagedDatabasesActionError(w http.ResponseWriter, r *http.Request, actionErr error, tab, dialog string) {
+	query := url.Values{"tab": {tab}, "dialog": {dialog}, "user": {r.Form.Get("username")}, "database": {r.Form.Get("database")}, "backup_file": {r.Form.Get("backup_file")}}
+	data, err := h.loadDatabasesPageData(r.Context(), query)
+	if err != nil {
+		h.writeDatabasesPage(w, r, managedDatabasesStatus(actionErr), databasesPageData{ActiveTab: tab, Error: managedDatabasesUserMessage(actionErr)})
+		return
+	}
+	if dialog == "user-create" {
+		data.UserName = r.Form.Get("username")
+	}
+	choices := data.AccessChoices
+	if dialog == "user-create" {
+		choices = data.CreateAccessChoices
+	}
+	if dialog == "user-create" || dialog == "user-permissions" {
+		for i := range choices {
+			choices[i].Checked = false
+			for _, name := range r.Form["databases"] {
+				if name == choices[i].Name {
+					choices[i].Checked = true
+				}
+			}
+		}
+	}
+	if tab == "managed-backups" && r.URL.Path == "/databases/backups/schedule" && data.Backup != nil && r.Form.Get("enabled") == "on" {
+		schedule := &data.Backup.Schedule
+		schedule.Enabled = r.Form.Get("enabled") == "on"
+		schedule.ScheduleType = r.Form.Get("schedule_type")
+		schedule.Hour, _ = strconv.Atoi(r.Form.Get("hour"))
+		schedule.Minute, _ = strconv.Atoi(r.Form.Get("minute"))
+		schedule.Weekday = r.Form.Get("weekday")
+		schedule.RetentionDays, _ = strconv.Atoi(r.Form.Get("retention_days"))
+	}
+	if data.Dialog != "" {
+		data.DialogError = managedDatabasesUserMessage(actionErr)
+	} else {
+		data.Error = managedDatabasesUserMessage(actionErr)
+	}
+	// Passwords are intentionally never copied into the page model.
+	h.writeDatabasesPage(w, r, managedDatabasesStatus(actionErr), data)
+}

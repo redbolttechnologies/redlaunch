@@ -1,0 +1,40 @@
+{{define "managed-databases-settings.html"}}
+<section class="application-tab-panel" id="managed-settings-panel" role="tabpanel" aria-labelledby="managed-settings-tab" tabindex="0"{{if ne .ActiveTab "managed-settings"}} hidden{{end}}>
+  <div class="databases-settings-grid">
+    <section class="service-widget databases-management-widget" aria-labelledby="managed-settings-title">
+      <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-settings-title">Cluster details</h2><p>Configuration of the shared Postgres container.</p></div><span class="service-status-badge {{if .Status.Running}}service-status-running{{else}}service-status-neutral{{end}}"><span class="status-dot" aria-hidden="true"></span>{{if .Status.Running}}Running{{else if serviceIsStopped .Status.Status}}Stopped{{else}}Unavailable{{end}}</span></header>
+      <div class="service-widget-body">
+        <dl class="backup-summary-grid databases-details-grid">
+          <div><dt>Provider</dt><dd>Postgres</dd></div><div><dt>Version</dt><dd><code>{{.Cluster.Version}}</code></dd></div><div><dt>Default user</dt><dd><code>{{.Cluster.DefaultUser}}</code></dd></div>
+          <div><dt>Container</dt><dd><code class="databases-technical-value">{{if .Status.ContainerName}}{{.Status.ContainerName}}{{else}}Unavailable{{end}}</code></dd></div><div><dt>Image</dt><dd><code class="databases-technical-value">{{if .Status.ImageName}}{{.Status.ImageName}}{{else}}Unavailable{{end}}</code></dd></div><div><dt>Created</dt><dd>{{if .Cluster.CreatedAt.IsZero}}—{{else}}<time datetime="{{.Cluster.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Cluster.CreatedAt.Format "Jan 02, 2006"}}</time>{{end}}</dd></div>
+        </dl>
+        <p class="field-help">The provider and version are set when the cluster is enabled.</p>
+      </div>
+    </section>
+    <section class="service-widget databases-management-widget" aria-labelledby="managed-cluster-controls-title">
+      <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-cluster-controls-title">Cluster controls</h2><p>Manage the shared container's runtime.</p></div></header>
+      <div class="service-widget-body databases-widget-stack">
+        <p class="field-help">Stopping or restarting interrupts every application using these databases. Data and backups are retained.</p>
+        <div class="service-details-actions" role="group" aria-label="Cluster actions">
+          <form class="service-details-action-form" method="post" action="/databases/start" data-managed-submit><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="button button-secondary service-details-action" type="submit"{{if .Status.Running}} disabled{{end}}>Start</button></form>
+          {{if .Status.Running}}<a class="button button-secondary service-details-action" href="/databases?tab=managed-settings&amp;dialog=cluster-stop" aria-haspopup="dialog">Stop</a><a class="button button-secondary service-details-action" href="/databases?tab=managed-settings&amp;dialog=cluster-restart" aria-haspopup="dialog">Restart</a>{{else}}<button class="button button-secondary service-details-action" type="button" disabled>Stop</button><button class="button button-secondary service-details-action" type="button" disabled>Restart</button>{{end}}
+        </div>
+        <a class="databases-view-link" href="/databases?tab=managed-logs" data-managed-tab-link="managed-logs-tab">View container logs <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+  </div>
+  <section class="application-danger-zone" aria-labelledby="managed-databases-danger-title">
+    <header class="application-danger-zone-header"><div><h3 id="managed-databases-danger-title">Danger zone</h3><p>Operations that interrupt database access.</p></div></header>
+    <div class="application-danger-zone-action"><div class="application-danger-zone-copy"><h4>Disable managed databases</h4><p>Stops the shared container. Applications lose access, while data, configuration files, and backup artifacts are retained.</p></div><a class="button button-destructive" href="/databases?tab=managed-settings&amp;disable=1" data-managed-dialog-open="managed-database-disable-dialog" aria-haspopup="dialog" aria-controls="managed-database-disable-dialog">Disable managed databases</a></div>
+  </section>
+  {{if or (eq .Dialog "cluster-stop") (eq .Dialog "cluster-restart")}}
+  <dialog class="application-dialog" id="managed-cluster-action-dialog" aria-labelledby="managed-cluster-action-title" data-managed-dialog open>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header"><div><h2 id="managed-cluster-action-title">{{if eq .Dialog "cluster-stop"}}Stop cluster?{{else}}Restart cluster?{{end}}</h2><p>All applications using the shared Postgres container will be disconnected. Database files and backups are retained.</p></div></header>
+      {{if .DialogError}}<div class="application-alert application-dialog-alert" role="alert">{{.DialogError}}</div>{{end}}
+      <form class="application-form" method="post" action="{{if eq .Dialog "cluster-stop"}}/databases/stop{{else}}/databases/restart{{end}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><footer class="application-form-actions"><a class="button button-secondary" href="/databases?tab=managed-settings" data-managed-dialog-close>Cancel</a><button class="button {{if eq .Dialog "cluster-stop"}}button-destructive{{else}}button-primary{{end}}" type="submit">{{if eq .Dialog "cluster-stop"}}Stop cluster{{else}}Restart cluster{{end}}</button></footer></form>
+    </div>
+  </dialog>
+  {{end}}
+</section>
+{{end}}

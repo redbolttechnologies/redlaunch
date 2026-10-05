@@ -123,7 +123,11 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   overview shows database/user totals, the Postgres version, container status,
   and a database list searchable by name and filterable by owner. Use Create
   database to open the creation dialog, Manage users for access management,
-  and Settings for cluster start/stop/restart controls.
+  and Settings for cluster start/stop/restart controls. The Users tab has
+  searchable roles and dialogs for passwords and database grants. The Backups
+  tab keeps the selected database while editing schedules or managing backup
+  history, with confirmation before restoring or deleting a backup. Settings
+  separates cluster details and runtime controls from the disable action.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed

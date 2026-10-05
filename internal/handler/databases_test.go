@@ -14,19 +14,26 @@ import (
 )
 
 type fakeManagedDatabases struct {
-	cluster      application.ManagedDatabaseCluster
-	databases    []application.ManagedDatabase
-	users        []application.ManagedDatabaseUserDetail
-	backup       application.BackupDetails
-	enableInput  application.ManagedDatabaseEnableInput
-	enableCalls  int
-	createdDB    string
-	droppedDB    string
-	createdUser  string
-	deletedUser  string
-	passwordUser string
-	permsUser    string
-	status       *application.ManagedDatabaseStatus
+	cluster          application.ManagedDatabaseCluster
+	databases        []application.ManagedDatabase
+	users            []application.ManagedDatabaseUserDetail
+	backup           application.BackupDetails
+	enableInput      application.ManagedDatabaseEnableInput
+	enableCalls      int
+	createdDB        string
+	droppedDB        string
+	createdUser      string
+	deletedUser      string
+	passwordUser     string
+	permsUser        string
+	status           *application.ManagedDatabaseStatus
+	userErr          error
+	backupErr        error
+	backupDetailsErr error
+	grants           []string
+	backupAction     string
+	backupDatabase   string
+	backupFile       string
 }
 
 func (f *fakeManagedDatabases) GetCluster(context.Context) (application.ManagedDatabaseCluster, error) {
@@ -79,6 +86,9 @@ func (f *fakeManagedDatabases) ListUsers(context.Context) ([]application.Managed
 	return f.users, nil
 }
 func (f *fakeManagedDatabases) CreateUser(_ context.Context, input application.ManagedDatabaseUserInput) error {
+	if f.userErr != nil {
+		return f.userErr
+	}
 	validated, err := application.ValidateManagedDatabaseUserInput(input)
 	if err != nil {
 		return err
@@ -88,27 +98,40 @@ func (f *fakeManagedDatabases) CreateUser(_ context.Context, input application.M
 }
 func (f *fakeManagedDatabases) UpdateUserPassword(_ context.Context, username, _ string) error {
 	f.passwordUser = username
-	return nil
+	return f.userErr
 }
-func (f *fakeManagedDatabases) SetUserPermissions(_ context.Context, username string, _ []string) error {
+func (f *fakeManagedDatabases) SetUserPermissions(_ context.Context, username string, databases []string) error {
 	f.permsUser = username
-	return nil
+	f.grants = databases
+	return f.userErr
 }
 func (f *fakeManagedDatabases) DeleteUser(_ context.Context, username string) error {
 	f.deletedUser = username
-	return nil
+	return f.userErr
 }
 func (f *fakeManagedDatabases) GetBackupDetails(_ context.Context, name string) (application.BackupDetails, error) {
-	return f.backup, nil
+	return f.backup, f.backupDetailsErr
 }
 func (f *fakeManagedDatabases) UpdateBackupSchedule(context.Context, string, application.BackupScheduleInput) error {
-	return nil
+	return f.backupErr
 }
 func (f *fakeManagedDatabases) RunBackupNow(_ context.Context, name string) (application.Backup, error) {
-	return application.Backup{FileName: "backup-20240102-030405.000000000Z.sql"}, nil
+	f.backupAction = "run"
+	f.backupDatabase = name
+	return application.Backup{FileName: "backup-20240102-030405.000000000Z.sql"}, f.backupErr
 }
-func (f *fakeManagedDatabases) RestoreBackup(context.Context, string, string) error { return nil }
-func (f *fakeManagedDatabases) DeleteBackup(context.Context, string, string) error  { return nil }
+func (f *fakeManagedDatabases) RestoreBackup(_ context.Context, name, file string) error {
+	f.backupAction = "restore"
+	f.backupDatabase = name
+	f.backupFile = file
+	return f.backupErr
+}
+func (f *fakeManagedDatabases) DeleteBackup(_ context.Context, name, file string) error {
+	f.backupAction = "delete"
+	f.backupDatabase = name
+	f.backupFile = file
+	return f.backupErr
+}
 func (f *fakeManagedDatabases) OpenBackup(_ context.Context, _, file string) (io.ReadCloser, application.Backup, error) {
 	return io.NopCloser(strings.NewReader("dump")), application.Backup{FileName: file}, nil
 }
@@ -361,5 +384,228 @@ func TestDatabasesOverviewRecognizesStoppedContainer(t *testing.T) {
 				t.Fatal("stopped container missing accurate overview status")
 			}
 		})
+	}
+}
+
+func newDatabasesTabsFixture() *fakeManagedDatabases {
+	return &fakeManagedDatabases{
+		cluster:   application.ManagedDatabaseCluster{Enabled: true, Provider: "postgres", Version: "17", DefaultUser: "admin"},
+		databases: []application.ManagedDatabase{{Name: "production", Owner: "admin"}, {Name: "analytics", Owner: "reporter"}},
+		users:     []application.ManagedDatabaseUserDetail{{User: application.ManagedDatabaseUser{Username: "admin"}}, {User: application.ManagedDatabaseUser{Username: "reporter"}, Databases: []string{"analytics"}}},
+		backup:    application.BackupDetails{Schedule: application.BackupSchedule{ScheduleType: "daily", Hour: 2, RetentionDays: 7}, Backups: []application.Backup{{FileName: "backup-20261004-020000.sql", CreatedAt: time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC), SizeBytes: 4096}}},
+	}
+}
+
+func databasesPostWithCSRF(h *Handler, target string, form url.Values) *httptest.ResponseRecorder {
+	form.Set("csrf_token", h.csrfToken)
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: h.csrfToken})
+	rr := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rr, req)
+	return rr
+}
+
+func TestDatabasesTabsRenderSelectionWithoutJavaScript(t *testing.T) {
+	h := newDatabasesTestHandler(t, newDatabasesTabsFixture())
+	for _, tab := range []string{"managed-users", "managed-backups", "managed-settings"} {
+		t.Run(tab, func(t *testing.T) {
+			body := databasesRequest(t, h, "GET", "/databases?tab="+tab, nil).Body.String()
+			marker := `id="` + tab + `-panel" role="tabpanel" aria-labelledby="` + tab + `-tab" tabindex="0">`
+			if !strings.Contains(body, marker) {
+				t.Fatal("requested tab is not visible in server HTML")
+			}
+			if !strings.Contains(body, `data-application-initial-tab="`+tab+`"`) {
+				t.Fatal("missing initial selection for tab script")
+			}
+		})
+	}
+	body := databasesRequest(t, h, "GET", "/databases?tab=unknown", nil).Body.String()
+	if !strings.Contains(body, `data-application-initial-tab="managed-databases"`) {
+		t.Fatal("unknown tab did not fall back to overview")
+	}
+}
+
+func TestDatabasesUserSearchAndAccessSelection(t *testing.T) {
+	h := newDatabasesTestHandler(t, newDatabasesTabsFixture())
+	data, err := h.loadDatabasesPageData(context.Background(), url.Values{"tab": {"managed-users"}, "user_q": {"REPORT"}, "user": {"reporter"}, "dialog": {"user-permissions"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.VisibleUsers) != 1 || data.VisibleUsers[0].User.Username != "reporter" || len(data.Users) != 2 {
+		t.Fatal("user search changed totals or missed case-insensitive match")
+	}
+	if data.AccessChoices[0].Checked || !data.AccessChoices[1].Checked {
+		t.Fatal("access dialog does not reflect user's database grants")
+	}
+	for _, choice := range data.CreateAccessChoices {
+		if choice.Checked {
+			t.Fatal("new user inherited another user's grants")
+		}
+	}
+	body := databasesRequest(t, h, "GET", "/databases?tab=managed-users", nil).Body.String()
+	if strings.Contains(body, `aria-label="Delete user admin"`) {
+		t.Fatal("default user has a delete action")
+	}
+	if !strings.Contains(body, `aria-label="Delete user reporter"`) {
+		t.Fatal("ordinary user missing delete action")
+	}
+}
+
+func TestDatabasesActionDialogsOnlySelectKnownResources(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	h := newDatabasesTestHandler(t, fake)
+	for _, test := range []struct{ query, id, post string }{
+		{"dialog=user-password&user=reporter", "managed-user-action-dialog", "/databases/users/password"},
+		{"dialog=user-permissions&user=reporter", "managed-user-action-dialog", "/databases/users/permissions"},
+		{"dialog=user-delete&user=reporter", "managed-user-action-dialog", "/databases/users/delete"},
+		{"dialog=backup-restore&database=production&backup_file=backup-20261004-020000.sql", "managed-backup-action-dialog", "/databases/backups/restore"},
+		{"dialog=backup-delete&database=production&backup_file=backup-20261004-020000.sql", "managed-backup-action-dialog", "/databases/backups/delete"},
+		{"dialog=cluster-stop", "managed-cluster-action-dialog", "/databases/stop"},
+		{"dialog=cluster-restart", "managed-cluster-action-dialog", "/databases/restart"},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			body := databasesRequest(t, h, "GET", "/databases?"+test.query, nil).Body.String()
+			start := strings.Index(body, `<dialog class="application-dialog" id="`+test.id+`"`)
+			if start < 0 {
+				t.Fatal("confirmation dialog missing")
+			}
+			end := strings.Index(body[start:], "</dialog>")
+			dialog := body[start : start+end]
+			if !strings.Contains(dialog, " open>") || !strings.Contains(dialog, `action="`+test.post+`"`) || !strings.Contains(dialog, `name="csrf_token"`) {
+				t.Fatal("missing native dialog, confirmed POST action or CSRF token")
+			}
+		})
+	}
+	for _, query := range []string{"dialog=user-delete&user=missing", "dialog=backup-delete&backup_file=missing.sql", "dialog=unsupported"} {
+		body := databasesRequest(t, h, "GET", "/databases?"+query, nil).Body.String()
+		if strings.Contains(body, `id="managed-user-action-dialog"`) || strings.Contains(body, `id="managed-backup-action-dialog"`) {
+			t.Fatal("action dialog selected an unknown resource")
+		}
+	}
+	if fake.deletedUser != "" || fake.passwordUser != "" || fake.backupAction != "" {
+		t.Fatal("GET confirmation mutated a resource")
+	}
+}
+
+func TestDatabasesActionsStayOnOwningTab(t *testing.T) {
+	for _, test := range []struct {
+		target, tab, notice string
+		form                url.Values
+	}{
+		{"/databases/users/create", "managed-users", "user-created", url.Values{"username": {"new_user"}, "password": {"disposable-test-password"}, "databases": {"production", "analytics"}}},
+		{"/databases/users/password", "managed-users", "password-updated", url.Values{"username": {"reporter"}, "password": {"disposable-test-password"}}},
+		{"/databases/users/permissions", "managed-users", "permissions-updated", url.Values{"username": {"reporter"}, "databases": {"production", "analytics"}}},
+		{"/databases/users/delete", "managed-users", "user-deleted", url.Values{"username": {"reporter"}}},
+		{"/databases/backups/schedule", "managed-backups", "schedule-saved", url.Values{"database": {"production"}, "enabled": {"on"}, "schedule_type": {"weekly"}, "weekday": {"monday"}, "hour": {"2"}, "minute": {"15"}, "retention_days": {"7"}}},
+		{"/databases/backups/run", "managed-backups", "backup-created", url.Values{"database": {"production"}}},
+		{"/databases/backups/restore", "managed-backups", "backup-restored", url.Values{"database": {"production"}, "backup_file": {"backup-20261004-020000.sql"}}},
+		{"/databases/backups/delete", "managed-backups", "backup-deleted", url.Values{"database": {"production"}, "backup_file": {"backup-20261004-020000.sql"}}},
+		{"/databases/start", "managed-settings", "start", url.Values{}},
+		{"/databases/stop", "managed-settings", "stop", url.Values{}},
+		{"/databases/restart", "managed-settings", "restart", url.Values{}},
+	} {
+		t.Run(test.target, func(t *testing.T) {
+			fake := newDatabasesTabsFixture()
+			h := newDatabasesTestHandler(t, fake)
+			rr := databasesPostWithCSRF(h, test.target, test.form)
+			if rr.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want 303", rr.Code)
+			}
+			location, err := url.Parse(rr.Header().Get("Location"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if location.Query().Get("tab") != test.tab || location.Query().Get("notice") != test.notice || location.Query().Get("database") != test.form.Get("database") {
+				t.Fatalf("incorrect redirect: %s", location)
+			}
+			if test.target == "/databases/users/permissions" && strings.Join(fake.grants, ",") != "production,analytics" {
+				t.Fatal("checkbox values lost during access update")
+			}
+			if test.target == "/databases/backups/restore" && (fake.backupFile != test.form.Get("backup_file") || fake.backupDatabase != "production") {
+				t.Fatal("restore targeted the wrong backup")
+			}
+		})
+	}
+}
+
+func TestDatabasesUserErrorKeepsDialogWithoutPassword(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	fake.userErr = application.ErrManagedDatabaseUserAlreadyExists
+	h := newDatabasesTestHandler(t, fake)
+	password := "never-echo-this-test-password"
+	rr := databasesPostWithCSRF(h, "/databases/users/create", url.Values{"username": {"reporter"}, "password": {password}, "databases": {"analytics"}})
+	body := rr.Body.String()
+	if rr.Code != http.StatusBadRequest || !strings.Contains(body, "A user with this name already exists.") || !strings.Contains(body, `data-application-initial-tab="managed-users"`) || !strings.Contains(body, `data-managed-dialog open`) {
+		t.Fatal("validation error lost the user dialog")
+	}
+	if strings.Contains(body, password) {
+		t.Fatal("password echoed after validation error")
+	}
+	if !strings.Contains(body, `name="databases" value="analytics" checked`) {
+		t.Fatal("selected access lost after creation error")
+	}
+}
+
+func TestDatabasesBackupErrorKeepsScheduleAndUnavailableState(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesPostWithCSRF(h, "/databases/backups/schedule", url.Values{"database": {"production"}, "enabled": {"on"}, "schedule_type": {"weekly"}, "weekday": {"monday"}, "hour": {"4"}, "minute": {"15"}, "retention_days": {"0"}})
+	body := rr.Body.String()
+	if rr.Code != http.StatusBadRequest || !strings.Contains(body, "The backup schedule is invalid.") || !strings.Contains(body, `name="hour" type="number" min="0" max="23" value="4"`) || !strings.Contains(body, `value="monday" selected`) {
+		t.Fatal("invalid schedule lost entered values or error")
+	}
+	fake.backupDetailsErr = application.ErrBackupScheduleNotFound
+	body = databasesRequest(t, h, "GET", "/databases?tab=managed-backups&database=production", nil).Body.String()
+	if !strings.Contains(body, "Backup details are unavailable") {
+		t.Fatal("missing unavailable backup state")
+	}
+}
+
+func TestDatabasesNewFormsRejectMissingCSRF(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	h := newDatabasesTestHandler(t, fake)
+	for _, target := range []string{"/databases/users/create", "/databases/users/permissions", "/databases/users/password", "/databases/backups/restore", "/databases/backups/delete", "/databases/stop"} {
+		rr := databasesRequest(t, h, "POST", target, url.Values{"username": {"reporter"}, "database": {"production"}, "backup_file": {"backup-20261004-020000.sql"}})
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d, want 403", target, rr.Code)
+		}
+	}
+	if fake.createdUser != "" || fake.permsUser != "" || fake.passwordUser != "" || fake.backupAction != "" {
+		t.Fatal("unprotected form mutated resources")
+	}
+}
+
+func TestDatabasesPasswordAndBackupFailuresKeepSafeDialogContext(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	fake.userErr = application.ErrDatabaseServiceNotRunning
+	fake.backupErr = application.ErrBackupServiceNotRunning
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesPostWithCSRF(h, "/databases/users/password", url.Values{"username": {"reporter"}, "password": {"never-echo-password"}})
+	body := rr.Body.String()
+	if rr.Code != http.StatusConflict || strings.Contains(body, "never-echo-password") || !strings.Contains(body, `id="managed-user-action-dialog"`) || !strings.Contains(body, `name="username" value="reporter"`) {
+		t.Fatal("password error lost safe dialog context")
+	}
+	rr = databasesPostWithCSRF(h, "/databases/backups/restore", url.Values{"database": {"production"}, "backup_file": {"backup-20261004-020000.sql"}})
+	body = rr.Body.String()
+	if rr.Code != http.StatusConflict || !strings.Contains(body, `id="managed-backup-action-dialog"`) || !strings.Contains(body, `name="backup_file" value="backup-20261004-020000.sql"`) {
+		t.Fatal("backup failure lost selected restore dialog")
+	}
+}
+
+func TestDatabasesDialogEscapesUserAndBackupNames(t *testing.T) {
+	unsafe := `<img src=x onerror=alert(1)>`
+	fake := newDatabasesTabsFixture()
+	fake.users[1].User.Username = unsafe
+	fake.backup.Backups[0].FileName = unsafe
+	h := newDatabasesTestHandler(t, fake)
+	for _, query := range []url.Values{
+		{"dialog": {"user-password"}, "user": {unsafe}},
+		{"dialog": {"backup-delete"}, "database": {"production"}, "backup_file": {unsafe}},
+	} {
+		body := databasesRequest(t, h, "GET", "/databases?"+query.Encode(), nil).Body.String()
+		if strings.Contains(body, unsafe) || !strings.Contains(body, "&lt;img") {
+			t.Fatal("unescaped name in action dialog")
+		}
 	}
 }

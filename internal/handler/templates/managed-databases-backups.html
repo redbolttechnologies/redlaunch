@@ -1,0 +1,78 @@
+{{define "managed-databases-backups.html"}}
+<section class="application-tab-panel" id="managed-backups-panel" role="tabpanel" aria-labelledby="managed-backups-tab" tabindex="0"{{if ne .ActiveTab "managed-backups"}} hidden{{end}}>
+  <header class="page-heading service-tab-heading">
+    <div class="page-heading-copy"><h2 id="managed-backups-title">Backups</h2><p>Schedule SQL backups and manage restore points for each database.</p></div>
+    {{if .Backup}}
+    <div class="backup-run-disabled">
+      <form class="backup-run-form" method="post" action="/databases/backups/run" data-managed-submit>
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="database" value="{{.BackupDatabaseName}}">
+        <button class="button button-primary databases-enable-button" type="submit"{{if not .Status.Running}} disabled{{end}}>{{template "managed-backup-icon"}}<span>Run backup now</span></button>
+      </form>
+      {{if not .Status.Running}}<span class="field-help">Start the cluster from Settings to run a backup.</span>{{end}}
+    </div>
+    {{end}}
+  </header>
+  {{if .Databases}}
+  <form class="databases-filters databases-table-toolbar" method="get" action="/databases">
+    <input type="hidden" name="tab" value="managed-backups">
+    <div class="field"><label for="managed-backup-database">Database</label><select id="managed-backup-database" name="database" data-managed-database-select>{{range .Databases}}<option value="{{.Name}}"{{if eq $.SelectedDatabase .Name}} selected{{end}}>{{.Name}}</option>{{end}}</select></div>
+    <button class="button button-secondary" type="submit">View backups</button>
+  </form>
+  {{with .Backup}}
+  <div class="databases-backup-grid">
+    <section class="service-widget databases-management-widget" aria-labelledby="managed-backup-schedule-title">
+      <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-backup-schedule-title">Backup schedule</h2><p>Automatic backups for <code>{{$.BackupDatabaseName}}</code>.</p></div><span class="service-status-badge {{if .Schedule.Enabled}}service-status-running{{else}}service-status-neutral{{end}}"><span class="status-dot" aria-hidden="true"></span>{{if .Schedule.Enabled}}Enabled{{else}}Disabled{{end}}</span></header>
+      <div class="service-widget-body">
+        <form class="application-form" method="post" action="/databases/backups/schedule" data-managed-schedule-form data-managed-submit>
+          <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="database" value="{{$.BackupDatabaseName}}">
+          <label class="switch-field backup-schedule-switch" for="managed-schedule-enabled"><span class="checkbox-field-copy"><span class="checkbox-field-title">Schedule backups</span><span class="checkbox-field-help">Keep automatic restore points.</span></span><input class="switch-input sr-only" id="managed-schedule-enabled" name="enabled" type="checkbox" role="switch" value="on" aria-controls="managed-schedule-fields"{{if .Schedule.Enabled}} checked{{end}}><span class="switch-visual" aria-hidden="true"><span></span></span></label>
+          <div class="databases-schedule-fields" id="managed-schedule-fields">
+            <div class="field"><label for="managed-schedule-type">Frequency</label><select id="managed-schedule-type" name="schedule_type"><option value="hourly"{{if eq .Schedule.ScheduleType "hourly"}} selected{{end}}>Hourly</option><option value="daily"{{if eq .Schedule.ScheduleType "daily"}} selected{{end}}>Daily</option><option value="weekly"{{if eq .Schedule.ScheduleType "weekly"}} selected{{end}}>Weekly</option></select></div>
+            <div class="field"><label for="managed-schedule-retention">Retention (days)</label><input id="managed-schedule-retention" name="retention_days" type="number" min="1" max="3650" value="{{.Schedule.RetentionDays}}"><span class="field-help">Older backups are removed automatically.</span></div>
+            <div class="field" data-managed-schedule-hour><label for="managed-schedule-hour">Hour</label><input id="managed-schedule-hour" name="hour" type="number" min="0" max="23" value="{{.Schedule.Hour}}"></div>
+            <div class="field"><label for="managed-schedule-minute">Minute</label><input id="managed-schedule-minute" name="minute" type="number" min="0" max="59" value="{{.Schedule.Minute}}"></div>
+            <div class="field" data-managed-schedule-weekday><label for="managed-schedule-weekday">Weekday</label><select id="managed-schedule-weekday" name="weekday"><option value="">Choose a day</option>{{template "managed-backup-weekdays.html" .Schedule.Weekday}}</select></div>
+          </div>
+          <p class="field-help">Times use the server's systemd timezone. The switch takes effect when you save.</p>
+          <footer class="application-form-actions"><button class="button button-secondary" type="submit">Save schedule</button></footer>
+        </form>
+      </div>
+    </section>
+    <div class="databases-widget-stack">
+      <section class="service-widget service-last-backup-widget" aria-labelledby="managed-last-backup-title">
+        <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-last-backup-title">Last backup</h2><p>Most recent recorded backup attempt.</p></div></header>
+        <div class="service-widget-body"><dl class="backup-summary-grid"><div><dt>Completed</dt><dd>{{if .Schedule.LastBackupStatus}}<time datetime="{{backupAtISO .Schedule.LastBackupAt}}">{{backupAt .Schedule.LastBackupAt}}</time>{{else}}—{{end}}</dd></div><div><dt>Status</dt><dd><span class="backup-status {{backupStatusClass .Schedule.LastBackupStatus}}"><span aria-hidden="true">{{backupStatusIcon .Schedule.LastBackupStatus}}</span><span>{{backupStatusText .Schedule.LastBackupStatus}}</span></span></dd></div><div><dt>Size</dt><dd>{{if .Schedule.LastBackupStatus}}{{backupSize .Schedule.LastBackupSize}}{{else}}—{{end}}</dd></div></dl></div>
+      </section>
+      <section class="service-widget service-backup-history-widget databases-management-widget" aria-labelledby="managed-backup-history-title">
+        <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-backup-history-title">Backup history</h2><p>{{len .Backups}} saved {{if eq (len .Backups) 1}}backup{{else}}backups{{end}} for <code>{{$.BackupDatabaseName}}</code>.</p></div></header>
+        <div class="service-widget-body">
+          {{if .Backups}}
+          <div class="backup-table-wrap"><table class="backup-table"><caption class="sr-only">Backups for {{$.BackupDatabaseName}}</caption><thead><tr><th scope="col">Completed</th><th scope="col">Size</th><th scope="col">Actions</th></tr></thead><tbody>
+            {{range .Backups}}
+            <tr><th scope="row"><time datetime="{{backupTimeISO .}}">{{backupTime .}}</time><span class="field-help databases-default-label"><code class="databases-technical-value">{{.FileName}}</code></span></th><td><code>{{backupSize .SizeBytes}}</code></td><td class="backup-table-actions"><a class="icon-button" href="{{managedBackupDownloadPath $.BackupDatabaseName .FileName}}" aria-label="Download backup {{.FileName}}" title="Download backup">{{template "managed-download-icon"}}</a><a class="icon-button" href="/databases?tab=managed-backups&amp;database={{$.BackupDatabaseName}}&amp;dialog=backup-restore&amp;backup_file={{.FileName}}" aria-label="Restore backup {{.FileName}}" title="Restore backup" aria-haspopup="dialog">{{template "managed-restore-icon"}}</a><a class="icon-button databases-drop-button" href="/databases?tab=managed-backups&amp;database={{$.BackupDatabaseName}}&amp;dialog=backup-delete&amp;backup_file={{.FileName}}" aria-label="Delete backup {{.FileName}}" title="Delete backup" aria-haspopup="dialog">{{template "managed-trash-icon"}}</a></td></tr>
+            {{end}}
+          </tbody></table></div>
+          {{else}}<div class="service-widget-empty" role="status"><p>No backups yet.</p><p class="field-help">Run your first backup now or enable a schedule to create restore points.</p></div>{{end}}
+        </div>
+      </section>
+    </div>
+  </div>
+  {{else}}<section class="service-widget"><div class="service-widget-empty" role="status"><p>Backup details are unavailable for this database.</p><p class="field-help">Choose another database or retry.</p><a class="button button-secondary" href="/databases?tab=managed-backups&amp;database={{.SelectedDatabase}}">Retry</a></div></section>{{end}}
+  {{else}}<section class="service-widget"><div class="service-widget-empty" role="status"><p>No databases available for backups.</p><a class="button button-primary databases-enable-button" href="/databases?create=1" data-managed-dialog-open="managed-database-create-dialog">Create database</a></div></section>{{end}}
+
+  {{if or (eq .Dialog "backup-restore") (eq .Dialog "backup-delete")}}
+  <dialog class="application-dialog" id="managed-backup-action-dialog" aria-labelledby="managed-backup-action-title" data-managed-dialog open>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header"><div><h2 id="managed-backup-action-title">{{if eq .Dialog "backup-restore"}}Restore backup?{{else}}Delete backup?{{end}}</h2><p>Database <code>{{.BackupDatabaseName}}</code> · <code class="databases-technical-value">{{.SelectedBackup.FileName}}</code></p></div></header>
+      {{if .DialogError}}<div class="application-alert application-dialog-alert" role="alert">{{.DialogError}}</div>{{end}}
+      <p class="field-help">{{if eq .Dialog "backup-restore"}}Restoring applies this SQL backup to the current database and may overwrite or conflict with existing data. Take a fresh backup before restoring.{{else}}This permanently removes the selected backup file. Other backups and the live database are retained.{{end}}</p>
+      <form class="application-form" method="post" action="{{if eq .Dialog "backup-restore"}}/databases/backups/restore{{else}}/databases/backups/delete{{end}}"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="database" value="{{.BackupDatabaseName}}"><input type="hidden" name="backup_file" value="{{.SelectedBackup.FileName}}"><footer class="application-form-actions"><a class="button button-secondary" href="/databases?tab=managed-backups&amp;database={{.BackupDatabaseName}}" data-managed-dialog-close>Cancel</a><button class="button button-destructive" type="submit">{{if eq .Dialog "backup-restore"}}Restore backup{{else}}Delete backup{{end}}</button></footer></form>
+    </div>
+  </dialog>
+  {{end}}
+</section>
+{{end}}
+
+{{define "managed-backup-weekdays.html"}}
+<option value="monday"{{if eq . "monday"}} selected{{end}}>Monday</option><option value="tuesday"{{if eq . "tuesday"}} selected{{end}}>Tuesday</option><option value="wednesday"{{if eq . "wednesday"}} selected{{end}}>Wednesday</option><option value="thursday"{{if eq . "thursday"}} selected{{end}}>Thursday</option><option value="friday"{{if eq . "friday"}} selected{{end}}>Friday</option><option value="saturday"{{if eq . "saturday"}} selected{{end}}>Saturday</option><option value="sunday"{{if eq . "sunday"}} selected{{end}}>Sunday</option>
+{{end}}
