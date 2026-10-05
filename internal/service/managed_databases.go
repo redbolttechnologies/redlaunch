@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +54,7 @@ type ManagedDatabaseRepository interface {
 
 // ManagedDatabaseRunner performs Docker operations for the shared cluster.
 type ManagedDatabaseRunner interface {
+	EnsureNetwork(context.Context, string) error
 	Up(ctx context.Context, projectDir string) error
 	ConfigServices(ctx context.Context, projectDir string) ([]compose.ConfiguredService, error)
 	IsServiceRunning(ctx context.Context, projectDir, serviceName string) (bool, error)
@@ -194,6 +197,9 @@ func (s *ManagedDatabases) EnableClusterWithProgress(ctx context.Context, input 
 	if existing.Enabled {
 		return application.ErrManagedDatabasesAlreadyEnabled
 	}
+	if err := s.runner.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+		return fmt.Errorf("ensure managed databases network: %w", sanitizeManagedError(err))
+	}
 
 	password := validated.Password
 	if password == "" {
@@ -315,7 +321,12 @@ func (s *ManagedDatabases) StartCluster(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := s.runner.Start(ctx, directory, managedDatabaseServiceName); err != nil {
+	if err := s.runner.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+		return fmt.Errorf("ensure managed databases network: %w", sanitizeManagedError(err))
+	}
+	// Up also recovers an enabled cluster whose first launch failed before
+	// creating its container. Existing environment files and volumes are reused.
+	if err := s.runner.Up(ctx, directory); err != nil {
 		return fmt.Errorf("start managed databases: %w", sanitizeManagedError(err))
 	}
 	return nil
@@ -598,6 +609,41 @@ func (s *ManagedDatabases) ListUsers(ctx context.Context) ([]application.Managed
 		return nil, err
 	}
 	return s.repository.ListManagedDatabaseUsers(ctx)
+}
+
+// GetDatabaseConnections lists connection templates for managed logins with
+// access through ownership, explicit grants, or the default administrator role.
+func (s *ManagedDatabases) GetDatabaseConnections(ctx context.Context, name string) ([]application.ManagedDatabaseConnection, error) {
+	cluster, err := s.GetCluster(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !cluster.Enabled {
+		return nil, application.ErrManagedDatabasesDisabled
+	}
+	database, err := s.repository.GetManagedDatabase(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	users, err := s.repository.ListManagedDatabaseUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var connections []application.ManagedDatabaseConnection
+	for _, user := range users {
+		username := user.User.Username
+		if username != cluster.DefaultUser && username != database.Owner && !slices.Contains(user.Databases, database.Name) {
+			continue
+		}
+		connection := url.URL{
+			Scheme: "postgresql",
+			User:   url.UserPassword(username, "PASSWORD"),
+			Host:   managedDatabaseContainerName + ":5432",
+			Path:   "/" + database.Name,
+		}
+		connections = append(connections, application.ManagedDatabaseConnection{Username: username, URI: connection.String()})
+	}
+	return connections, nil
 }
 
 // CreateUser creates a login role and grants database access.

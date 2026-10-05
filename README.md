@@ -121,7 +121,13 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   then create/drop databases, manage users and per-database access, and
   schedule, restore, download, and remove PostgreSQL backups. The enabled
   overview shows database/user totals, the Postgres version, container status,
-  and a database list searchable by name and filterable by owner. Use Create
+  and a database list searchable by name and filterable by owner. Each database's
+  View connection string action opens a dialog with its accessible managed users
+  and a copyable, read-only PostgreSQL URI. The user selector is hidden when only
+  one user qualifies. Replace `PASSWORD` with the user's URL-encoded password;
+  stored passwords cannot be retrieved. The address `redbolt-databases:5432`
+  is reachable from application containers on `redlaunch-common`, not directly
+  from outside Docker. Use Create
   database to open the creation dialog. Leave Username empty to use the database
   name. Missing users are created with a strong random password and read/write
   access to their new database only; existing users keep their credentials and permissions. Save

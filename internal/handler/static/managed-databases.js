@@ -120,7 +120,7 @@
       returnFocus = source || document.querySelector("[role=tab][aria-selected=true]");
       if (!dialog.open) dialog.showModal();
       document.body.classList.add("dialog-open");
-      const target = dialog.querySelector("input:not([type=hidden]), [data-managed-dialog-close]");
+      const target = dialog.querySelector("select, input:not([type=hidden]), [data-managed-dialog-close]");
       if (target) target.focus();
     };
     document.querySelectorAll("[data-managed-dialog-open]").forEach((link) => {
@@ -168,7 +168,7 @@
       window.history.replaceState(null, "", url);
       if (returnFocus) returnFocus.focus();
     });
-    dialog.querySelector("form")?.addEventListener("submit", () => {
+    dialog.querySelector('form[method="post"]')?.addEventListener("submit", () => {
       const button = dialog.querySelector("button[type=submit]");
       if (button) {
         button.disabled = true;
@@ -199,6 +199,23 @@
         : "Remove this managed database or user? This action cannot be undone.";
       if (!window.confirm(message)) event.preventDefault();
     });
+  });
+})();
+
+(() => {
+  const form = document.querySelector("[data-managed-connection-form]");
+  if (!form) return;
+  const selector = form.querySelector("[data-managed-connection-user]");
+  const connection = form.querySelector("[data-managed-connection-string]");
+  if (!selector || !connection) return;
+  const update = () => {
+    connection.value = selector.selectedOptions[0]?.dataset.connectionValue || "";
+  };
+  selector.addEventListener("change", update);
+  form.querySelector("[data-managed-connection-update]").remove();
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    update();
   });
 })();
 

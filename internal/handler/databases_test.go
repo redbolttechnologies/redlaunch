@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,9 @@ type fakeManagedDatabases struct {
 	backupAction     string
 	backupDatabase   string
 	backupFile       string
+	connections      []application.ManagedDatabaseConnection
+	connectionsErr   error
+	connectionDB     string
 }
 
 func (f *fakeManagedDatabases) GetCluster(context.Context) (application.ManagedDatabaseCluster, error) {
@@ -89,6 +93,10 @@ func (f *fakeManagedDatabases) DropDatabase(_ context.Context, name string) erro
 }
 func (f *fakeManagedDatabases) ListUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error) {
 	return f.users, nil
+}
+func (f *fakeManagedDatabases) GetDatabaseConnections(_ context.Context, database string) ([]application.ManagedDatabaseConnection, error) {
+	f.connectionDB = database
+	return f.connections, f.connectionsErr
 }
 func (f *fakeManagedDatabases) CreateUser(_ context.Context, input application.ManagedDatabaseUserInput) error {
 	if f.userErr != nil {
@@ -304,13 +312,94 @@ func TestDatabasesOverviewFiltersKeepTotals(t *testing.T) {
 		t.Fatal("missing filtered empty state")
 	}
 	body = databasesRequest(t, h, "GET", "/databases", nil).Body.String()
-	for _, want := range []string{"Users &amp; access", "Postgres 17", "Oct 01, 2026", `datetime="2026-10-01T12:00:00Z"`, `href="/databases?tab=managed-backups&amp;database=app_production"`} {
+	for _, want := range []string{"Postgres 17", "Oct 01, 2026", `datetime="2026-10-01T12:00:00Z"`, `href="/databases?tab=managed-backups&amp;database=app_production"`, `href="/databases?dialog=database-connection&amp;database=app_production"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("overview missing %q", want)
 		}
 	}
 	if strings.Contains(body, "Connection details") || strings.Contains(body, "Healthy") {
 		t.Fatal("overview contains unsupported connection or health widget")
+	}
+	if strings.Contains(body, `id="managed-users-summary-title"`) {
+		t.Fatal("Databases tab still renders the Users & access summary widget")
+	}
+}
+
+func TestDatabaseConnectionDialog(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		options    []application.ManagedDatabaseConnection
+		user       string
+		wantURI    string
+		wantSelect bool
+	}{
+		{"single user", []application.ManagedDatabaseConnection{{Username: "admin", URI: "postgresql://admin:PASSWORD@redbolt-databases:5432/production"}}, "", "postgresql://admin:PASSWORD@redbolt-databases:5432/production", false},
+		{"multiple users", []application.ManagedDatabaseConnection{{Username: "admin", URI: "postgresql://admin:PASSWORD@redbolt-databases:5432/production"}, {Username: "reporter", URI: "postgresql://reporter:PASSWORD@redbolt-databases:5432/production"}}, "reporter", "postgresql://reporter:PASSWORD@redbolt-databases:5432/production", true},
+		{"unknown user", []application.ManagedDatabaseConnection{{Username: "admin", URI: "postgresql://admin:PASSWORD@redbolt-databases:5432/production"}}, "unrelated", "postgresql://admin:PASSWORD@redbolt-databases:5432/production", false},
+		{"no users", nil, "", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := newDatabasesTabsFixture()
+			fake.connections = test.options
+			h := newDatabasesTestHandler(t, fake)
+			query := url.Values{"dialog": {"database-connection"}, "database": {"production"}, "user": {test.user}, "tab": {"managed-users"}}
+			page := databasesRequest(t, h, http.MethodGet, "/databases?"+query.Encode(), nil)
+			if page.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", page.Code)
+			}
+			body := page.Body.String()
+			if !strings.Contains(body, `id="managed-database-connection-dialog"`) || !strings.Contains(body, `data-managed-dialog open>`) || !strings.Contains(body, `data-application-initial-tab="managed-databases"`) {
+				t.Fatal("connection dialog is not open on the Databases tab")
+			}
+			if fake.connectionDB != "production" {
+				t.Fatal("connection dialog read the wrong database")
+			}
+			if strings.Contains(body, `id="managed-connection-user"`) != test.wantSelect {
+				t.Fatal("user selector should only appear for multiple options")
+			}
+			if test.wantSelect {
+				for _, option := range test.options {
+					if !strings.Contains(body, `data-connection-value="`+option.URI+`"`) {
+						t.Fatal("user option did not preserve its connection string")
+					}
+				}
+			}
+			if test.wantURI != "" {
+				if !strings.Contains(body, `value="`+test.wantURI+`" readonly`) || !strings.Contains(body, `data-copy-target="managed-connection-string"`) || !strings.Contains(body, "Replace PASSWORD") {
+					t.Fatal("read-only connection template, clipboard button or password guidance missing")
+				}
+			} else if !strings.Contains(body, "No managed users have access to this database.") || strings.Contains(body, `data-copy-target="managed-connection-string"`) {
+				t.Fatal("empty access list should show guidance without a copy button")
+			}
+			if fake.createdDB != "" || fake.passwordUser != "" || fake.createdUser != "" {
+				t.Fatal("viewing connection details mutated a database or login")
+			}
+		})
+	}
+}
+
+func TestDatabaseConnectionDialogRejectsUnknownDatabase(t *testing.T) {
+	for _, name := range []string{"", "missing", "../outside", `"><script>alert(1)</script>`} {
+		fake := newDatabasesTabsFixture()
+		h := newDatabasesTestHandler(t, fake)
+		query := url.Values{"dialog": {"database-connection"}, "database": {name}}
+		body := databasesRequest(t, h, http.MethodGet, "/databases?"+query.Encode(), nil).Body.String()
+		if strings.Contains(body, `id="managed-database-connection-dialog"`) || fake.connectionDB != "" {
+			t.Fatal("unknown database opened a connection dialog or reached the connection service")
+		}
+		if !strings.Contains(body, "The database could not be found.") {
+			t.Fatal("unknown database is missing an error message")
+		}
+	}
+}
+
+func TestDatabaseConnectionDialogFailureHidesInternalError(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	fake.connectionsErr = errors.New("internal-connection-error")
+	h := newDatabasesTestHandler(t, fake)
+	body := databasesRequest(t, h, http.MethodGet, "/databases?dialog=database-connection&database=production", nil).Body.String()
+	if !strings.Contains(body, "The database connection details could not be read.") || strings.Contains(body, "internal-connection-error") || strings.Contains(body, `id="managed-database-connection-dialog"`) {
+		t.Fatal("connection read failure did not render a safe error")
 	}
 }
 

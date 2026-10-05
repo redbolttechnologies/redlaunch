@@ -1,0 +1,41 @@
+{{define "managed-database-connection.html"}}
+<dialog class="application-dialog" id="managed-database-connection-dialog" aria-labelledby="managed-database-connection-title" aria-describedby="managed-database-connection-description" data-managed-dialog open>
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div><h2 id="managed-database-connection-title">Connection string</h2><p id="managed-database-connection-description">Connect to <code class="databases-technical-value">{{.Database}}</code> from an application on the <code>redlaunch-common</code> Docker network.</p></div>
+    </header>
+    {{if .Options}}
+    <form class="application-form" method="get" action="/databases" data-managed-connection-form>
+      <input type="hidden" name="dialog" value="database-connection">
+      <input type="hidden" name="database" value="{{.Database}}">
+      {{if gt (len .Options) 1}}
+      <div class="field">
+        <label for="managed-connection-user">User</label>
+        <select id="managed-connection-user" name="user" data-managed-connection-user>
+          {{range .Options}}<option value="{{.Username}}" data-connection-value="{{.URI}}"{{if eq .Username $.Selected.Username}} selected{{end}}>{{.Username}}</option>{{end}}
+        </select>
+      </div>
+      <button class="button button-secondary" type="submit" data-managed-connection-update>Update connection string</button>
+      {{end}}
+      <div class="field">
+        <label for="managed-connection-string">Connection string</label>
+        <input class="databases-technical-value" id="managed-connection-string" type="text" value="{{.Selected.URI}}" readonly autocomplete="off" spellcheck="false" aria-describedby="managed-connection-help" data-managed-connection-string>
+        <span class="field-help" id="managed-connection-help">Replace PASSWORD with this user's URL-encoded password. Passwords cannot be retrieved after creation.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-copy-target="managed-connection-string"><span>Copy to clipboard</span></button>
+        <a class="button button-primary" href="/databases" data-managed-dialog-close>Done</a>
+      </footer>
+    </form>
+    {{else}}
+    <div class="application-form">
+      <p class="field-help" role="status">No managed users have access to this database.</p>
+      <footer class="application-form-actions">
+        <a class="button button-secondary" href="/databases?tab=managed-users">Manage users</a>
+        <a class="button button-primary" href="/databases" data-managed-dialog-close>Done</a>
+      </footer>
+    </div>
+    {{end}}
+  </div>
+</dialog>
+{{end}}

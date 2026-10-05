@@ -312,6 +312,11 @@ registry, both, or neither is selected, so applications created after setup
 can use the same network. An existing network with that name is used only when
 it has the Redlaunch management labels; an unrelated network is refused.
 
+Managed database activation and Start also ensure this network exists before
+starting Postgres. If a previous activation failed because the network was
+missing and the Databases page already shows Enabled, use **Settings → Start**
+on that page to retry without replacing the existing environment files or volume.
+
 The selected core services are stored under the configured projects root in
 <code>core/proxy</code> and <code>core/registry</code>.
 

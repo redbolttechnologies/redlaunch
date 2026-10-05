@@ -254,6 +254,7 @@
                   <td><code>{{.Owner}}</code></td>
                   <td>{{if .CreatedAt.IsZero}}—{{else}}<time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.CreatedAt.Format "Jan 02, 2006"}}</time>{{end}}</td>
                   <td class="databases-row-actions">
+                    <a class="button button-secondary" href="/databases?dialog=database-connection&amp;database={{.Name}}" aria-label="View connection string for {{.Name}}" aria-haspopup="dialog">View connection string</a>
                     <a class="icon-button" href="/databases?tab=managed-backups&amp;database={{.Name}}" aria-label="Backups for {{.Name}}" title="Backups">{{template "managed-backup-icon"}}</a>
                     <form method="post" action="/databases/drop" data-managed-drop>
                       <input type="hidden" name="csrf_token" value="{{$.DatabasesPage.CSRFToken}}">
@@ -271,22 +272,9 @@
           {{end}}
         </div>
       </section>
-      <aside class="service-widget databases-users-widget" aria-labelledby="managed-users-summary-title">
-        <header class="service-widget-header">
-          <div class="service-widget-heading"><h2 id="managed-users-summary-title">Users &amp; access</h2><p>Database users and their allowed databases.</p></div>
-          <a class="databases-view-link" href="/databases?tab=managed-users" data-managed-tab-link="managed-users-tab">View all <span aria-hidden="true">→</span></a>
-        </header>
-        <div class="service-widget-body">
-          {{if .DatabasesPage.Users}}
-          <ul class="databases-users-list">
-            {{range $i, $user := .DatabasesPage.Users}}{{if lt $i 5}}
-            <li><span class="databases-user-avatar" aria-hidden="true">{{template "managed-user-icon"}}</span><div><code>{{$user.User.Username}}</code><span class="field-help">{{len $user.Databases}} {{if eq (len $user.Databases) 1}}database{{else}}databases{{end}} allowed</span></div><a class="icon-button" href="/databases?tab=managed-users" data-managed-tab-link="managed-users-tab" aria-label="Manage user {{$user.User.Username}}"><span aria-hidden="true">→</span></a></li>
-            {{end}}{{end}}
-          </ul>
-          {{else}}<div class="service-widget-empty"><p>No managed users yet.</p><a class="button button-secondary" href="/databases?tab=managed-users" data-managed-tab-link="managed-users-tab">Create user</a></div>{{end}}
-        </div>
-      </aside>
     </section>
+
+    {{with .DatabasesPage.Connection}}{{template "managed-database-connection.html" .}}{{end}}
 
     {{template "managed-databases-users.html" .DatabasesPage}}
 

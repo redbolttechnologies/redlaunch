@@ -33,6 +33,7 @@ type managedDatabasesService interface {
 	CreateDatabase(context.Context, application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error)
 	DropDatabase(context.Context, string) error
 	ListUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error)
+	GetDatabaseConnections(context.Context, string) ([]application.ManagedDatabaseConnection, error)
 	CreateUser(context.Context, application.ManagedDatabaseUserInput) error
 	UpdateUserPassword(context.Context, string, string) error
 	SetUserPermissions(context.Context, string, []string) error
@@ -87,6 +88,7 @@ type databasesPageData struct {
 	CreateName          string
 	CreateOwner         string
 	CreatedCredentials  *managedDatabaseCredentialsData
+	Connection          *managedDatabaseConnectionData
 	UserName            string
 	UserDatabases       string
 	Progress            *managedDatabasesProgressData
@@ -96,6 +98,12 @@ type managedDatabaseCredentialsData struct {
 	Username    string
 	Password    string
 	DownloadURL template.URL
+}
+
+type managedDatabaseConnectionData struct {
+	Database string
+	Options  []application.ManagedDatabaseConnection
+	Selected application.ManagedDatabaseConnection
 }
 
 func (h *Handler) databasesPage(w http.ResponseWriter, r *http.Request) {
@@ -257,6 +265,35 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 		}
 		if data.SelectedBackup == nil {
 			data.Error = "The backup could not be found."
+		}
+	}
+	if query.Get("dialog") == "database-connection" {
+		data.ActiveTab = "managed-databases"
+		selected = strings.TrimSpace(query.Get("database"))
+		var found bool
+		for _, database := range databases {
+			if database.Name == selected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			data.Error = "The database could not be found."
+		} else if options, err := h.managedDatabases.GetDatabaseConnections(ctx, selected); err != nil {
+			data.Error = "The database connection details could not be read."
+		} else {
+			data.Dialog = "database-connection"
+			connection := managedDatabaseConnectionData{Database: selected, Options: options}
+			if len(options) > 0 {
+				connection.Selected = options[0]
+			}
+			for _, option := range options {
+				if option.Username == query.Get("user") {
+					connection.Selected = option
+					break
+				}
+			}
+			data.Connection = &connection
 		}
 	}
 	switch query.Get("notice") {

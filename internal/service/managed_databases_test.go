@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,16 +18,27 @@ import (
 )
 
 type managedDatabasesRunnerFake struct {
-	running   bool
-	execCalls []string
-	execErr   error
-	execFunc  func(string) (string, error)
-	upCalls   int
+	running    bool
+	execCalls  []string
+	execErr    error
+	execFunc   func(string) (string, error)
+	upCalls    int
+	networks   []string
+	networkErr error
+	upErr      error
+	operations []string
+}
+
+func (r *managedDatabasesRunnerFake) EnsureNetwork(_ context.Context, name string) error {
+	r.networks = append(r.networks, name)
+	r.operations = append(r.operations, "network")
+	return r.networkErr
 }
 
 func (r *managedDatabasesRunnerFake) Up(context.Context, string) error {
 	r.upCalls++
-	return nil
+	r.operations = append(r.operations, "up")
+	return r.upErr
 }
 
 func (r *managedDatabasesRunnerFake) ConfigServices(context.Context, string) ([]compose.ConfiguredService, error) {
@@ -101,6 +116,72 @@ func newManagedDatabasesForTest(t *testing.T, runner *managedDatabasesRunnerFake
 	return managed, projectsRoot, backupRoot
 }
 
+func TestManagedDatabaseConnectionsIncludeOnlyAccessibleUsers(t *testing.T) {
+	runner := &managedDatabasesRunnerFake{}
+	managed, _, _ := newManagedDatabasesForTest(t, runner)
+	ctx := t.Context()
+	if err := managed.repository.SaveManagedDatabaseCluster(ctx, application.ManagedDatabaseCluster{Enabled: true, DefaultUser: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range []application.ManagedDatabase{{Name: "Status page", Owner: "owner"}, {Name: "other", Owner: "unrelated"}} {
+		if _, err := managed.repository.CreateManagedDatabase(ctx, database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, user := range []application.ManagedDatabaseUserDetail{
+		{User: application.ManagedDatabaseUser{Username: "admin"}},
+		{User: application.ManagedDatabaseUser{Username: "owner"}},
+		{User: application.ManagedDatabaseUser{Username: "read user"}, Databases: []string{"Status page"}},
+		{User: application.ManagedDatabaseUser{Username: "unrelated"}, Databases: []string{"other"}},
+	} {
+		if err := managed.repository.CreateManagedDatabaseUser(ctx, user.User.Username, user.Databases); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connections, err := managed.GetDatabaseConnections(ctx, "Status page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 3 {
+		t.Fatalf("connection count = %d, want 3", len(connections))
+	}
+	for i, username := range []string{"admin", "owner", "read user"} {
+		connection := connections[i]
+		parsed, err := url.Parse(connection.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		password, _ := parsed.User.Password()
+		if connection.Username != username || parsed.User.Username() != username || password != "PASSWORD" || parsed.Scheme != "postgresql" || parsed.Host != managedDatabaseContainerName+":5432" || parsed.Path != "/Status page" {
+			t.Fatal("connection template has incorrect user, placeholder or network address")
+		}
+		if !strings.Contains(connection.URI, "Status%20page") || (username == "read user" && !strings.Contains(connection.URI, "read%20user")) {
+			t.Fatal("connection template did not URL-encode database or username")
+		}
+	}
+	if len(runner.execCalls) != 0 || runner.upCalls != 0 {
+		t.Fatal("reading connection templates executed a Docker operation")
+	}
+	if err := managed.repository.SetManagedDatabaseGrants(ctx, "read user", nil); err != nil {
+		t.Fatal(err)
+	}
+	connections, err = managed.GetDatabaseConnections(ctx, "Status page")
+	if err != nil || len(connections) != 2 {
+		t.Fatal("revoking explicit access did not remove the connection option")
+	}
+	for _, name := range []string{"missing", "../outside", "bad\nname"} {
+		if _, err := managed.GetDatabaseConnections(ctx, name); err == nil {
+			t.Fatal("unknown or invalid database accepted for connection templates")
+		}
+	}
+	if err := managed.repository.SaveManagedDatabaseCluster(ctx, application.ManagedDatabaseCluster{Enabled: false, DefaultUser: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managed.GetDatabaseConnections(ctx, "Status page"); !errors.Is(err, application.ErrManagedDatabasesDisabled) {
+		t.Fatal("disabled cluster returned connection templates")
+	}
+}
+
 func TestManagedDatabasesEnableWritesComposeAndStarts(t *testing.T) {
 	runner := &managedDatabasesRunnerFake{}
 	managed, _, _ := newManagedDatabasesForTest(t, runner)
@@ -122,10 +203,119 @@ func TestManagedDatabasesEnableWritesComposeAndStarts(t *testing.T) {
 	if runner.upCalls != 1 {
 		t.Fatalf("up calls = %d, want 1", runner.upCalls)
 	}
+	if strings.Join(runner.networks, ",") != applicationNetworkName || strings.Join(runner.operations, ",") != "network,up" {
+		t.Fatal("enable did not ensure the shared network before starting Compose")
+	}
 	if err := managed.EnableClusterWithProgress(t.Context(), application.ManagedDatabaseEnableInput{
 		Provider: "postgres", Version: "17", DefaultUser: "redlaunch",
 	}, nil); !errors.Is(err, application.ErrManagedDatabasesAlreadyEnabled) {
 		t.Fatalf("second enable error = %v, want already enabled", err)
+	}
+}
+
+func TestManagedDatabasesNetworkFailureLeavesEnableRetryable(t *testing.T) {
+	runner := &managedDatabasesRunnerFake{networkErr: errors.New("shared network unavailable")}
+	managed, _, _ := newManagedDatabasesForTest(t, runner)
+	input := application.ManagedDatabaseEnableInput{Provider: "postgres", Version: "17", DefaultUser: "redlaunch", Password: "disposable-test-password"}
+	if err := managed.EnableCluster(t.Context(), input); err == nil {
+		t.Fatal("enable succeeded when the shared network could not be ensured")
+	}
+	cluster, err := managed.GetCluster(t.Context())
+	if err != nil || cluster.Enabled || runner.upCalls != 0 {
+		t.Fatal("network failure enabled the cluster or started Compose")
+	}
+	databases, err := managed.repository.ListManagedDatabases(t.Context())
+	if err != nil || len(databases) != 0 {
+		t.Fatal("network failure persisted database metadata")
+	}
+	users, err := managed.repository.ListManagedDatabaseUsers(t.Context())
+	if err != nil || len(users) != 0 {
+		t.Fatal("network failure persisted user metadata")
+	}
+	runner.networkErr = nil
+	if err := managed.EnableCluster(t.Context(), input); err != nil {
+		t.Fatalf("retry enable: %v", err)
+	}
+	if strings.Join(runner.operations, ",") != "network,network,up" {
+		t.Fatal("enable retry did not ensure the network before starting Compose")
+	}
+}
+
+func TestManagedDatabasesComposeConfiguration(t *testing.T) {
+	if os.Getenv("REDLAUNCH_DOCKER_CONFIG_TEST") != "1" {
+		t.Skip("set REDLAUNCH_DOCKER_CONFIG_TEST=1 to validate generated Compose configuration")
+	}
+	binary, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("Docker CLI is unavailable")
+	}
+	directory := t.TempDir()
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), renderManagedDatabaseCompose("17"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{varsEnvFile, secretsEnvFile} {
+		if err := writeManagedFile(filepath.Join(directory, name), "", envFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.CommandContext(t.Context(), binary, "compose", "--env-file", "/dev/null", "-f", filepath.Join(directory, "compose.yml"), "config", "--quiet")
+	if err := command.Run(); err != nil {
+		t.Fatalf("validate generated managed database Compose configuration: %v", err)
+	}
+}
+
+func TestManagedDatabasesStartRecoversFailedFirstLaunch(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		networkErr error
+		upErr      error
+	}{
+		{"success", nil, nil},
+		{"network refused", errors.New("network belongs to another application"), nil},
+		{"compose failed", nil, errors.New("compose unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &managedDatabasesRunnerFake{upErr: errors.New("first launch failed")}
+			managed, root, _ := newManagedDatabasesForTest(t, runner)
+			input := application.ManagedDatabaseEnableInput{Provider: "postgres", Version: "17", DefaultUser: "redlaunch", Password: "disposable-test-password"}
+			if err := managed.EnableCluster(t.Context(), input); err == nil {
+				t.Fatal("initial launch unexpectedly succeeded")
+			}
+			cluster, err := managed.GetCluster(t.Context())
+			if err != nil || !cluster.Enabled {
+				t.Fatal("failed first launch did not retain enabled configuration for recovery")
+			}
+			files := make(map[string]string)
+			for _, name := range []string{"compose.yml", varsEnvFile, secretsEnvFile} {
+				path := filepath.Join(root, coreDir, managedDatabasesDir, name)
+				contents, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files[path] = string(contents)
+			}
+			runner.operations = nil
+			runner.networks = nil
+			runner.networkErr = test.networkErr
+			runner.upErr = test.upErr
+			err = managed.StartCluster(t.Context())
+			if (err != nil) != (test.networkErr != nil || test.upErr != nil) {
+				t.Fatal("Start returned an unexpected result")
+			}
+			wantOperations := "network,up"
+			if test.networkErr != nil {
+				wantOperations = "network"
+			}
+			if strings.Join(runner.networks, ",") != applicationNetworkName || strings.Join(runner.operations, ",") != wantOperations {
+				t.Fatal("Start did not ensure the shared network before bringing up the project")
+			}
+			for path, before := range files {
+				after, err := os.ReadFile(path)
+				if err != nil || string(after) != before {
+					t.Fatal("Start replaced existing database configuration or credentials")
+				}
+			}
+		})
 	}
 }
 

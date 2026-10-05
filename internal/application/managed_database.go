@@ -72,6 +72,13 @@ type ManagedDatabaseUserDetail struct {
 	Databases []string
 }
 
+// ManagedDatabaseConnection is a Docker-network connection URI for a managed
+// login. The password is a placeholder; stored passwords cannot be retrieved.
+type ManagedDatabaseConnection struct {
+	Username string
+	URI      string
+}
+
 // ManagedDatabaseStatus describes the shared container for the dashboard.
 // Runtime fields are best-effort and may be empty when Docker is unreachable.
 type ManagedDatabaseStatus struct {
