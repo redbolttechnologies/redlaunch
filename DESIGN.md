@@ -169,6 +169,9 @@ Every interactive component should consider:
 
 Use the same state conventions throughout the application.
 
+Successful actions on `/databases` use the dismissible Toast component with
+the success border and checkmark. Reserve inline destructive alerts for errors.
+
 ## Tables
 
 Tables are important to this application.

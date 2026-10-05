@@ -1,0 +1,9 @@
+{{define "success-toast-item"}}
+<div class="toast toast-complete" data-toast-notice role="status" aria-live="polite">
+  <span class="toast-icon" aria-hidden="true">✓</span>
+  <div class="toast-copy">
+    <strong class="toast-title">{{.}}</strong>
+  </div>
+  <button class="toast-close" type="button" data-toast-close aria-label="Dismiss notification">×</button>
+</div>
+{{end}}

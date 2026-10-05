@@ -16,11 +16,6 @@
     <span>{{.DatabasesPage.Error}}</span>
   </div>
   {{end}}
-  {{if .DatabasesPage.Notice}}
-  <div class="application-alert" role="status">
-    <span>{{.DatabasesPage.Notice}}</span>
-  </div>
-  {{end}}
 
   {{if not .DatabasesPage.Enabled}}
   <section class="service-widget databases-enable-card" aria-labelledby="managed-databases-enable-title">

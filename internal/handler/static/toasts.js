@@ -3,6 +3,16 @@
   const refreshDelay = 1500;
   let refreshScheduled = false;
 
+  document.querySelectorAll("[data-toast-notice]").forEach((toast) => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("notice");
+    window.history.replaceState(window.history.state, "", url);
+    const closeButton = toast.querySelector("[data-toast-close]");
+    if (closeButton) {
+      closeButton.addEventListener("click", () => toast.remove());
+    }
+  });
+
   const closeToast = (toast) => {
     const closeURL = (toast && toast.dataset.closeUrl) || window.location.pathname;
     window.location.assign(closeURL);

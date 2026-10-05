@@ -493,6 +493,32 @@ func TestDatabasesActionDialogsOnlySelectKnownResources(t *testing.T) {
 	}
 }
 
+func TestDatabasesNoticesDoNotReplaceErrors(t *testing.T) {
+	h := newDatabasesTestHandler(t, newDatabasesTabsFixture())
+	for _, test := range []struct {
+		name, query string
+		wantError   bool
+	}{
+		{"no notice", "", false},
+		{"unknown notice", "?notice=unsupported", false},
+		{"missing user", "?dialog=user-delete&user=missing", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			page := databasesRequest(t, h, http.MethodGet, "/databases"+test.query, nil)
+			if page.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", page.Code)
+			}
+			body := page.Body.String()
+			if strings.Contains(body, "data-toast-notice") {
+				t.Fatal("page without a success notice rendered a success toast")
+			}
+			if strings.Contains(body, `class="application-alert" role="alert"`) != test.wantError {
+				t.Fatal("page rendered an unexpected error state")
+			}
+		})
+	}
+}
+
 func TestDatabasesActionsStayOnOwningTab(t *testing.T) {
 	for _, test := range []struct {
 		target, tab, notice string
@@ -523,6 +549,22 @@ func TestDatabasesActionsStayOnOwningTab(t *testing.T) {
 			}
 			if location.Query().Get("tab") != test.tab || location.Query().Get("notice") != test.notice || location.Query().Get("database") != test.form.Get("database") {
 				t.Fatalf("incorrect redirect: %s", location)
+			}
+			page := databasesRequest(t, h, http.MethodGet, location.String(), nil)
+			if page.Code != http.StatusOK {
+				t.Fatalf("redirected page status = %d, want 200", page.Code)
+			}
+			body := page.Body.String()
+			for _, want := range []string{`class="toast-stack"`, `class="toast toast-complete" data-toast-notice role="status"`, `aria-label="Dismiss notification"`, `src="/static/toasts.js"`} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("success page missing %q", want)
+				}
+			}
+			if strings.Contains(body, `class="application-alert"`) {
+				t.Fatal("successful action rendered an error alert")
+			}
+			if test.notice == "schedule-saved" && !strings.Contains(body, "Backup schedule saved.") {
+				t.Fatal("backup schedule success message missing")
 			}
 			if test.target == "/databases/users/permissions" && strings.Join(fake.grants, ",") != "production,analytics" {
 				t.Fatal("checkbox values lost during access update")

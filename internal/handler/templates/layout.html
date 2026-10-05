@@ -1,4 +1,5 @@
 {{define "layout"}}
+{{$notice := ""}}{{with .DatabasesPage}}{{$notice = .Notice}}{{end}}
 <!doctype html>
 <html lang="en">
 <head>
@@ -11,7 +12,7 @@
   <script src="/static/copy.js" defer></script>
   {{if or .DashboardPage .ApplicationDetailsPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
   {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .ManagedDatabasesProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
-  {{if or .ServiceActionToasts .ProxyActionToasts}}<script src="/static/toasts.js" defer></script>{{end}}
+  {{if or .ServiceActionToasts .ProxyActionToasts $notice}}<script src="/static/toasts.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ServiceDetailsPage .SettingsPage .DatabasesPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/service-catalog.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-clone.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script><script src="/static/application-name.js" defer></script>{{end}}
@@ -205,7 +206,7 @@
       {{if .SelfUpdateProgress}}
       {{template "selfupdate-progress.html" .}}
       {{end}}
-      {{if or .ServiceActionToasts .ProxyActionToasts}}
+      {{if or .ServiceActionToasts .ProxyActionToasts $notice}}
       <div class="toast-stack" aria-live="polite" aria-label="Operation progress">
         {{range .ServiceActionToasts}}
         {{template "service-action-toast-item" .}}
@@ -213,6 +214,7 @@
         {{range .ProxyActionToasts}}
         {{template "proxy-action-toast-item" .}}
         {{end}}
+        {{if $notice}}{{template "success-toast-item" $notice}}{{end}}
       </div>
       {{end}}
     </main>
