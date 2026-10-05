@@ -5494,6 +5494,11 @@ h1 {
   white-space: nowrap;
 }
 
+.databases-row-actions > a,
+.databases-row-actions > form {
+  vertical-align: middle;
+}
+
 .databases-row-actions form {
   display: inline-block;
 }
