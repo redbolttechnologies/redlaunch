@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -28,7 +30,7 @@ type managedDatabasesService interface {
 	GetLogs(context.Context) (string, bool, error)
 	OpenLogs(context.Context) (io.ReadCloser, error)
 	ListDatabases(context.Context) ([]application.ManagedDatabase, error)
-	CreateDatabase(context.Context, application.ManagedDatabaseCreateInput) (application.ManagedDatabase, error)
+	CreateDatabase(context.Context, application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error)
 	DropDatabase(context.Context, string) error
 	ListUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error)
 	CreateUser(context.Context, application.ManagedDatabaseUserInput) error
@@ -84,9 +86,16 @@ type databasesPageData struct {
 	DefaultUser         string
 	CreateName          string
 	CreateOwner         string
+	CreatedCredentials  *managedDatabaseCredentialsData
 	UserName            string
 	UserDatabases       string
 	Progress            *managedDatabasesProgressData
+}
+
+type managedDatabaseCredentialsData struct {
+	Username    string
+	Password    string
+	DownloadURL template.URL
 }
 
 func (h *Handler) databasesPage(w http.ResponseWriter, r *http.Request) {
@@ -451,9 +460,29 @@ func (h *Handler) createManagedDatabase(w http.ResponseWriter, r *http.Request) 
 		Name:  r.Form.Get("name"),
 		Owner: r.Form.Get("owner"),
 	}
-	if _, err := h.managedDatabases.CreateDatabase(r.Context(), input); err != nil {
+	created, err := h.managedDatabases.CreateDatabase(r.Context(), input)
+	if err != nil {
 		h.logger.Error("create managed database", "error", err)
 		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		return
+	}
+	if created.Credentials != nil {
+		// Return the one-time credentials directly, never in a URL or persisted flash.
+		data, err := h.loadDatabasesPageData(r.Context(), url.Values{"database": {created.Name}})
+		if err != nil {
+			// A dashboard read failure must not lose newly generated credentials.
+			data = databasesPageData{Enabled: true, Error: "The database was created, but the overview could not be refreshed."}
+		}
+		credentials := created.Credentials
+		// Names can contain spaces; validated names cannot contain quotes,
+		// backslashes or interpolation characters. The generated password is URL-safe.
+		env := "POSTGRES_USER=" + strconv.Quote(credentials.Username) + "\nPOSTGRES_PASSWORD=" + credentials.Password + "\n"
+		data.CreatedCredentials = &managedDatabaseCredentialsData{
+			Username: credentials.Username, Password: credentials.Password,
+			// The fixed data URL prefix and base64 encoding cannot contain active content.
+			DownloadURL: template.URL("data:text/plain;charset=utf-8;base64," + base64.StdEncoding.EncodeToString([]byte(env))),
+		}
+		h.writeDatabasesPage(w, r, http.StatusOK, data)
 		return
 	}
 	http.Redirect(w, r, "/databases?database="+url.QueryEscape(strings.TrimSpace(input.Name)), http.StatusSeeOther)
@@ -868,7 +897,7 @@ func managedDatabasesUserMessage(err error) string {
 	case errors.Is(err, application.ErrDatabaseUserRequired),
 		errors.Is(err, application.ErrDatabaseUserTooLong),
 		errors.Is(err, application.ErrDatabaseUserInvalid):
-		return "The database user is invalid. Use letters, numbers, and underscores, starting with a letter or underscore."
+		return "The database user is invalid. Use letters, numbers, spaces, dots, hyphens, and underscores."
 	case errors.Is(err, application.ErrDatabasePasswordTooLong),
 		errors.Is(err, application.ErrDatabasePasswordInvalid):
 		return "The database password is invalid."

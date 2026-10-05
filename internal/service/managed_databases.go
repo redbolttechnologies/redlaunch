@@ -33,6 +33,7 @@ type ManagedDatabaseRepository interface {
 	ListManagedDatabases(context.Context) ([]application.ManagedDatabase, error)
 	GetManagedDatabase(context.Context, string) (application.ManagedDatabase, error)
 	CreateManagedDatabase(context.Context, application.ManagedDatabase) (application.ManagedDatabase, error)
+	CreateManagedDatabaseWithUser(context.Context, application.ManagedDatabase, string) (application.ManagedDatabase, error)
 	DeleteManagedDatabase(context.Context, string) error
 	ListManagedDatabaseUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error)
 	GetManagedDatabaseUser(context.Context, string) (application.ManagedDatabaseUserDetail, error)
@@ -422,60 +423,131 @@ func (s *ManagedDatabases) ListDatabases(ctx context.Context) ([]application.Man
 	return s.repository.ListManagedDatabases(ctx)
 }
 
-// CreateDatabase creates a logical database owned by the given role.
-func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application.ManagedDatabaseCreateInput) (application.ManagedDatabase, error) {
+// CreateDatabase creates a database and creates its owner when the role is absent.
+func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error) {
+	var result application.ManagedDatabaseCreation
 	if err := s.requireEnabled(ctx); err != nil {
-		return application.ManagedDatabase{}, err
+		return result, err
 	}
 	name, err := application.ValidateManagedDatabaseName(input.Name)
 	if err != nil {
-		return application.ManagedDatabase{}, err
+		return result, err
 	}
-	owner, err := application.ValidateManagedDatabaseOwner(input.Owner)
-	if err != nil {
-		return application.ManagedDatabase{}, err
-	}
-	cluster, err := s.repository.GetManagedDatabaseCluster(ctx)
-	if err != nil {
-		return application.ManagedDatabase{}, err
-	}
+	owner := strings.TrimSpace(input.Owner)
 	if owner == "" {
-		owner = cluster.DefaultUser
+		owner = name
+	}
+	owner, err = application.ValidateManagedDatabaseUsername(owner)
+	if err != nil {
+		return result, err
 	}
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
-		return application.ManagedDatabase{}, err
+		return result, err
 	}
 	defer lease.release()
+	if _, err := s.repository.GetManagedDatabase(ctx, name); err == nil {
+		return result, application.ErrManagedDatabaseAlreadyExists
+	} else if !errors.Is(err, application.ErrManagedDatabaseNotFound) {
+		return result, err
+	}
 
 	directory, err := s.managedDirectory()
 	if err != nil {
-		return application.ManagedDatabase{}, err
+		return result, err
 	}
 	running, err := s.runner.IsServiceRunning(ctx, directory, managedDatabaseServiceName)
 	if err != nil {
-		return application.ManagedDatabase{}, fmt.Errorf("inspect managed database state: %w", err)
+		return result, fmt.Errorf("inspect managed database state: %w", err)
 	}
 	if !running {
-		return application.ManagedDatabase{}, application.ErrDatabaseServiceNotRunning
+		return result, application.ErrDatabaseServiceNotRunning
 	}
+	// Consult Postgres rather than metadata: a role may have been created externally.
+	exists, err := s.execSQL(ctx, directory, "SELECT 1 FROM pg_roles WHERE rolname = "+postgresQuoteLiteral(owner))
+	if err != nil {
+		return result, fmt.Errorf("inspect managed database user: %w", sanitizeManagedError(err))
+	}
+	password := ""
+	if strings.TrimSpace(exists) != "1" {
+		password, err = generateDatabasePassword()
+		if err != nil {
+			return result, fmt.Errorf("generate database user password: %w", err)
+		}
+		// Snapshot PUBLIC access for existing roles before removing it. New roles
+		// then need explicit database access, while existing roles retain theirs.
+		statement := "BEGIN; " + restrictManagedDatabasePublicAccess + " CREATE ROLE " + postgresQuoteIdentifier(owner) +
+			" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD " + postgresQuoteLiteral(password) + "; COMMIT;"
+		if _, err := s.execSQL(ctx, directory, statement); err != nil {
+			if !isManagedAlreadyExists(err) {
+				return result, fmt.Errorf("create managed database user: %w", sanitizePostgresError(err, password))
+			}
+			// An externally created role won the race. Never rotate its password.
+			password = ""
+		}
+	}
+	createdDatabase := false
+	complete := false
+	defer func() {
+		if complete {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if createdDatabase {
+			_, _ = s.execSQL(cleanupCtx, directory, "DROP DATABASE "+postgresQuoteIdentifier(name))
+		}
+		if password != "" {
+			_, _ = s.execSQL(cleanupCtx, directory, "DROP ROLE "+postgresQuoteIdentifier(owner))
+		}
+	}()
 	if _, err := s.execSQL(ctx, directory, "CREATE DATABASE "+postgresQuoteIdentifier(name)+" OWNER "+postgresQuoteIdentifier(owner)); err != nil {
 		if isManagedAlreadyExists(err) {
-			return application.ManagedDatabase{}, application.ErrManagedDatabaseAlreadyExists
+			return result, application.ErrManagedDatabaseAlreadyExists
 		}
-		return application.ManagedDatabase{}, fmt.Errorf("create managed database: %w", sanitizeManagedError(err))
+		return result, fmt.Errorf("create managed database: %w", sanitizeManagedError(err))
 	}
-	created, err := s.repository.CreateManagedDatabase(ctx, application.ManagedDatabase{
-		Name:      name,
-		Owner:     owner,
-		CreatedAt: time.Now().UTC(),
-	})
+	createdDatabase = true
+	// Future databases must not reopen PUBLIC access for previously created users.
+	if _, err := s.execSQL(ctx, directory, "REVOKE CONNECT, TEMPORARY ON DATABASE "+postgresQuoteIdentifier(name)+" FROM PUBLIC"); err != nil {
+		return result, fmt.Errorf("restrict managed database access: %w", sanitizeManagedError(err))
+	}
+	newUsername := ""
+	if password != "" {
+		newUsername = owner
+	}
+	created, err := s.repository.CreateManagedDatabaseWithUser(ctx, application.ManagedDatabase{
+		Name: name, Owner: owner, CreatedAt: time.Now().UTC(),
+	}, newUsername)
 	if err != nil {
-		_, _ = s.execSQL(ctx, directory, "DROP DATABASE "+postgresQuoteIdentifier(name))
-		return application.ManagedDatabase{}, err
+		return result, err
 	}
-	return created, nil
+	complete = true
+	result.ManagedDatabase = created
+	if password != "" {
+		result.Credentials = &application.ManagedDatabaseCredentials{Username: owner, Password: password}
+	}
+	return result, nil
 }
+
+// PostgreSQL privileges are additive: revoking a privilege from one role cannot
+// override PUBLIC. Preserve the legacy grants for existing roles, then remove
+// PUBLIC CONNECT/TEMPORARY on every connectable database (including template1).
+// This runs in the same transaction as role creation.
+const restrictManagedDatabasePublicAccess = `DO $redlaunch$
+DECLARE db record; privilege record; existing_role record;
+BEGIN
+  FOR db IN SELECT datname, datacl, datdba FROM pg_database WHERE datallowconn LOOP
+    FOR privilege IN SELECT privilege_type FROM aclexplode(COALESCE(db.datacl, acldefault('d', db.datdba)))
+      WHERE grantee = 0 AND privilege_type IN ('CONNECT', 'TEMPORARY') LOOP
+      FOR existing_role IN SELECT rolname FROM pg_roles WHERE NOT rolsuper LOOP
+        EXECUTE format('GRANT %s ON DATABASE %I TO %I', privilege.privilege_type, db.datname, existing_role.rolname);
+      END LOOP;
+    END LOOP;
+    EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', db.datname);
+  END LOOP;
+END;
+$redlaunch$;`
 
 // DropDatabase removes a logical database.
 func (s *ManagedDatabases) DropDatabase(ctx context.Context, name string) error {
@@ -578,7 +650,7 @@ func (s *ManagedDatabases) UpdateUserPassword(ctx context.Context, username, pas
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
 	}
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}
@@ -607,7 +679,7 @@ func (s *ManagedDatabases) SetUserPermissions(ctx context.Context, username stri
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
 	}
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}
@@ -664,7 +736,7 @@ func (s *ManagedDatabases) DeleteUser(ctx context.Context, username string) erro
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
 	}
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}

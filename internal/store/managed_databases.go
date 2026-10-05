@@ -127,6 +127,12 @@ func (s *Store) GetManagedDatabase(ctx context.Context, name string) (applicatio
 
 // CreateManagedDatabase records one logical database.
 func (s *Store) CreateManagedDatabase(ctx context.Context, item application.ManagedDatabase) (application.ManagedDatabase, error) {
+	return s.CreateManagedDatabaseWithUser(ctx, item, "")
+}
+
+// CreateManagedDatabaseWithUser atomically records a database and, when supplied,
+// its newly created login with access to this database only.
+func (s *Store) CreateManagedDatabaseWithUser(ctx context.Context, item application.ManagedDatabase, username string) (application.ManagedDatabase, error) {
 	name, err := application.ValidateManagedDatabaseName(item.Name)
 	if err != nil {
 		return application.ManagedDatabase{}, err
@@ -135,7 +141,18 @@ func (s *Store) CreateManagedDatabase(ctx context.Context, item application.Mana
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = time.Now().UTC()
 	}
-	result, err := s.db.ExecContext(ctx, `
+	if username != "" {
+		username, err = application.ValidateManagedDatabaseUsername(username)
+		if err != nil {
+			return application.ManagedDatabase{}, err
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return application.ManagedDatabase{}, fmt.Errorf("begin managed database creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO managed_databases (name, owner, created_at)
 		VALUES (?, ?, ?)`, item.Name, item.Owner, item.CreatedAt.Format(time.RFC3339Nano))
 	if err != nil {
@@ -147,6 +164,20 @@ func (s *Store) CreateManagedDatabase(ctx context.Context, item application.Mana
 	item.ID, err = result.LastInsertId()
 	if err != nil {
 		return application.ManagedDatabase{}, fmt.Errorf("read managed database ID: %w", err)
+	}
+	if username != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO managed_database_users (username, created_at) VALUES (?, ?)`, username, item.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			if isUniqueConstraint(err) {
+				return application.ManagedDatabase{}, application.ErrManagedDatabaseUserAlreadyExists
+			}
+			return application.ManagedDatabase{}, fmt.Errorf("record managed database user: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO managed_database_grants (username, database_name, created_at) VALUES (?, ?, ?)`, username, item.Name, item.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			return application.ManagedDatabase{}, fmt.Errorf("record managed database access: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return application.ManagedDatabase{}, fmt.Errorf("commit managed database creation: %w", err)
 	}
 	return item, nil
 }
@@ -223,7 +254,7 @@ func (s *Store) ListManagedDatabaseUsers(ctx context.Context) ([]application.Man
 
 // GetManagedDatabaseUser returns one user with its grants.
 func (s *Store) GetManagedDatabaseUser(ctx context.Context, username string) (application.ManagedDatabaseUserDetail, error) {
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return application.ManagedDatabaseUserDetail{}, err
 	}
@@ -252,7 +283,7 @@ func (s *Store) GetManagedDatabaseUser(ctx context.Context, username string) (ap
 
 // CreateManagedDatabaseUser records one login role and its initial grants.
 func (s *Store) CreateManagedDatabaseUser(ctx context.Context, username string, databases []string) error {
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}
@@ -288,7 +319,7 @@ func (s *Store) CreateManagedDatabaseUser(ctx context.Context, username string, 
 
 // SetManagedDatabaseGrants replaces one user's allowed databases.
 func (s *Store) SetManagedDatabaseGrants(ctx context.Context, username string, databases []string) error {
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}
@@ -326,7 +357,7 @@ func (s *Store) SetManagedDatabaseGrants(ctx context.Context, username string, d
 
 // DeleteManagedDatabaseUser removes one login role and its grants.
 func (s *Store) DeleteManagedDatabaseUser(ctx context.Context, username string) error {
-	username, err := application.ValidateDatabaseUser(username)
+	username, err := application.ValidateManagedDatabaseUsername(username)
 	if err != nil {
 		return err
 	}

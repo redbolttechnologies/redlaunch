@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,8 @@ type fakeManagedDatabases struct {
 	enableInput      application.ManagedDatabaseEnableInput
 	enableCalls      int
 	createdDB        string
+	createdOwner     string
+	credentials      *application.ManagedDatabaseCredentials
 	droppedDB        string
 	createdUser      string
 	deletedUser      string
@@ -30,6 +33,7 @@ type fakeManagedDatabases struct {
 	userErr          error
 	backupErr        error
 	backupDetailsErr error
+	listErr          error
 	grants           []string
 	backupAction     string
 	backupDatabase   string
@@ -68,15 +72,16 @@ func (f *fakeManagedDatabases) OpenLogs(context.Context) (io.ReadCloser, error) 
 	return io.NopCloser(strings.NewReader("log")), nil
 }
 func (f *fakeManagedDatabases) ListDatabases(context.Context) ([]application.ManagedDatabase, error) {
-	return f.databases, nil
+	return f.databases, f.listErr
 }
-func (f *fakeManagedDatabases) CreateDatabase(_ context.Context, input application.ManagedDatabaseCreateInput) (application.ManagedDatabase, error) {
+func (f *fakeManagedDatabases) CreateDatabase(_ context.Context, input application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error) {
 	name, err := application.ValidateManagedDatabaseName(input.Name)
 	if err != nil {
-		return application.ManagedDatabase{}, err
+		return application.ManagedDatabaseCreation{}, err
 	}
 	f.createdDB = name
-	return application.ManagedDatabase{Name: name, Owner: "redlaunch"}, nil
+	f.createdOwner = input.Owner
+	return application.ManagedDatabaseCreation{ManagedDatabase: application.ManagedDatabase{Name: name, Owner: "redlaunch"}, Credentials: f.credentials}, nil
 }
 func (f *fakeManagedDatabases) DropDatabase(_ context.Context, name string) error {
 	f.droppedDB = name
@@ -607,5 +612,86 @@ func TestDatabasesDialogEscapesUserAndBackupNames(t *testing.T) {
 		if strings.Contains(body, unsafe) || !strings.Contains(body, "&lt;img") {
 			t.Fatal("unescaped name in action dialog")
 		}
+	}
+}
+
+func TestDatabasesCreationReturnsOneTimeMaskedCredentials(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	password := "disposable_generated_test_password"
+	fake.credentials = &application.ManagedDatabaseCredentials{Username: "analytics", Password: password}
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesPostWithCSRF(h, "/databases/create", url.Values{"name": {"analytics"}, "owner": {""}})
+	if rr.Code != http.StatusOK || rr.Header().Get("Cache-Control") != "no-store" || rr.Header().Get("Location") != "" {
+		t.Fatal("credentials must be in a non-cacheable response, never a redirect")
+	}
+	body := rr.Body.String()
+	for _, expected := range []string{`id="managed-database-credentials-dialog"`, `data-managed-credentials open`, `type="password" value="` + password + `" readonly`, `aria-pressed="false"`, `data-copy-target="managed-created-password"`, `download="analytics.creds.env"`, "Download credentials", "Database created"} {
+		if !strings.Contains(body, expected) {
+			t.Fatal("credential confirmation is missing a required control")
+		}
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("POSTGRES_USER=\"analytics\"\nPOSTGRES_PASSWORD=" + password + "\n"))
+	if !strings.Contains(body, `href="data:text/plain;charset=utf-8;base64,`+encoded+`"`) {
+		t.Fatal("credential download does not contain the required env variables")
+	}
+	if fake.createdOwner != "" {
+		t.Fatal("handler replaced empty username")
+	}
+	later := databasesRequest(t, h, "GET", "/databases", nil).Body.String()
+	if strings.Contains(later, password) || strings.Contains(later, "managed-database-credentials-dialog") {
+		t.Fatal("credentials were repeated on a subsequent request")
+	}
+}
+
+func TestDatabasesCreationExistingUserRedirectsWithoutCredentials(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesPostWithCSRF(h, "/databases/create", url.Values{"name": {"analytics"}, "owner": {"reporter"}})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/databases?database=analytics" || fake.createdOwner != "reporter" {
+		t.Fatal("existing user creation did not keep its username and normal redirect")
+	}
+	if strings.Contains(rr.Body.String(), "managed-created-password") {
+		t.Fatal("existing user received generated credentials")
+	}
+}
+
+func TestDatabasesCreateFormHasNoDefaultUsername(t *testing.T) {
+	h := newDatabasesTestHandler(t, newDatabasesTabsFixture())
+	body := databasesRequest(t, h, "GET", "/databases?create=1", nil).Body.String()
+	start := strings.Index(body, `<input id="managed-db-owner"`)
+	if start < 0 {
+		t.Fatal("username input is missing")
+	}
+	end := strings.Index(body[start:], ">")
+	if strings.Contains(body[start:start+end], "value=") {
+		t.Fatal("create form still supplies a default username")
+	}
+}
+
+func TestDatabasesCredentialCreationRequiresCSRF(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesRequest(t, h, "POST", "/databases/create", url.Values{"name": {"analytics"}})
+	if rr.Code != http.StatusForbidden || fake.createdDB != "" {
+		t.Fatal("credential creation bypassed CSRF protection")
+	}
+}
+
+func TestDatabasesCreatedCredentialsSurviveOverviewFailure(t *testing.T) {
+	fake := newDatabasesTabsFixture()
+	fake.credentials = &application.ManagedDatabaseCredentials{Username: "Status page", Password: "disposable_generated_test_password"}
+	fake.listErr = application.ErrManagedDatabaseNotFound
+	h := newDatabasesTestHandler(t, fake)
+	rr := databasesPostWithCSRF(h, "/databases/create", url.Values{"name": {"Status page"}})
+	if rr.Code != http.StatusOK {
+		t.Fatal("overview failure discarded creation confirmation")
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `download="Status page.creds.env"`) || !strings.Contains(body, `data-managed-credentials open`) {
+		t.Fatal("one-time credentials were lost when overview refresh failed")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("POSTGRES_USER=\"Status page\"\nPOSTGRES_PASSWORD=" + fake.credentials.Password + "\n"))
+	if !strings.Contains(body, encoded) {
+		t.Fatal("credential env file failed to quote a username with spaces")
 	}
 }

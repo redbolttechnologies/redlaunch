@@ -17,6 +17,7 @@ type managedDatabasesRunnerFake struct {
 	running   bool
 	execCalls []string
 	execErr   error
+	execFunc  func(string) (string, error)
 	upCalls   int
 }
 
@@ -43,8 +44,14 @@ func (r *managedDatabasesRunnerFake) RestorePostgreSQL(context.Context, string, 
 
 func (r *managedDatabasesRunnerFake) ExecPostgresSQL(_ context.Context, _, _ string, sql string) (string, error) {
 	r.execCalls = append(r.execCalls, sql)
+	if r.execFunc != nil {
+		return r.execFunc(sql)
+	}
 	if r.execErr != nil {
 		return "", r.execErr
+	}
+	if sql == "SELECT 1 FROM pg_roles WHERE rolname = 'redlaunch'" {
+		return "1", nil
 	}
 	return "", nil
 }
@@ -134,8 +141,8 @@ func TestManagedDatabasesCreateAndDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create error = %v", err)
 	}
-	if created.Owner != "redlaunch" {
-		t.Fatalf("owner = %q, want redlaunch", created.Owner)
+	if created.Owner != "analytics" {
+		t.Fatalf("owner = %q, want analytics", created.Owner)
 	}
 	if err := managed.DropDatabase(t.Context(), "analytics"); err != nil {
 		t.Fatalf("drop error = %v", err)

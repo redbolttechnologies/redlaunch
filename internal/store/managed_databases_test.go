@@ -142,3 +142,28 @@ func TestManagedBackupScheduleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestManagedDatabaseCreationWithUserIsAtomic(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.CreateManagedDatabaseWithUser(t.Context(), application.ManagedDatabase{Name: "analytics", Owner: "reporter"}, "reporter"); err != nil {
+		t.Fatal(err)
+	}
+	user, err := database.GetManagedDatabaseUser(t.Context(), "reporter")
+	if err != nil || len(user.Databases) != 1 || user.Databases[0] != "analytics" {
+		t.Fatal("new user does not have exactly its database grant")
+	}
+	if _, err := database.CreateManagedDatabaseWithUser(t.Context(), application.ManagedDatabase{Name: "other", Owner: "reporter"}, "reporter"); err != application.ErrManagedDatabaseUserAlreadyExists {
+		t.Fatal("duplicate username was not rejected")
+	}
+	if _, err := database.GetManagedDatabase(t.Context(), "other"); err != application.ErrManagedDatabaseNotFound {
+		t.Fatal("failed user creation persisted a database")
+	}
+	user, err = database.GetManagedDatabaseUser(t.Context(), "reporter")
+	if err != nil || len(user.Databases) != 1 || user.Databases[0] != "analytics" {
+		t.Fatal("failed creation changed existing grants")
+	}
+}

@@ -45,7 +45,7 @@
       {{if and (eq .Dialog "user-create") .DialogError}}<div class="application-alert application-dialog-alert" role="alert">{{.DialogError}}</div>{{end}}
       <form class="application-form" method="post" action="/databases/users/create">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-        <div class="field"><label for="managed-user-name">Username</label><input id="managed-user-name" name="username" type="text" maxlength="63" value="{{.UserName}}" autocomplete="off" required><span class="field-help">Use letters, numbers, and underscores. Start with a letter or underscore.</span></div>
+        <div class="field"><label for="managed-user-name">Username</label><input id="managed-user-name" name="username" type="text" maxlength="63" value="{{.UserName}}" autocomplete="off" required><span class="field-help">Use letters, numbers, spaces, dots, hyphens, and underscores.</span></div>
         <div class="field"><label for="managed-user-password">Password</label><input id="managed-user-password" name="password" type="password" maxlength="256" autocomplete="new-password" required><span class="field-help">Stored in Postgres; never shown in this interface.</span></div>
         {{template "managed-database-access-choices.html" .CreateAccessChoices}}
         <footer class="application-form-actions"><a class="button button-secondary" href="/databases?tab=managed-users" data-managed-dialog-close>Cancel</a><button class="button button-primary databases-enable-button" type="submit">Create user</button></footer>

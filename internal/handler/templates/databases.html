@@ -195,9 +195,9 @@
             <input id="managed-db-name" name="name" type="text" maxlength="63" autocomplete="off" required>
           </div>
           <div class="field">
-            <label for="managed-db-owner">Owner</label>
-            <input id="managed-db-owner" name="owner" type="text" maxlength="63" value="{{.DatabasesPage.Cluster.DefaultUser}}" autocomplete="off">
-            <span class="field-help">Defaults to <code>{{.DatabasesPage.Cluster.DefaultUser}}</code>.</span>
+            <label for="managed-db-owner">Username</label>
+            <input id="managed-db-owner" name="owner" type="text" maxlength="63" autocomplete="off" aria-describedby="managed-db-owner-help">
+            <span class="field-help" id="managed-db-owner-help">Leave empty to use the database name. New users get a generated password and access to this database only. Existing users keep their credentials and permissions.</span>
           </div>
         </div>
         <footer class="application-form-actions">
@@ -207,6 +207,9 @@
       </form>
     </div>
   </dialog>
+  {{with .DatabasesPage.CreatedCredentials}}
+  {{template "managed-database-credentials.html" .}}
+  {{end}}
   <dialog class="application-dialog" id="managed-database-disable-dialog" aria-labelledby="managed-database-disable-title" data-managed-dialog{{if .DatabasesPage.DisableOpen}} open{{end}}>
     <div class="application-dialog-panel">
       <header class="application-dialog-header"><div><h2 id="managed-database-disable-title">Disable managed databases?</h2><p>This stops the shared container and disconnects applications using it. Data, files, and backups are retained.</p></div></header>

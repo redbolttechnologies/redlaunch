@@ -122,8 +122,16 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   schedule, restore, download, and remove PostgreSQL backups. The enabled
   overview shows database/user totals, the Postgres version, container status,
   and a database list searchable by name and filterable by owner. Use Create
-  database to open the creation dialog, Manage users for access management,
-  and Settings for cluster start/stop/restart controls. The Users tab has
+  database to open the creation dialog. Leave Username empty to use the database
+  name. Missing users are created with a strong random password and read/write
+  access to their new database only; existing users keep their credentials and permissions. Save
+  new credentials from the confirmation dialog: reveal or copy the password,
+  or download `<username>.creds.env` containing `POSTGRES_USER` and
+  `POSTGRES_PASSWORD`. Credentials are shown once and never stored in SQLite.
+  New databases disable PUBLIC connection access; legacy PUBLIC access is
+  preserved as explicit grants for existing roles when creating a new user.
+  Use Manage users for access management and Settings for cluster
+  start/stop/restart controls. The Users tab has
   searchable roles and dialogs for passwords and database grants. The Backups
   tab keeps the selected database while editing schedules or managing backup
   history, with confirmation before restoring or deleting a backup. Settings

@@ -41,3 +41,16 @@ func TestValidateManagedDatabaseGrantsDeduplicates(t *testing.T) {
 		t.Fatalf("grants = %v, want [app]", grants)
 	}
 }
+
+func TestManagedDatabaseUsernameAcceptsDatabaseNames(t *testing.T) {
+	for _, name := range []string{"analytics", "app-production", "Status page", "42", "metrics.v2"} {
+		if got, err := ValidateManagedDatabaseUsername(name); err != nil || got != name {
+			t.Fatalf("valid database name %q rejected as a managed username", name)
+		}
+	}
+	for _, name := range []string{"", "bad\nuser", "../evil", "user'", "user$NAME", "user\\name"} {
+		if _, err := ValidateManagedDatabaseUsername(name); err == nil {
+			t.Fatalf("unsafe username %q accepted", name)
+		}
+	}
+}

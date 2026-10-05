@@ -46,6 +46,19 @@ type ManagedDatabase struct {
 	CreatedAt time.Time
 }
 
+// ManagedDatabaseCreation returns credentials only when a login was created.
+// Credentials must never be persisted or included in diagnostics.
+type ManagedDatabaseCreation struct {
+	ManagedDatabase
+	Credentials *ManagedDatabaseCredentials
+}
+
+// ManagedDatabaseCredentials contains the one-time generated login credentials.
+type ManagedDatabaseCredentials struct {
+	Username string
+	Password string
+}
+
 // ManagedDatabaseUser is one login role inside the shared cluster. Passwords
 // are never persisted in SQLite.
 type ManagedDatabaseUser struct {
@@ -134,17 +147,33 @@ func ValidateManagedDatabaseName(value string) (string, error) {
 }
 
 // ValidateManagedDatabaseOwner reuses the PostgreSQL role-name rules. An
-// empty owner means the cluster default user.
+// empty owner means the database name.
 func ValidateManagedDatabaseOwner(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
 	}
-	return ValidateDatabaseUser(value)
+	return ValidateManagedDatabaseUsername(value)
+}
+
+// ValidateManagedDatabaseUsername accepts the same names as logical databases.
+// Managed roles are quoted in SQL, unlike users passed to image initialization.
+func ValidateManagedDatabaseUsername(value string) (string, error) {
+	username, err := ValidateManagedDatabaseName(value)
+	switch {
+	case errors.Is(err, ErrDatabaseNameRequired):
+		return "", ErrDatabaseUserRequired
+	case errors.Is(err, ErrDatabaseNameTooLong):
+		return "", ErrDatabaseUserTooLong
+	case err != nil:
+		return "", ErrDatabaseUserInvalid
+	default:
+		return username, nil
+	}
 }
 
 // ValidateManagedDatabaseUserInput validates user creation input.
 func ValidateManagedDatabaseUserInput(input ManagedDatabaseUserInput) (ManagedDatabaseUserInput, error) {
-	username, err := ValidateDatabaseUser(input.Username)
+	username, err := ValidateManagedDatabaseUsername(input.Username)
 	if err != nil {
 		return ManagedDatabaseUserInput{}, err
 	}

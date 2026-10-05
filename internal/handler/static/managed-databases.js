@@ -149,6 +149,10 @@
     });
     dialog.addEventListener("close", () => {
       document.body.classList.remove("dialog-open");
+      if (dialog.hasAttribute("data-managed-credentials")) {
+        // Discard the one-time secret and encoded download when dismissed.
+        dialog.remove();
+      }
       // Query-based links provide a working fallback without JavaScript.
       const url = new URL(window.location.href);
       url.searchParams.delete("create");
@@ -164,7 +168,7 @@
       window.history.replaceState(null, "", url);
       if (returnFocus) returnFocus.focus();
     });
-    dialog.querySelector("form").addEventListener("submit", () => {
+    dialog.querySelector("form")?.addEventListener("submit", () => {
       const button = dialog.querySelector("button[type=submit]");
       if (button) {
         button.disabled = true;
@@ -196,6 +200,21 @@
       if (!window.confirm(message)) event.preventDefault();
     });
   });
+})();
+
+(() => {
+  const dialog = document.querySelector("[data-managed-credentials]");
+  if (!dialog) return;
+  const password = dialog.querySelector("[data-managed-created-password]");
+  const toggle = dialog.querySelector("[data-managed-password-toggle]");
+  toggle.addEventListener("click", () => {
+    const show = password.type === "password";
+    password.type = show ? "text" : "password";
+    toggle.textContent = show ? "Hide password" : "Show password";
+    toggle.setAttribute("aria-pressed", String(show));
+  });
+  // Keep refresh/navigation on the overview URL, without any credentials.
+  window.history.replaceState(null, "", "/databases");
 })();
 
 (() => {
