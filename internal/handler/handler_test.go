@@ -2695,6 +2695,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 		`data-secret-generate`,
 		`<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>`,
 		`>Generate secret</span>`,
+		`<label for="secret-generate-length">Generated secret length</label>`,
+		`id="secret-generate-length" type="number" min="16" max="1024" step="1" value="16"`,
+		`data-secret-generate-length`,
 		`Existing values stay hidden until you choose Show`,
 		`name="original_name"`,
 		`id="variable-edit-name"`,
@@ -2739,6 +2742,9 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	}
 	if strings.Contains(body, "super-secret") || strings.Contains(body, "data-secret-value") {
 		t.Fatal("GET /applications/7 included a secret value in the response")
+	}
+	if strings.Contains(body, "clear_value") || strings.Contains(body, "Clear the existing value") || strings.Contains(body, "choose clear") {
+		t.Fatal("GET /applications/7 included the removed secret clear control")
 	}
 }
 
@@ -3202,7 +3208,7 @@ func TestApplicationSecretUpdateLeavesBlankValueUnchanged(t *testing.T) {
 	}
 }
 
-func TestApplicationSecretUpdateRequiresExplicitClear(t *testing.T) {
+func TestApplicationSecretUpdateIgnoresRemovedClearControl(t *testing.T) {
 	applications := &fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}}}
 	web, err := New(nil, applications)
 	if err != nil {
@@ -3223,8 +3229,8 @@ func TestApplicationSecretUpdateRequiresExplicitClear(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("POST clear secret status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	if applications.secretUpdateValue != "" || !applications.secretUpdateReplaceValue {
-		t.Fatalf("clear secret update = value %q replace=%v, want explicit empty replacement", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
+	if applications.secretUpdateValue != "" || applications.secretUpdateReplaceValue {
+		t.Fatalf("obsolete clear control = value %q replace=%v, want unchanged", applications.secretUpdateValue, applications.secretUpdateReplaceValue)
 	}
 }
 
@@ -3357,6 +3363,7 @@ func TestApplicationSecretAddRendersPasswordDialogOnError(t *testing.T) {
 		`data-secret-toggle`,
 		`data-secret-generate`,
 		`Generate secret`,
+		`id="secret-generate-length" type="number" min="16" max="1024" step="1" value="16"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("POST add secret did not render %q: %s", expected, body)

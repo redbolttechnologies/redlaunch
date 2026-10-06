@@ -239,8 +239,6 @@
 
   const nameInput = dialog.querySelector("#secret-edit-name");
   const valueInput = dialog.querySelector("#secret-edit-value");
-  const clearInput = dialog.querySelector("[data-secret-clear]");
-  const clearWrap = dialog.querySelector("[data-secret-clear-wrap]");
   const operationInput = dialog.querySelector("[name=operation]");
   const originalNameInput = dialog.querySelector("[name=original_name]");
   const title = dialog.querySelector("[data-secret-edit-title]");
@@ -251,6 +249,7 @@
   const copyButton = dialog.querySelector("[data-secret-copy]");
   const statusElement = dialog.querySelector("[data-secret-status]");
   const generateButton = dialog.querySelector("[data-secret-generate]");
+  const lengthInput = dialog.querySelector("[data-secret-generate-length]");
   const form = dialog.querySelector("form");
   const closeButtons = dialog.querySelectorAll("[data-secret-edit-close]");
   let returnFocus = null;
@@ -473,11 +472,8 @@
     if (valueInput) {
       valueInput.value = "";
     }
-    if (clearInput) {
-      clearInput.checked = false;
-    }
-    if (clearWrap) {
-      clearWrap.toggleAttribute("hidden", adding);
+    if (lengthInput) {
+      lengthInput.value = "16";
     }
   };
 
@@ -498,9 +494,6 @@
       valueInput.value = "";
       showingMock = false;
       setSecretVisibility(false);
-    }
-    if (clearInput) {
-      clearInput.checked = false;
     }
     showDialog();
   };
@@ -523,17 +516,13 @@
     showDialog();
   };
 
-  const generateSecret = () => {
-    if (!window.crypto || typeof window.crypto.getRandomValues !== "function" || typeof window.btoa !== "function") {
-      return "";
-    }
-    const bytes = new Uint8Array(32);
+  const generateSecret = (length) => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const bytes = new Uint8Array(length);
     window.crypto.getRandomValues(bytes);
-    let binary = "";
-    bytes.forEach((byte) => {
-      binary += String.fromCharCode(byte);
-    });
-    return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    // The alphabet has 64 characters, which divides 256 evenly. Each
+    // character is uniform and contributes 6 bits of entropy (96 at length 16).
+    return Array.from(bytes, (byte) => alphabet[byte & 63]).join("");
   };
 
   document.querySelectorAll("[data-secret-edit]").forEach((button) => {
@@ -590,9 +579,6 @@
         valueInput.value = secret;
         showingMock = false;
         revealedFromServer = true;
-        if (clearInput) {
-          clearInput.checked = false;
-        }
         setSecretVisibility(true);
         setStatus("");
         valueInput.focus();
@@ -664,16 +650,29 @@
   }
 
   if (generateButton) {
-    generateButton.disabled = !window.crypto || typeof window.crypto.getRandomValues !== "function" || typeof window.btoa !== "function";
+    generateButton.disabled = !window.crypto || typeof window.crypto.getRandomValues !== "function";
     generateButton.addEventListener("click", () => {
-      const secret = generateSecret();
-      if (valueInput && secret) {
+      const length = lengthInput ? Number(lengthInput.value) : 16;
+      if (!Number.isInteger(length) || length < 16 || length > 1024) {
+        setStatus("Enter a whole number from 16 to 1024 for the secret length.");
+        if (lengthInput) {
+          lengthInput.focus();
+        }
+        return;
+      }
+      let secret;
+      try {
+        secret = generateSecret(length);
+      } catch (error) {
+        setStatus("Could not securely generate a secret. Try again.");
+        return;
+      }
+      if (valueInput) {
+        abortPending();
+        setBusy(false);
         valueInput.value = secret;
         showingMock = false;
         revealedFromServer = false;
-        if (clearInput) {
-          clearInput.checked = false;
-        }
         setSecretVisibility(false);
         setStatus("");
         valueInput.focus();
@@ -708,9 +707,6 @@
         showingMock = valueInput.value === MOCK_SECRET_VALUE;
       }
       revealedFromServer = false;
-      if (clearInput && valueInput.value !== "" && !isMockShown()) {
-        clearInput.checked = false;
-      }
     });
   }
 

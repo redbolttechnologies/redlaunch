@@ -1610,10 +1610,9 @@ func (h *Handler) updateApplicationSecret(w http.ResponseWriter, r *http.Request
 		Add:          r.Form.Get("operation") == "add",
 		OriginalName: r.Form.Get("original_name"),
 		Name:         r.Form.Get("name"),
-		ClearValue:   r.Form.Get("clear_value") == "on",
 	}
 	submittedValue := r.Form.Get("value")
-	edit.ReplaceValue = edit.Add || submittedValue != "" || edit.ClearValue
+	edit.ReplaceValue = edit.Add || submittedValue != ""
 	if h.applicationEditor == nil {
 		h.logger.Error("update application secret without an editor", "application_id", id)
 		edit.Error = "The secret could not be saved right now."
@@ -5017,7 +5016,6 @@ type secretEditPageData struct {
 	Error        string
 	OriginalName string
 	Name         string
-	ClearValue   bool
 	ReplaceValue bool
 }
 

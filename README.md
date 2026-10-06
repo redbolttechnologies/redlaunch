@@ -111,6 +111,10 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   migration) with `docker compose run --rm` semantics; the container is
   removed afterwards and secrets stay on the server.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
+- Generate secrets in the Add/Edit secret dialog with a configurable length
+  of 16–1024 characters (default: 16). Generation uses Web Crypto's
+  cryptographic random source and a uniform 64-character URL-safe alphabet.
+  Leaving an edited secret value blank preserves its existing value.
 - Show container status, ports, logs, and explicitly scoped resource usage.
 - List the images previously pushed to the local registry from the Registry page.
 - Manually purge older tags per repository with a keep count (keep the N most
@@ -275,6 +279,12 @@ make test
 make lint
 make compose-config
 make docker-build
+```
+
+To test the secret dialog's browser logic with Bun (optional):
+
+```sh
+bun test ./internal/handler/testdata/application-environment.test.cjs
 ```
 
 For a release candidate, run the complete release gate:
