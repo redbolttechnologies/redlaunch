@@ -265,6 +265,10 @@ Use temporary directories and isolated test databases.
 
 Keep commits small and logically focused.
 
+All commits must use Conventional Commits: `<type>[optional scope]: <description>`.
+Use an appropriate type such as `feat`, `fix`, `docs`, `refactor`, `test`, or
+`chore`. Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
+
 Do not rewrite existing commits unless explicitly requested.
 
 Do not commit:
