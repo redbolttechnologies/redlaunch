@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"html"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,50 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 )
+
+func TestMCPHelpOpenCodeExamplesUseNamedServerMap(t *testing.T) {
+	source, err := documentation.Files.ReadFile("MCP.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	examples := regexp.MustCompile("(?s)```json\\n(.*?)\\n```").FindAllSubmatch(source, -1)
+	checked := 0
+	for _, example := range examples {
+		var config struct {
+			MCP map[string]json.RawMessage `json:"mcp"`
+		}
+		if err := json.Unmarshal(example[1], &config); err != nil {
+			t.Fatalf("help contains invalid JSON: %v", err)
+		}
+		if config.MCP == nil {
+			continue // Other clients use a different configuration format.
+		}
+		if _, wrapped := config.MCP["servers"]; wrapped {
+			t.Fatal("OpenCode examples must put named servers directly under mcp")
+		}
+		var server struct {
+			Type        string            `json:"type"`
+			Command     []string          `json:"command"`
+			Enabled     bool              `json:"enabled"`
+			Environment map[string]string `json:"environment"`
+		}
+		if err := json.Unmarshal(config.MCP["redlaunch"], &server); err != nil {
+			t.Fatalf("missing or invalid redlaunch server entry: %v", err)
+		}
+		if server.Type != "local" || !server.Enabled || len(server.Command) < 2 || server.Command[1] != "mcp" {
+			t.Fatal("OpenCode example cannot launch the local Redlaunch MCP server")
+		}
+		for key, value := range server.Environment {
+			if value != "{env:"+key+"}" {
+				t.Fatalf("OpenCode example must reference credentials from the environment: %s", key)
+			}
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("missing OpenCode configuration example")
+	}
+}
 
 func TestHelpAvailableBeforeSetupAndInSidebar(t *testing.T) {
 	web, err := New(nil, &fakeSetupManager{needsSetup: true})

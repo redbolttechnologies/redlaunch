@@ -91,10 +91,9 @@ for other configuration options.
 ### OpenCode
 
 1. Open or create `opencode.json` in the project where you use OpenCode.
-2. Add the configuration for your version, replacing the executable path.
-   Run `opencode --version` if you are unsure which version you have.
-
-For OpenCode v1:
+2. Add the following configuration, replacing the executable path. Server
+   names belong directly under `mcp`. This format is verified with OpenCode
+   1.18.21; check your installation with `opencode --version`.
 
 ```json
 {
@@ -109,30 +108,14 @@ For OpenCode v1:
 }
 ```
 
-For OpenCode v2:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "servers": {
-      "redlaunch": {
-        "type": "local",
-        "command": ["/absolute/path/to/redlaunch/bin/redlaunch", "mcp"]
-      }
-    }
-  }
-}
-```
-
 3. Save the file, then run `opencode mcp list` from that project directory.
    Redlaunch should show as connected.
 4. Start a new OpenCode session in the same directory.
 
 To make it available in all projects, put the entry in
-`~/.config/opencode/opencode.json` instead. See the official
-[OpenCode v1](https://opencode.ai/docs/mcp-servers/) or
-[OpenCode v2](https://opencode.ai/v2/docs/mcp-servers/) MCP guide.
+`~/.config/opencode/opencode.json` instead. Merge the `redlaunch` entry into
+your existing `mcp` object if other servers are already configured. See the
+[official OpenCode MCP guide](https://opencode.ai/docs/mcp-servers/).
 
 ### Claude Code
 
@@ -250,18 +233,25 @@ Update your assistant's MCP entry to pass the variables to Redlaunch:
 env_vars = ["REDLAUNCH_URL", "REDLAUNCH_RUN_TOKEN"]
 ```
 
-**OpenCode:** add an `environment` field inside the existing `redlaunch` entry
-(under `mcp` in v1 or `mcp.servers` in v2):
+**OpenCode:** add `environment` inside `mcp.redlaunch`. The complete entry
+looks like this; keep any other servers already in your configuration:
 
 ```json
-"environment": {
-  "REDLAUNCH_URL": "{env:REDLAUNCH_URL}",
-  "REDLAUNCH_RUN_TOKEN": "{env:REDLAUNCH_RUN_TOKEN}"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "redlaunch": {
+      "type": "local",
+      "command": ["/absolute/path/to/redlaunch/bin/redlaunch", "mcp"],
+      "enabled": true,
+      "environment": {
+        "REDLAUNCH_URL": "{env:REDLAUNCH_URL}",
+        "REDLAUNCH_RUN_TOKEN": "{env:REDLAUNCH_RUN_TOKEN}"
+      }
+    }
+  }
 }
 ```
-
-This is a field to insert into the existing JSON object, not a complete file.
-Add a comma between it and the preceding field.
 
 **Claude Code:** in your project's `.mcp.json`, update the Redlaunch entry to
 include `env`, keeping any other servers:
@@ -338,6 +328,30 @@ with `redlaunch mcp --allow-manage` (client arguments `["mcp", "--allow-manage"]
 `REDLAUNCH_RUN_TOKEN` and `--allow-run` remain independent and optional; both
 credential types can be configured in the same subprocess.
 
+For OpenCode, use the same `mcp.redlaunch` structure with the management
+credential references and mutation flag:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "redlaunch": {
+      "type": "local",
+      "command": ["/absolute/path/to/redlaunch/bin/redlaunch", "mcp", "--allow-manage"],
+      "enabled": true,
+      "environment": {
+        "REDLAUNCH_URL": "{env:REDLAUNCH_URL}",
+        "REDLAUNCH_MANAGEMENT_TOKEN": "{env:REDLAUNCH_MANAGEMENT_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Supply both environment variables when launching OpenCode, then run
+`opencode mcp list` to verify the connection. Remove `--allow-manage` to expose
+only management inventory and job polling.
+
 | Tools | Required arguments |
 | --- | --- |
 | `list_applications` | None |
@@ -408,6 +422,7 @@ before another dispatch.
 
 | Problem | What to do |
 | --- | --- |
+| OpenCode reports `mcp.servers.enabled` or rejects the `servers` object | Move `redlaunch` directly under `mcp`, as in Step 2. Run `opencode mcp list` from the project directory. |
 | Redlaunch is missing from the assistant's tools | Check the configuration file location, executable path, and JSON or TOML syntax. Start a new session in the configured project. |
 | “Command not found” or “Permission denied” | Use the full path to the built executable on the assistant's computer. Rebuild with `make build` if needed. |
 | Running `redlaunch mcp` manually appears to do nothing | This is normal: it waits for the assistant. Stop it with Ctrl+C and let your assistant launch it. |
