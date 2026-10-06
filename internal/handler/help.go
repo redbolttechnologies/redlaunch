@@ -52,7 +52,7 @@ var helpGuides = []helpGuide{
 	{Slug: "recipes", Title: "Deployment recipes", Description: "Complete GitHub Actions workflows for images, migrations, and deployments.", File: "RECIPES.md"},
 	{Slug: "ssh-keys", Title: "Server SSH keys", Description: "Create, use, rotate, and revoke automation keys.", File: "SSH_KEYS.md"},
 	{Slug: "api-tokens", Title: "API tokens", Description: "Trigger one-off service runs and poll their status from CI.", File: "API_TOKENS.md"},
-	{Slug: "mcp", Title: "MCP server", Description: "Connect agents, generate GitHub Actions workflows, and use optional live API tools.", File: "MCP.md"},
+	{Slug: "mcp", Title: "Using Redlaunch MCP", Description: "Set up Codex, OpenCode, or Claude Code and ask for help with Redlaunch workflows.", File: "MCP.md"},
 }
 
 var helpSections = []helpSection{
@@ -75,8 +75,8 @@ var helpSections = []helpSection{
 		{"How to deploy by copying an image", "Stream a Docker image directly to the server without a registry.", "/help/recipes#recipe-4-deploy-an-application-from-github-actions-by-copying-the-image-directly"},
 		{"How to create and revoke SSH keys", "Set up the dedicated SSH user and securely store a CI key.", "/help/ssh-keys#create-a-key"},
 		{"How to use API tokens", "Scope a token to an application, dispatch a run, and wait for completion.", "/help/api-tokens#create-a-token"},
-		{"How to connect agents with MCP", "Configure the local stdio server and generate GitHub Actions workflows.", "/help/mcp#build-and-connect"},
-		{"How to enable live MCP tools", "Configure scoped API credentials for status polling and optional service runs.", "/help/mcp#optional-live-api-tools"},
+		{"How to use Redlaunch MCP", "Check prerequisites and connect Codex, OpenCode, or Claude Code step by step.", "/help/mcp#before-you-start"},
+		{"How to connect MCP to your VPS", "Set up a server connection to check task progress and optionally run services.", "/help/mcp#step-4-connect-to-your-vps-when-needed"},
 		{"How to update Redlaunch", "Use make update or the Update action in Settings.", "/help/reference#installation"},
 	}},
 	{ID: "operations", Title: "Operations & troubleshooting", Description: "Maintain the installation and diagnose common problems.", Links: []helpLink{

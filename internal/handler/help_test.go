@@ -31,8 +31,8 @@ func TestHelpAvailableBeforeSetupAndInSidebar(t *testing.T) {
 		`<h1 id="page-title">Help</h1>`, "Getting started", "First steps", "How-to guides",
 		"Operations &amp; troubleshooting", `data-copy-target="help-install-command"`,
 		`data-copy-target="help-tunnel-command"`, `href="/help" aria-current="page"`,
-		"How to connect agents with MCP", `href="/help/mcp#build-and-connect"`,
-		"How to enable live MCP tools", `href="/help/mcp#optional-live-api-tools"`,
+		"How to use Redlaunch MCP", `href="/help/mcp#before-you-start"`,
+		"How to connect MCP to your VPS", `href="/help/mcp#step-4-connect-to-your-vps-when-needed"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q", want)
@@ -65,7 +65,15 @@ func TestHelpGuidesAndLinks(t *testing.T) {
 			}
 		}
 		if guide.Slug == "mcp" {
-			for _, want := range []string{"redlaunch mcp", "mcpServers", "generate_run_workflow", "REDLAUNCH_RUN_TOKEN", "--allow-run", `href="/help/api-tokens"`, `href="/help/recipes"`} {
+			for _, want := range []string{
+				"Before you start", "Step 1: Prepare the Redlaunch program", "Step 2: Connect your coding assistant",
+				"Step 3: Try your first request", "Step 4: Connect to your VPS when needed", "Step 5: Allow service runs when needed",
+				`id="codex"`, "~/.codex/config.toml", "mcp_servers.redlaunch", "env_vars",
+				`id="opencode"`, "opencode.json", "opencode mcp list", "{env:REDLAUNCH_RUN_TOKEN}",
+				`id="claude-code"`, "claude mcp add --transport stdio", ".mcp.json", "${REDLAUNCH_RUN_TOKEN}",
+				"redlaunch mcp", "mcpServers", "generate_run_workflow", "REDLAUNCH_RUN_TOKEN", "--allow-run",
+				`href="/help/api-tokens"`, `href="/help/recipes"`, "Troubleshooting",
+			} {
 				if !strings.Contains(body, want) {
 					t.Errorf("MCP help missing usage instruction %q", want)
 				}

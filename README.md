@@ -86,9 +86,10 @@ For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
 
-For agents building GitHub Actions workflows and integrations, use the local
-stdio server with `redlaunch mcp`. See the [MCP server guide](MCP.md) for client
-configuration, bundled guides, workflow generation, and optional API tools.
+Connect your coding assistant to Redlaunch with `redlaunch mcp`. The
+[Redlaunch MCP guide](MCP.md) walks through prerequisites, setup for Codex,
+OpenCode, and Claude Code, your first workflow request, and an optional
+connection to your VPS for checking progress and running one-off services.
 
 Open **Help** in the sidebar (or visit `/help`) for Getting started, First
 steps, how-to guides, and troubleshooting. The online help includes these
