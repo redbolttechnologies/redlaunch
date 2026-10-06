@@ -241,11 +241,11 @@ type Routing struct {
 // RoutingInput contains the user-supplied values needed to create or update a
 // routing. The selected domain is supplied separately by the service method.
 type RoutingInput struct {
-	Subdomain   string
-	Path        string
-	ServiceName string
-	ServicePort int
-	ServicePath string
+	Subdomain   string `json:"subdomain"`
+	Path        string `json:"path"`
+	ServiceName string `json:"service_name"`
+	ServicePort int    `json:"service_port"`
+	ServicePath string `json:"service_path"`
 }
 
 // Service is the metadata for one service in an application's Compose file.
@@ -504,47 +504,47 @@ type PostgreSQLCredentialsInput struct {
 // ApplicationHealthcheck contains the optional healthcheck command and Compose
 // timing settings for a custom application container.
 type ApplicationHealthcheck struct {
-	Command     string
-	Interval    string
-	Timeout     string
-	Retries     string
-	StartPeriod string
+	Command     string `json:"command"`
+	Interval    string `json:"interval"`
+	Timeout     string `json:"timeout"`
+	Retries     string `json:"retries"`
+	StartPeriod string `json:"start_period"`
 }
 
 // ApplicationServiceDependency maps a custom application container to one of
 // the application's existing services.
 type ApplicationServiceDependency struct {
-	ServiceName string
-	Condition   string
+	ServiceName string `json:"service_name"`
+	Condition   string `json:"condition"`
 }
 
 // ApplicationPortMapping publishes one container port on the host.
 type ApplicationPortMapping struct {
-	HostPort      string
-	ContainerPort string
-	Protocol      string
+	HostPort      string `json:"host_port"`
+	ContainerPort string `json:"container_port"`
+	Protocol      string `json:"protocol"`
 }
 
 // ApplicationVolumeMapping mounts a named volume or an application-relative
 // host path at a container path.
 type ApplicationVolumeMapping struct {
-	Source  string
-	Target  string
-	Options string
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Options string `json:"options"`
 }
 
 // ApplicationServiceInput contains the user-supplied values needed to create
 // a custom application container.
 type ApplicationServiceInput struct {
-	ServiceName    string
-	ImageName      string
-	AutoStart      bool
-	Entrypoint     string
-	Healthcheck    ApplicationHealthcheck
-	DependsOn      []ApplicationServiceDependency
-	RestartPolicy  string
-	PortMappings   []ApplicationPortMapping
-	VolumeMappings []ApplicationVolumeMapping
+	ServiceName    string                         `json:"service_name"`
+	ImageName      string                         `json:"image_name"`
+	AutoStart      bool                           `json:"auto_start"`
+	Entrypoint     string                         `json:"entrypoint"`
+	Healthcheck    ApplicationHealthcheck         `json:"healthcheck"`
+	DependsOn      []ApplicationServiceDependency `json:"depends_on"`
+	RestartPolicy  string                         `json:"restart_policy"`
+	PortMappings   []ApplicationPortMapping       `json:"port_mappings"`
+	VolumeMappings []ApplicationVolumeMapping     `json:"volume_mappings"`
 }
 
 // ValidateName trims and validates a human-readable application name.

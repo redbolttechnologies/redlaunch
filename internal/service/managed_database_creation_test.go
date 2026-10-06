@@ -201,3 +201,27 @@ func TestManagedDatabaseEmptyUsernameUsesExactDatabaseName(t *testing.T) {
 		})
 	}
 }
+
+func TestMachineDatabaseCreationRequiresExistingOwner(t *testing.T) {
+	runner := &managedDatabasesRunnerFake{running: true}
+	managed := enabledManagedDatabasesForCreation(t, runner)
+	_, err := managed.CreateDatabase(t.Context(), application.ManagedDatabaseCreateInput{Name: "analytics", Owner: "reporter", RequireExistingOwner: true})
+	if !errors.Is(err, application.ErrManagedDatabaseUserNotFound) {
+		t.Fatalf("missing owner: %v", err)
+	}
+	for _, sql := range runner.execCalls {
+		if strings.Contains(sql, "CREATE ROLE") || strings.Contains(sql, "CREATE DATABASE") {
+			t.Fatal("missing owner created resources")
+		}
+	}
+	runner.execFunc = func(sql string) (string, error) {
+		if strings.HasPrefix(sql, "SELECT 1 FROM pg_roles") {
+			return "1", nil
+		}
+		return "", nil
+	}
+	result, err := managed.CreateDatabase(t.Context(), application.ManagedDatabaseCreateInput{Name: "analytics", Owner: "reporter", RequireExistingOwner: true})
+	if err != nil || result.Credentials != nil {
+		t.Fatalf("existing owner creation: %v", err)
+	}
+}

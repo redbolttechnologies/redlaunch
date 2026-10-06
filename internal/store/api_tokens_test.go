@@ -112,3 +112,81 @@ func TestCreateAPITokenRejectsMissingHash(t *testing.T) {
 		t.Fatalf("CreateAPIToken(nil hash) error = %v, want %v", err, application.ErrAPITokenHashMissing)
 	}
 }
+
+func TestManagementTokenMigrationPreservesExistingRunTokens(t *testing.T) {
+	path := t.TempDir() + "/redlaunch.db"
+	database, err := Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := database.Create(t.Context(), application.Application{Name: "test", FolderName: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := database.CreateAPIToken(t.Context(), application.APIToken{DisplayName: "run", ApplicationID: item.ID, Scope: application.APITokenScopeRun}, []byte("run-verifier"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reconstruct v21's actual NOT NULL table with a populated token before
+	// reopening, so this tests the migration rather than only the fresh schema.
+	_, err = database.db.Exec(`DROP INDEX idx_api_tokens_application_id;
+ ALTER TABLE api_tokens RENAME TO api_tokens_new;
+ CREATE TABLE api_tokens (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,display_name TEXT NOT NULL,prefix TEXT NOT NULL,
+ token_hash BLOB NOT NULL UNIQUE,application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+ scope TEXT NOT NULL,created_at TEXT NOT NULL,expires_at TEXT,last_used_at TEXT);
+ INSERT INTO api_tokens SELECT * FROM api_tokens_new;
+ DROP TABLE api_tokens_new;
+ DELETE FROM schema_migrations WHERE version=22;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	restored, err := database.GetAPITokenByHash(t.Context(), []byte("run-verifier"))
+	if err != nil || restored.ID != run.ID || restored.ApplicationID != item.ID {
+		t.Fatal("run token lost during migration")
+	}
+	manage, err := database.CreateAPIToken(t.Context(), application.APIToken{DisplayName: "manage", Scope: application.APITokenScopeManage}, []byte("manage-verifier"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manage.ID <= run.ID {
+		t.Fatal("token IDs reused")
+	}
+	var reference any
+	if err := database.db.QueryRow("SELECT application_id FROM api_tokens WHERE id=?", manage.ID).Scan(&reference); err != nil || reference != nil {
+		t.Fatal("management token must have NULL application reference")
+	}
+	// Removing an application must revoke its run tokens, while server-wide
+	// management tokens remain valid.
+	if _, err := database.db.Exec("DELETE FROM applications WHERE id=?", item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.GetAPIToken(t.Context(), run.ID); !errors.Is(err, application.ErrAPITokenNotFound) {
+		t.Fatal("application token survived deletion")
+	}
+	if _, err := database.GetAPITokenByHash(t.Context(), []byte("manage-verifier")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateAPIToken(t.Context(), application.APIToken{Scope: application.APITokenScopeManage, ApplicationID: 99}, []byte("invalid")); err == nil {
+		t.Fatal("invalid scope association persisted")
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.GetAPIToken(t.Context(), manage.ID); err != nil {
+		t.Fatal("migration is not repeatable", err)
+	}
+}

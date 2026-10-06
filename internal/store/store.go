@@ -2115,6 +2115,32 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record managed databases migration: %w", err)
 		}
 	}
+	var managementTokensApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 22`).Scan(&managementTokensApplied); err != nil {
+		return fmt.Errorf("check management tokens migration: %w", err)
+	}
+	if managementTokensApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			CREATE TABLE api_tokens_v22 (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				display_name TEXT NOT NULL, prefix TEXT NOT NULL,
+				token_hash BLOB NOT NULL UNIQUE,
+				application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE,
+				scope TEXT NOT NULL,
+				created_at TEXT NOT NULL, expires_at TEXT, last_used_at TEXT,
+				CHECK ((scope = 'manage' AND application_id IS NULL) OR (scope = 'run' AND application_id IS NOT NULL))
+			);
+			INSERT INTO api_tokens_v22 SELECT * FROM api_tokens;
+			DROP TABLE api_tokens;
+			ALTER TABLE api_tokens_v22 RENAME TO api_tokens;
+			CREATE INDEX idx_api_tokens_application_id ON api_tokens(application_id);
+		`); err != nil {
+			return fmt.Errorf("migrate management tokens: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (22, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record management tokens migration: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

@@ -247,3 +247,35 @@ func TestRevokeAPITokenRendersNotFound(t *testing.T) {
 		t.Fatalf("revoke failure did not explain the missing token: %s", body)
 	}
 }
+
+func TestCreateManagementTokenInSettings(t *testing.T) {
+	tokens := newFakeAPITokenService()
+	web := newSettingsHandlerWithAPITokens(t, &fakeApplicationService{}, tokens)
+	form := url.Values{"csrf_token": {web.csrfToken}, "display_name": {"MCP management"}, "application_id": {"manage"}, "expires": {"90"}}
+	request := httptest.NewRequest(http.MethodPost, "/settings/api-tokens", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	response := httptest.NewRecorder()
+	web.Routes().ServeHTTP(response, request)
+	if response.Code != 201 || len(tokens.tokens) != 1 || tokens.tokens[0].Scope != application.APITokenScopeManage || tokens.tokens[0].ApplicationID != 0 {
+		t.Fatal("management token not created", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{"Manage this server", "REDLAUNCH_MANAGEMENT_TOKEN", "/api/v1/management/"} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatal("missing management guidance", expected)
+		}
+	}
+	response = httptest.NewRecorder()
+	web.Routes().ServeHTTP(response, httptest.NewRequest("GET", "/settings", nil))
+	if strings.Contains(response.Body.String(), "rlr_testtokenplaintext") {
+		t.Fatal("plaintext rendered after creation")
+	}
+	// The new scope selection must retain the existing CSRF check.
+	request = httptest.NewRequest(http.MethodPost, "/settings/api-tokens", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	web.Routes().ServeHTTP(response, request)
+	if response.Code != 403 || len(tokens.tokens) != 1 {
+		t.Fatal("management token creation bypassed CSRF")
+	}
+}

@@ -1,13 +1,14 @@
 # Using Redlaunch MCP
 
 Redlaunch MCP lets your coding assistant read Redlaunch's guides and help you
-write GitHub Actions workflows. You can ask for help in everyday language,
+write GitHub Actions workflows and manage server resources. You can ask for help in everyday language,
 such as “Create a workflow to run my database migrations.” MCP is the connection
 that gives the assistant access to these Redlaunch tools.
 
 Start with the basic setup below. It can read guides and generate workflows
 without connecting to your server. Later, you can optionally let the assistant
-check an existing task's progress or start a one-off service, such as a migration.
+check an existing task's progress, start a one-off service, or manage applications
+with a separate server-wide management token.
 
 ## Before you start
 
@@ -194,8 +195,9 @@ Skip this step if you only want guides and generated workflows.
 
 A server connection lets the assistant check an existing service run's progress.
 Starting a run requires the separate opt-in in Step 5. MCP does not provide
-an application list, edit Compose files, publish images, create tokens, or
-deploy applications through the API.
+an application list through an application-scoped run token. Server-wide
+management uses the separate token and tools below. Raw Compose editing, image
+publishing, and token creation are not exposed through MCP.
 
 ### Prepare the server and token
 
@@ -322,6 +324,86 @@ assistant. The API token itself still authorizes runs; this flag controls
 whether the MCP assistant has a tool to start them. Revoke the token in
 Redlaunch if it should no longer grant access.
 
+## Server-wide management
+
+Create a token in **Settings → API tokens** with **Scope → Server-wide
+management**. Store it as `REDLAUNCH_MANAGEMENT_TOKEN` in the MCP subprocess's
+secure environment, alongside `REDLAUNCH_URL`. It grants access to every managed
+application and the shared database cluster. Existing application run tokens
+cannot call the management API, and management tokens cannot call the separate
+application-run API.
+
+Management credentials alone expose inventory and job polling. Enable mutations
+with `redlaunch mcp --allow-manage` (client arguments `["mcp", "--allow-manage"]`).
+`REDLAUNCH_RUN_TOKEN` and `--allow-run` remain independent and optional; both
+credential types can be configured in the same subprocess.
+
+| Tools | Required arguments |
+| --- | --- |
+| `list_applications` | None |
+| `get_application`, `delete_application`, `list_services`, `list_environment`, `list_domains` | `application_id` |
+| `create_application` | `name`, `folder_name` |
+| `rename_application` | `application_id`, `name` |
+| `create_service` | `application_id`, `configuration` |
+| `update_service` | `application_id`, `service_name`, `configuration` |
+| `delete_service` | `application_id`, `service_name` |
+| `service_action` | `application_id`, `service_name`, `action` (`start`, `stop`, `restart`, or `run`) |
+| `add_variable`, `add_secret` | `application_id`, `name`, `value` |
+| `update_variable`, `update_secret` | `application_id`, `original_name`, `name`, `value` |
+| `delete_variable`, `delete_secret`, `create_domain`, `delete_domain` | `application_id`, `name` |
+| `list_routings` | `application_id`, `domain_id` |
+| `create_routing` | `application_id`, `domain_id`, `routing` |
+| `update_routing` | `application_id`, `domain_id`, `routing_id`, `routing` |
+| `delete_routing` | `application_id`, `domain_id`, `routing_id` |
+| `get_database_cluster`, `list_databases`, `list_database_users`, `disable_database_cluster` | None |
+| `enable_database_cluster` | `version`, `default_user`, `password`; optional `provider` (PostgreSQL only) |
+| `database_cluster_action` | `action` (`start`, `stop`, or `restart`) |
+| `create_database` | `name`, `owner` (an existing database user) |
+| `delete_database` | `name` |
+| `create_database_user` | `username`, `password`, `databases` (an array, possibly empty) |
+| `update_database_user_password` | `username`, `password` |
+| `set_database_user_permissions` | `username`, `databases` (replaces the access list) |
+| `delete_database_user` | `username` |
+| `get_management_job` | `job_id` |
+
+`configuration` uses `service_name`, `image_name`, `auto_start`, `entrypoint`,
+`healthcheck`, `depends_on`, `restart_policy`, `port_mappings`, and
+`volume_mappings`. Creation/update uses the existing custom application-service
+workflow, including managed labels, both environment files, mount validation,
+and Compose validation. Update replaces the custom service configuration;
+it does not patch individual settings. PostgreSQL/Redis presets are not
+created by this tool; existing services can be listed, acted on, and deleted.
+
+`routing` uses `subdomain`, `path`, `service_name`, `service_port`, and
+`service_path`. IDs come from the domain and routing inventories. Resource
+metadata inside `result` retains the application's existing Go field names
+(for example `ID`, `Name`, and `ApplicationID`); tool arguments use snake case.
+
+Environment inventory returns names and file availability only, including for
+variables, since credentials may have been misplaced in `vars.env`. Writes
+never echo values. Empty values are supported, including clearing secrets.
+Existing environment parser/writer semantics apply; updates do not automatically
+restart application services. Restart or recreate them separately as appropriate.
+
+Create a database user with a supplied password and an empty `databases` array
+before creating a database owned by that user. Database creation requires an
+existing owner to avoid generating undisclosed credentials. Database/user
+permissions and deletion use the same services as the web interface.
+
+All mutations return `status: running` and `job_id`; poll `get_management_job`
+until `complete` (with `result`) or `failed`. Results exclude secret values,
+credentials, logs, and process error output. Failures are deliberately generic.
+Do not retry mutations blindly after failure, timeout, or a lost response:
+operations can have partial effects, and retries do not reuse previous jobs.
+A completed deletion can remove application files and database data.
+
+Jobs use Redlaunch's tracked operation runtime (eight concurrent operations
+across the application, with a 15-minute deadline). Management jobs are retained
+for one hour after completion, with at most 1,024 retained jobs. Token expiry
+and revocation apply on every dispatch and poll; revocation does not cancel work
+already admitted. Server restarts remove jobs; a `404` needs resource inspection
+before another dispatch.
+
 ## Troubleshooting
 
 | Problem | What to do |
@@ -333,8 +415,23 @@ Redlaunch if it should no longer grant access.
 | Starting a service is unavailable | Complete Step 4 and add `--allow-run` as shown in Step 5. |
 | Connection fails | Check the HTTPS address and certificate, or make sure your SSH tunnel is still running. Open the management address in your browser to check reachability. |
 | HTTP 401 | The token is invalid, expired, or revoked. Create a replacement and update your environment. |
-| HTTP 403 | The token belongs to another application. Use a token for the application you requested. |
+| HTTP 403 | Check token scope: run tools need a token for the requested application; management tools need a server-wide management token. |
 | HTTP 404 | Check the application ID, service name, and job ID. Jobs disappear after a Redlaunch restart and expire one hour after finishing. Investigate the previous run before starting another. |
+
+## Protocol and limits
+
+The server implements the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+with initialization, ping, tools, and resources. It negotiates revisions
+`2024-11-05`, `2025-03-26`, `2025-06-18`, and `2025-11-25`; other requested
+versions receive `2025-11-25` for the client to accept or reject. It does not
+advertise subscriptions, prompts, tasks, or list-change notifications.
+
+Requests are handled sequentially. Messages are limited to 1 MiB and API
+responses to 64 KiB. Each API request has a 30-second timeout. Client
+cancellation notifications do not cancel an admitted server-side job;
+terminating the MCP process cancels its HTTP request, but the Redlaunch job may
+continue. The generated workflow caps the job at 15 minutes and its polling
+at 60 attempts; timeout does not stop the server-side task.
 
 For token rotation and API errors, see [API tokens](API_TOKENS.md). For complete
 deployment workflows, see [Deployment recipes](RECIPES.md).

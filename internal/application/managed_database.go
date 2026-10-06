@@ -98,8 +98,10 @@ type ManagedDatabaseEnableInput struct {
 
 // ManagedDatabaseCreateInput contains the values for creating a logical DB.
 type ManagedDatabaseCreateInput struct {
-	Name  string
-	Owner string
+	// RequireExistingOwner prevents generating credentials for machine requests.
+	RequireExistingOwner bool
+	Name                 string
+	Owner                string
 }
 
 // ManagedDatabaseUserInput contains the values for creating a database user.

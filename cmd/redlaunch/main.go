@@ -68,13 +68,14 @@ func runMCP(ctx context.Context, args []string, input io.Reader, output io.Write
 	flags := flag.NewFlagSet("redlaunch mcp", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	allowRun := flags.Bool("allow-run", false, "expose the one-off service run tool")
+	allowManage := flags.Bool("allow-manage", false, "expose server-wide management mutations")
 	if err := flags.Parse(args); err != nil {
-		return errors.New("usage: redlaunch mcp [--allow-run]")
+		return errors.New("usage: redlaunch mcp [--allow-run] [--allow-manage]")
 	}
 	if flags.NArg() != 0 {
 		return errors.New("mcp accepts no positional arguments")
 	}
-	server, err := mcp.New(os.Getenv("REDLAUNCH_URL"), os.Getenv("REDLAUNCH_RUN_TOKEN"), *allowRun)
+	server, err := mcp.NewWithManagement(os.Getenv("REDLAUNCH_URL"), os.Getenv("REDLAUNCH_RUN_TOKEN"), os.Getenv("REDLAUNCH_MANAGEMENT_TOKEN"), *allowRun, *allowManage)
 	if err != nil {
 		return err
 	}

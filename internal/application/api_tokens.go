@@ -25,8 +25,10 @@ const (
 	MaxAPITokenLifetimeDays = 366
 
 	// APITokenScopeRun authorizes one-off service runs in the pinned
-	// application. It is the only scope issued in v1.
+	// application.
 	APITokenScopeRun = "run"
+	// APITokenScopeManage authorizes server-wide management, issued explicitly.
+	APITokenScopeManage = "manage"
 )
 
 var (
@@ -45,9 +47,8 @@ var (
 
 // APIToken is one operator-managed machine credential. Only metadata is
 // persisted; the plaintext token is returned transiently at creation time and
-// must never be stored or logged. A token authorizes one-off service runs in
-// its pinned application, nothing else: it cannot read environment files,
-// run arbitrary commands, or reach other applications.
+// must never be stored or logged. Run tokens pin one application; management
+// tokens have ApplicationID zero and authorize the server-wide management API.
 type APIToken struct {
 	ID            int64
 	DisplayName   string
@@ -63,6 +64,7 @@ type APIToken struct {
 // ExpiresInDays of zero creates a token that never expires; otherwise it must
 // be within 1 and MaxAPITokenLifetimeDays.
 type APITokenInput struct {
+	Scope         string
 	DisplayName   string
 	ApplicationID int64
 	ExpiresInDays int

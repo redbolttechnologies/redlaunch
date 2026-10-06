@@ -1,5 +1,5 @@
 // Package mcp provides a local stdio MCP interface to public integration guides
-// and the existing application-scoped Redlaunch API. It never opens the
+// and the authenticated Redlaunch machine APIs. It never opens the
 // database, reads local configuration files, or invokes Docker.
 package mcp
 
@@ -22,8 +22,10 @@ var integerID = regexp.MustCompile(`^-?[0-9]+$`)
 
 // Server serves one MCP session. Each subprocess owns its own session.
 type Server struct {
-	client   *apiClient
-	allowRun bool
+	client      *apiClient
+	allowRun    bool
+	management  *apiClient
+	allowManage bool
 }
 
 // New allows credential-free documentation use. Supplying API configuration
@@ -120,7 +122,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 					"protocolVersion": version,
 					"capabilities":    map[string]any{"tools": map[string]any{}, "resources": map[string]any{}},
 					"serverInfo":      map[string]string{"name": "redlaunch", "version": "1.0.0"},
-					"instructions":    "Read the integration guides before creating workflows. The token API only runs registered services and polls jobs; deployments use the documented SSH recipes. Never request or embed real credentials. run_service changes server state and is available only when enabled by the operator.",
+					"instructions":    "Read the integration guides before creating workflows. Application-scoped run tokens run registered services and poll jobs. Management tools use a separate server-wide token; mutations require --allow-manage. Never echo secret values or embed credentials in workflows. Poll get_management_job after a management mutation; inspect failed or lost jobs before retrying.",
 				}
 				initialized = true
 			case "ping":

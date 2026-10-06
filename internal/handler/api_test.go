@@ -55,7 +55,11 @@ func (s *fakeAPITokenService) Create(_ context.Context, input application.APITok
 	if err != nil {
 		return application.APITokenSetup{}, err
 	}
-	if input.ApplicationID < 1 {
+	scope := input.Scope
+	if scope == "" {
+		scope = application.APITokenScopeRun
+	}
+	if input.ApplicationID < 1 && scope != application.APITokenScopeManage {
 		return application.APITokenSetup{}, application.ErrAPITokenApplicationRequired
 	}
 	token := application.APIToken{
@@ -63,7 +67,7 @@ func (s *fakeAPITokenService) Create(_ context.Context, input application.APITok
 		DisplayName:   name,
 		Prefix:        "rlr_testtoken",
 		ApplicationID: input.ApplicationID,
-		Scope:         application.APITokenScopeRun,
+		Scope:         scope,
 		CreatedAt:     time.Now().UTC(),
 	}
 	s.nextID++

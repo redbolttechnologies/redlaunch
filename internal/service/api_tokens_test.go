@@ -225,3 +225,39 @@ func TestNewAPITokenServiceRejectsMissingDependencies(t *testing.T) {
 		t.Fatal("NewAPITokenService(nil catalog) error = nil, want dependency error")
 	}
 }
+
+func TestManagementTokenHasIndependentServerScope(t *testing.T) {
+	service, repository := newAPITokenServiceForTest()
+	setup, err := service.Create(t.Context(), application.APITokenInput{DisplayName: "Management", Scope: application.APITokenScopeManage, ExpiresInDays: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := service.Authenticate(t.Context(), setup.Plaintext)
+	if err != nil || authenticated.Scope != application.APITokenScopeManage || authenticated.ApplicationID != 0 {
+		t.Fatalf("management authentication: %#v, %v", authenticated, err)
+	}
+	for _, input := range []application.APITokenInput{
+		{DisplayName: "invalid", Scope: application.APITokenScopeManage, ApplicationID: 7},
+		{DisplayName: "invalid", Scope: "unknown"},
+		{DisplayName: "invalid", Scope: application.APITokenScopeRun},
+	} {
+		if _, err := service.Create(t.Context(), input); err == nil {
+			t.Fatal("invalid token scope accepted")
+		}
+	}
+	repository.mu.Lock()
+	row := repository.items[setup.Token.ID]
+	expired := time.Now().Add(-time.Minute)
+	row.token.ExpiresAt = &expired
+	repository.items[setup.Token.ID] = row
+	repository.mu.Unlock()
+	if _, err := service.Authenticate(t.Context(), setup.Plaintext); !errors.Is(err, application.ErrAPITokenExpired) {
+		t.Fatal("expired management token accepted")
+	}
+	if err := service.Revoke(t.Context(), setup.Token.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Authenticate(t.Context(), setup.Plaintext); !errors.Is(err, application.ErrAPITokenInvalid) {
+		t.Fatal("revoked management token accepted")
+	}
+}

@@ -4,15 +4,19 @@ API tokens let external automation, for example GitHub Actions, trigger a
 one-off service run (such as a database migration) without SSH shell access,
 Docker access, or knowledge of any secrets.
 
-A token authorizes exactly one action: starting one-off runs (`docker compose
+An application-scoped run token authorizes exactly one action: starting one-off runs (`docker compose
 run --rm` semantics) in **one pinned application**. It cannot read
 environment files, run arbitrary commands (the command comes from the
 admin-managed `compose.yml`), reach other applications, or open a shell.
 
+Server-wide management tokens use a separate `manage` scope and authorize
+application, service, environment, routing, and shared database administration.
+They do not broaden existing run tokens. See the management API contract below.
+
 ## Create a token
 
 1. Open **Settings → API tokens**.
-2. Select **Create API token**, enter a display name, pick the application,
+2. Select **Create API token**, enter a display name, pick the application (or **Server-wide management**),
    and pick an expiry (30/90/180/365 days, or never).
 3. Copy the token from the one-time dialog. It is shown only there
    (`Cache-Control: no-store`) and Redlaunch stores only its SHA-256 hash.
@@ -148,6 +152,50 @@ sent over plain HTTP can be intercepted.
 | `403` | Valid token, but not scoped to this application. |
 | `404` | Unknown application, service, or job ID. |
 | `503` | The operation system is busy; retry shortly. |
+
+## Management API
+
+Use a separate **Server-wide management** token as `REDLAUNCH_MANAGEMENT_TOKEN`.
+Tokens are created and revoked through the authenticated Settings page; the
+management API cannot mint tokens. Storage, expiry, and immediate revocation
+use the same hashed-token service as run tokens. Management tokens have no
+application reference and survive application deletion.
+
+`POST /api/v1/management/<operation>` accepts a JSON object whose fields match
+the MCP tool arguments in [the management tool catalog](MCP.md#server-wide-management).
+This is a fixed operation API: even read operations use POST. Send `{}` when
+an operation takes no arguments. Unknown, extra, missing, null, mistyped, and
+oversized arguments are rejected. Maximum request body size is 1 MiB.
+
+```sh
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $REDLAUNCH_MANAGEMENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"name":"Example","folder_name":"example"}' \
+  "$REDLAUNCH_URL/api/v1/management/create_application"
+```
+
+Reads return `200` with `{"status":"complete","result":...}`. Mutations return
+`202` with `{"status":"running","job_id":"..."}` and run asynchronously. Poll
+`GET /api/v1/management/jobs/<job_id>` using a management Bearer token. Any valid
+management token can poll a server-wide management job. Completion returns
+`status: complete` and a sanitized `result`; failure returns `status: failed`
+and a generic error. HTTP failures and jobs never include upstream Docker
+output, credentials, or environment values. Inspect resource state before
+retrying a failed or lost mutation. Management dispatches have no automatic
+retry or duplicate-job reuse.
+
+`401` means missing, invalid, revoked, or expired authentication; `403` means
+the credential is not a server-wide management token. `400` rejects invalid
+request arguments; `404` means an unknown operation/job or missing resource on
+a read. Read failures otherwise return `500`; mutation failures appear in the
+job. `503` means worker or retained-job capacity is full. Requests and responses
+use `Cache-Control: no-store`. Browser session cookies do not authenticate
+machine requests, and machine requests do not require browser CSRF cookies.
+The Settings token creation form still requires session authentication and CSRF.
+
+See [MCP management](MCP.md#server-wide-management) for supported operations,
+configuration schemas, secret handling, job lifetimes, and database ownership.
 
 ## References
 

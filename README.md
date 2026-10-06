@@ -90,6 +90,8 @@ Connect your coding assistant to Redlaunch with `redlaunch mcp`. The
 [Redlaunch MCP guide](MCP.md) walks through prerequisites, setup for Codex,
 OpenCode, and Claude Code, your first workflow request, and an optional
 connection to your VPS for checking progress and running one-off services.
+Use a separate server-wide management token to manage applications, services,
+environment values, routing, and managed databases.
 
 Open **Help** in the sidebar (or visit `/help`) for Getting started, First
 steps, how-to guides, and troubleshooting. The online help includes these

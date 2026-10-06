@@ -481,6 +481,9 @@ func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application
 	}
 	password := ""
 	if strings.TrimSpace(exists) != "1" {
+		if input.RequireExistingOwner {
+			return result, application.ErrManagedDatabaseUserNotFound
+		}
 		password, err = generateDatabasePassword()
 		if err != nil {
 			return result, fmt.Errorf("generate database user password: %w", err)

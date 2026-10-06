@@ -54,7 +54,8 @@ func (s *APITokenService) List(ctx context.Context) ([]application.APIToken, err
 	return s.repository.ListAPITokens(ctx)
 }
 
-// Create issues one API token for an existing application and returns the
+// Create issues an application-scoped run token or an explicit server-wide
+// management token and returns the
 // plaintext exactly once. Callers must render it immediately and never store
 // or log it.
 func (s *APITokenService) Create(ctx context.Context, input application.APITokenInput) (application.APITokenSetup, error) {
@@ -65,14 +66,27 @@ func (s *APITokenService) Create(ctx context.Context, input application.APIToken
 	if err != nil {
 		return application.APITokenSetup{}, err
 	}
-	if input.ApplicationID < 1 {
-		return application.APITokenSetup{}, application.ErrAPITokenApplicationRequired
+	scope := input.Scope
+	if scope == "" {
+		scope = application.APITokenScopeRun
 	}
-	if _, err := s.applications.Get(ctx, input.ApplicationID); err != nil {
-		if errors.Is(err, application.ErrNotFound) {
-			return application.APITokenSetup{}, application.ErrAPITokenApplicationNotFound
+	switch scope {
+	case application.APITokenScopeRun:
+		if input.ApplicationID < 1 {
+			return application.APITokenSetup{}, application.ErrAPITokenApplicationRequired
 		}
-		return application.APITokenSetup{}, fmt.Errorf("get API token application: %w", err)
+		if _, err := s.applications.Get(ctx, input.ApplicationID); err != nil {
+			if errors.Is(err, application.ErrNotFound) {
+				return application.APITokenSetup{}, application.ErrAPITokenApplicationNotFound
+			}
+			return application.APITokenSetup{}, fmt.Errorf("get API token application: %w", err)
+		}
+	case application.APITokenScopeManage:
+		if input.ApplicationID != 0 {
+			return application.APITokenSetup{}, application.ErrAPITokenScopeInvalid
+		}
+	default:
+		return application.APITokenSetup{}, application.ErrAPITokenScopeInvalid
 	}
 	if err := application.ValidateAPITokenExpiry(input.ExpiresInDays); err != nil {
 		return application.APITokenSetup{}, err
@@ -90,7 +104,7 @@ func (s *APITokenService) Create(ctx context.Context, input application.APIToken
 		DisplayName:   displayName,
 		Prefix:        plaintext[:application.APITokenPrefixLength],
 		ApplicationID: input.ApplicationID,
-		Scope:         application.APITokenScopeRun,
+		Scope:         scope,
 		CreatedAt:     now,
 	}
 	if input.ExpiresInDays > 0 {
@@ -136,7 +150,7 @@ func (s *APITokenService) Authenticate(ctx context.Context, plaintext string) (a
 	if item.Expired(time.Now().UTC()) {
 		return application.APIToken{}, application.ErrAPITokenExpired
 	}
-	if item.Scope != application.APITokenScopeRun {
+	if item.Scope != application.APITokenScopeRun && item.Scope != application.APITokenScopeManage {
 		return application.APIToken{}, application.ErrAPITokenScopeInvalid
 	}
 	now := time.Now().UTC()

@@ -9,7 +9,7 @@ import (
 )
 
 func TestMCPStartsWithoutWebApplicationConfiguration(t *testing.T) {
-	for _, key := range []string{"REDLAUNCH_URL", "REDLAUNCH_RUN_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "AUTH_SESSION_SECRET"} {
+	for _, key := range []string{"REDLAUNCH_URL", "REDLAUNCH_RUN_TOKEN", "REDLAUNCH_MANAGEMENT_TOKEN", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "AUTH_SESSION_SECRET"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("DB_PATH", t.TempDir()+"/unused.db")
@@ -21,7 +21,7 @@ func TestMCPStartsWithoutWebApplicationConfiguration(t *testing.T) {
 	if !strings.Contains(output.String(), `"name":"redlaunch"`) {
 		t.Fatal("MCP initialization failed")
 	}
-	for _, args := range [][]string{{"extra"}, {"--unknown"}, {"--allow-run"}} {
+	for _, args := range [][]string{{"extra"}, {"--unknown"}, {"--allow-run"}, {"--allow-manage"}} {
 		if err := runMCP(context.Background(), args, strings.NewReader(""), io.Discard); err == nil {
 			t.Fatal("invalid MCP configuration accepted")
 		}

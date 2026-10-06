@@ -58,6 +58,7 @@ type Handler struct {
 	serverSSHKeys                  serverSSHKeyService
 	apiTokens                      apiTokenService
 	apiRunJobs                     *apiRunJobStore
+	managementJobs                 *managementJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	registryImages                 registryImageService
@@ -639,6 +640,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	managedDatabasesJobs := newManagedDatabasesJobStore()
 	selfUpdateJobs := newSelfUpdateJobStore()
 	apiRunJobs := newAPIRunJobStore()
+	managementJobs := &managementJobStore{jobs: make(map[string]*managementJob)}
 	serviceActionJobs := newServiceActionJobStore()
 	proxyActionJobs := newProxyActionJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
@@ -652,6 +654,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(managedDatabasesJobs.expire)
 	jobs.registerCleanup(selfUpdateJobs.expire)
 	jobs.registerCleanup(apiRunJobs.expire)
+	jobs.registerCleanup(managementJobs.expire)
 	jobs.registerCleanup(serviceActionJobs.expire)
 	jobs.registerCleanup(proxyActionJobs.expire)
 	return &Handler{
@@ -682,6 +685,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		serverSSHKeys:                  serverSSHKeys,
 		apiTokens:                      apiTokens,
 		apiRunJobs:                     apiRunJobs,
+		managementJobs:                 managementJobs,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
@@ -808,6 +812,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/edit", h.updateApplicationContainer)
 	mux.HandleFunc("POST /applications", h.createApplication)
 	mux.HandleFunc("GET /healthz", h.health)
+	mux.HandleFunc("POST /api/v1/management/{operation}", h.managementAPI)
+	mux.HandleFunc("GET /api/v1/management/jobs/{job}", h.managementJobStatus)
 	mux.HandleFunc("POST /api/v1/applications/{id}/services/{service}/run", h.runServiceViaAPI)
 	mux.HandleFunc("GET /api/v1/applications/{id}/services/{service}/run/status", h.apiRunJobStatus)
 	static, err := fs.Sub(embeddedFiles, "static")

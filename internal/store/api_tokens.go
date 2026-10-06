@@ -15,7 +15,7 @@ import (
 // uses GetAPITokenByHash instead.
 func (s *Store) ListAPITokens(ctx context.Context) ([]application.APIToken, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, display_name, prefix, application_id, scope, created_at,
+		SELECT id, display_name, prefix, COALESCE(application_id, 0), scope, created_at,
 			expires_at, last_used_at
 		FROM api_tokens
 		ORDER BY id ASC`)
@@ -44,7 +44,7 @@ func (s *Store) GetAPIToken(ctx context.Context, id int64) (application.APIToken
 	var createdAt string
 	var expiresAt, lastUsedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, display_name, prefix, application_id, scope, created_at,
+		SELECT id, display_name, prefix, COALESCE(application_id, 0), scope, created_at,
 			expires_at, last_used_at
 		FROM api_tokens
 		WHERE id = ?`, id).Scan(
@@ -79,7 +79,7 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash []byte) (applic
 	var createdAt string
 	var expiresAt, lastUsedAt sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, display_name, prefix, application_id, scope, created_at,
+		SELECT id, display_name, prefix, COALESCE(application_id, 0), scope, created_at,
 			expires_at, last_used_at
 		FROM api_tokens
 		WHERE token_hash = ?`, tokenHash).Scan(
@@ -113,6 +113,10 @@ func (s *Store) CreateAPIToken(ctx context.Context, item application.APIToken, t
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = time.Now().UTC()
 	}
+	var applicationID any = item.ApplicationID
+	if item.Scope == application.APITokenScopeManage && item.ApplicationID == 0 {
+		applicationID = nil
+	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO api_tokens (display_name, prefix, token_hash, application_id,
 			scope, created_at, expires_at, last_used_at)
@@ -120,7 +124,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, item application.APIToken, t
 		item.DisplayName,
 		item.Prefix,
 		tokenHash,
-		item.ApplicationID,
+		applicationID,
 		item.Scope,
 		item.CreatedAt.Format(time.RFC3339Nano),
 		formatNullableAPITokenTime(item.ExpiresAt),

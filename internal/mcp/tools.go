@@ -39,7 +39,7 @@ func (s *Server) tools() []tool {
 			tools = append(tools, tool{"run_service", "Start a registered one-off service using the configured token. Changes server state and may run migrations. Returns job_id; poll get_run_status. Concurrent duplicates reuse a running job, but retrying after completion starts another run.", schema(serviceProperties(), "application_id", "service_name"), map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}})
 		}
 	}
-	return tools
+	return append(tools, s.managementTools()...)
 }
 
 func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (any, *rpcError) {
@@ -52,6 +52,12 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (an
 	}
 	if !available {
 		return nil, failure(-32602, "Unknown or disabled tool")
+	}
+	if name == "get_management_job" {
+		return s.callManagement(ctx, name, raw)
+	}
+	if _, ok := application.ManagementOperationByName(name); ok {
+		return s.callManagement(ctx, name, raw)
 	}
 	if name == "read_guide" {
 		var args struct {

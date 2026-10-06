@@ -45,7 +45,7 @@ func (h *Handler) createAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	input, ok := parseAPITokenInput(displayName, applicationRef, expiryRef)
 	if !ok {
-		h.renderAPITokenError(w, r, displayName, applicationRef, expiryRef, nil, "Select an application and a valid expiry for the API token.", http.StatusBadRequest)
+		h.renderAPITokenError(w, r, displayName, applicationRef, expiryRef, nil, "Select a scope and a valid expiry for the API token.", http.StatusBadRequest)
 		return
 	}
 	setup, err := h.apiTokens.Create(r.Context(), input)
@@ -70,11 +70,18 @@ func (h *Handler) createAPIToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseAPITokenInput validates the creation form selection. The application
-// reference must be a positive ID and the expiry one of the offered options
+// reference must be a positive ID, or "manage" for server-wide access,
+// and the expiry one of the offered options
 // (or empty for a token that never expires).
 func parseAPITokenInput(displayName, applicationRef, expiryRef string) (application.APITokenInput, bool) {
+	scope := application.APITokenScopeRun
 	applicationID, err := strconv.ParseInt(applicationRef, 10, 64)
-	if err != nil || applicationID < 1 {
+	if applicationRef == "manage" {
+		scope = application.APITokenScopeManage
+		applicationID = 0
+		err = nil
+	}
+	if err != nil || (scope == application.APITokenScopeRun && applicationID < 1) {
 		return application.APITokenInput{}, false
 	}
 	expiresInDays := 0
@@ -96,6 +103,7 @@ func parseAPITokenInput(displayName, applicationRef, expiryRef string) (applicat
 		expiresInDays = days
 	}
 	return application.APITokenInput{
+		Scope:         scope,
 		DisplayName:   displayName,
 		ApplicationID: applicationID,
 		ExpiresInDays: expiresInDays,
@@ -198,7 +206,8 @@ func apiTokenCreateUserError(err error) bool {
 		errors.Is(err, application.ErrAPITokenDisplayNameInvalid) ||
 		errors.Is(err, application.ErrAPITokenApplicationRequired) ||
 		errors.Is(err, application.ErrAPITokenApplicationNotFound) ||
-		errors.Is(err, application.ErrAPITokenExpiryInvalid)
+		errors.Is(err, application.ErrAPITokenExpiryInvalid) ||
+		errors.Is(err, application.ErrAPITokenScopeInvalid)
 }
 
 func apiTokenCreateMessage(err error) string {
@@ -212,6 +221,8 @@ func apiTokenCreateMessage(err error) string {
 	case errors.Is(err, application.ErrAPITokenApplicationRequired),
 		errors.Is(err, application.ErrAPITokenApplicationNotFound):
 		return "Select an application for the API token. Refresh the page and try again."
+	case errors.Is(err, application.ErrAPITokenScopeInvalid):
+		return "Select a valid scope for the API token."
 	case errors.Is(err, application.ErrAPITokenExpiryInvalid):
 		return "Select a valid expiry for the API token."
 	default:
