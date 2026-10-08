@@ -913,7 +913,7 @@ func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
 	if !strings.Contains(body, `class="sidebar"`) {
 		t.Fatalf("GET / did not render the sidebar: %s", body)
 	}
-	if !strings.Contains(body, `<img class="brand-mark" src="/static/redlaunch-logo.svg" alt=""`) || !strings.Contains(body, `<span>redlaunch</span>`) || !strings.Contains(body, `href="/static/favicon.svg"`) {
+	if !strings.Contains(body, `<img class="brand-mark" src="/static/redlaunch-mark.svg" alt=""`) || !strings.Contains(body, `<span>redlaunch</span>`) || !strings.Contains(body, `href="/static/favicon.svg"`) {
 		t.Fatalf("GET / did not render the Redlaunch logo in the shell header: %s", body)
 	}
 	if !strings.Contains(body, `href="/applications"`) || !strings.Contains(body, ">Applications</span>") {
@@ -5523,7 +5523,7 @@ func TestAuthenticationRedirectsToLoginAndRendersGoogleButton(t *testing.T) {
 	if strings.Count(body, "Login with Google") != 1 || !strings.Contains(body, `class="google-logo"`) {
 		t.Fatalf("login page did not render one Google button and logo: %s", body)
 	}
-	if !strings.Contains(body, `<img class="brand-mark" src="/static/redlaunch-logo.svg" alt=""`) || !strings.Contains(body, `<span>redlaunch</span>`) || !strings.Contains(body, `href="/static/favicon.svg"`) {
+	if !strings.Contains(body, `<img class="brand-mark" src="/static/redlaunch-mark.svg" alt=""`) || !strings.Contains(body, `<span>redlaunch</span>`) || !strings.Contains(body, `href="/static/favicon.svg"`) {
 		t.Fatalf("login page did not render the Redlaunch logo: %s", body)
 	}
 	if strings.Contains(body, `class="sidebar"`) || !strings.Contains(body, `href="/auth/google?next=%2F"`) {
