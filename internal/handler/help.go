@@ -58,8 +58,8 @@ var helpGuides = []helpGuide{
 var helpSections = []helpSection{
 	{ID: "getting-started", Title: "Getting started", Description: "Install Redlaunch and connect to your server.", Links: []helpLink{
 		{"Install on Ubuntu or Debian", "Docker prerequisites, the installer, and Google OAuth configuration.", "/help/installation"},
-		{"Configure Google login", "Register the exact local and public callback URLs.", "/help/installation#2-create-google-oauth-credentials"},
-		{"Complete first-run setup", "Choose Caddy, a local registry, or both.", "/help/installation#4-complete-the-redlaunch-first-run-setup"},
+		{"Configure Google login", "Register the exact local and public callback URLs.", "/help/installation#1-prepare-google-login"},
+		{"Complete first-run setup", "Choose Caddy, a local registry, or both.", "/help/installation#complete-first-run-setup"},
 	}},
 	{ID: "first-steps", Title: "First steps", Description: "Create your first application and make it available.", Links: []helpLink{
 		{"Create an application", "Choose a name and a folder for its managed Compose project.", "/help/installation#create-an-application"},
