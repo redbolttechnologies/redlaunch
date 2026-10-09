@@ -3748,6 +3748,17 @@ h1 {
   gap: var(--space-5);
 }
 
+/* Keep nested settings tabs within the form's grid track on narrow screens. */
+.proxy-settings-form {
+  min-width: 0;
+}
+
+.proxy-settings-form .settings-tablist {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .field {
   display: grid;
   gap: var(--space-2);

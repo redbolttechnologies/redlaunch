@@ -14,6 +14,7 @@
 
   <header class="page-heading application-details-heading">
     {{template "application-name-block" .}}
+    <a class="button button-secondary" href="/applications/{{.ApplicationDetailsPage.Application.ID}}/proxy-settings">Proxy settings</a>
   </header>
 
   {{if .ApplicationDetailsPage.ClonedFrom}}

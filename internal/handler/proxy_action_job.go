@@ -25,13 +25,14 @@ type proxyActionJobStore struct {
 }
 
 type proxyActionJob struct {
-	mu sync.RWMutex
+	mu       sync.RWMutex
+	closeURL string
 
-	id         string
-	operation  string
-	state      string
+	id          string
+	operation   string
+	state       string
 	errorDetail string
-	finishedAt time.Time
+	finishedAt  time.Time
 }
 
 type proxyActionProgressData struct {
@@ -143,6 +144,7 @@ func (j *proxyActionJob) snapshot() proxyActionProgressData {
 		JobID:       j.id,
 		Operation:   j.operation,
 		State:       j.state,
+		CloseURL:    j.closeURL,
 		ErrorDetail: j.errorDetail,
 	}
 }
@@ -169,6 +171,8 @@ func (h *Handler) runProxyActionJob(ctx context.Context, job *proxyActionJob) {
 
 func proxyActionUserMessage(operation string) string {
 	switch operation {
+	case "settings":
+		return "Proxy settings could not be applied. The previous settings were restored."
 	case "start":
 		return "The proxy could not be started."
 	case "stop":

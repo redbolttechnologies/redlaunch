@@ -124,6 +124,8 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
+- Configure global proxy defaults and application overrides for compression,
+  security headers, request body limits, upstream timeouts, and Cache-Control.
 - Enable one server-level managed Postgres cluster from the Databases page,
   then create/drop databases, manage users and per-database access, and
   schedule, restore, download, and remove PostgreSQL backups. The enabled
@@ -322,6 +324,45 @@ such as `secrets.env` to the workload. Symlinked ancestors or files inside
 the managed trees are rejected for the same reason. The bundled manager
 service follows the same rule: it carries the `redlaunch.managed=true` label
 and loads both `vars.env` and `secrets.env`.
+
+## Proxy settings
+
+Open **Proxy → Settings** for global defaults, or **Proxy settings** on an
+application page for overrides. These policies apply to application routes;
+Redlaunch's management interface keeps its existing policy. An unchecked
+application category inherits the global category. A checked category replaces
+all fields in that category, so an empty category can disable an inherited
+policy. Existing installations keep Caddy defaults until settings are configured.
+
+Compression supports gzip, Zstandard, and Brotli, negotiated using the client's
+`Accept-Encoding` header, with Zstandard preferred, then Brotli, then gzip.
+The minimum response size is configurable in bytes (0 uses Caddy’s 512-byte
+default). Enabling Brotli builds a Caddy 2.11.4 image with a pinned Brotli extension under
+`core/proxy/`. This requires access to the image and Go module registries and
+can take several minutes. The extended image remains available after Brotli is
+disabled. Custom proxy images/builds are not automatically replaced.
+
+Security headers include X-Content-Type-Options, X-Frame-Options,
+Referrer-Policy, Content-Security-Policy, Permissions-Policy, and
+Strict-Transport-Security. Nonempty values replace upstream response headers;
+blank values preserve them. Header values must be printable ASCII, at most
+4096 bytes, without Caddy placeholders (`{...}`). Configure CSP and HSTS for
+your application's requirements before enabling them.
+
+Request body limits are bytes (0 means unlimited, up to 1 TiB). Timeouts cover
+upstream connection, response headers, reads, and writes. Use Go durations such
+as `30s` or `2m`, up to `24h`; blank uses Caddy defaults. For connections,
+`0s` uses Caddy’s 3s default; for response headers, reads, and writes, `0s`
+disables the corresponding timeout.
+
+Cache-Control configures a response header, for example `private, no-store`.
+A blank value preserves the upstream header. The policy applies to every
+response for the application; use `public` only when all content is safe for
+shared caching. Redlaunch does not store cached responses in the proxy.
+
+Saving validates inputs and applies the full proxy configuration in a background
+job. A failed apply restores the previous stored policy and proxy configuration.
+Settings are persisted in SQLite and removed when their application is deleted.
 
 ## License
 

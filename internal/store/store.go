@@ -2141,6 +2141,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("record management tokens migration: %w", err)
 		}
 	}
+	var proxySettingsApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 23`).Scan(&proxySettingsApplied); err != nil {
+		return err
+	}
+	if proxySettingsApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE proxy_settings (
+   scope INTEGER PRIMARY KEY,
+   application_id INTEGER UNIQUE REFERENCES applications(id) ON DELETE CASCADE,
+   settings TEXT NOT NULL,
+   CHECK ((scope = 0 AND application_id IS NULL) OR (scope > 0 AND scope = application_id AND application_id IS NOT NULL))
+  )`); err != nil {
+			return fmt.Errorf("create proxy settings: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(23,?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

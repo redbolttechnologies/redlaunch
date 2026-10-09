@@ -725,6 +725,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /dashboard", h.dashboard)
 	mux.HandleFunc("GET /dashboard/metrics", h.dashboardMetricsFragment)
 	mux.HandleFunc("GET /proxy", h.proxyPage)
+	mux.HandleFunc("GET /proxy/settings", h.proxySettingsPage)
+	mux.HandleFunc("POST /proxy/settings", h.proxySettingsPage)
+	mux.HandleFunc("GET /applications/{id}/proxy-settings", h.proxySettingsPage)
+	mux.HandleFunc("POST /applications/{id}/proxy-settings", h.proxySettingsPage)
 	mux.HandleFunc("POST /proxy/start", h.startProxy)
 	mux.HandleFunc("POST /proxy/stop", h.stopProxy)
 	mux.HandleFunc("POST /proxy/restart", h.restartProxy)
@@ -4772,6 +4776,7 @@ func applicationContainerNonEmptyVolumes(values []application.ApplicationVolumeM
 }
 
 type pageData struct {
+	ProxySettingsPage            *proxySettingsPageData
 	ActivePage                   string
 	Server                       ServerInfo
 	CSRFToken                    string

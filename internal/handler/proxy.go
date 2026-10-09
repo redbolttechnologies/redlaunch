@@ -121,7 +121,9 @@ func (h *Handler) proxyActionProgress(jobID string) (*proxyActionProgressData, b
 	}
 	progress := job.snapshot()
 	progress.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(jobID)
-	progress.CloseURL = "/proxy"
+	if progress.CloseURL == "" {
+		progress.CloseURL = "/proxy"
+	}
 	return &progress, true
 }
 
@@ -132,7 +134,9 @@ func (h *Handler) proxyActionToastsForPage(explicitJobID string) []*proxyActionP
 		if job := h.proxyActionJobs.get(explicitJobID); job != nil {
 			snapshot := job.snapshot()
 			snapshot.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(snapshot.JobID)
-			snapshot.CloseURL = "/proxy"
+			if snapshot.CloseURL == "" {
+				snapshot.CloseURL = "/proxy"
+			}
 			toasts = append(toasts, &snapshot)
 			seen[snapshot.JobID] = struct{}{}
 		}
@@ -143,7 +147,9 @@ func (h *Handler) proxyActionToastsForPage(explicitJobID string) []*proxyActionP
 			continue
 		}
 		snapshot.StatusURL = "/proxy/action/status?id=" + url.QueryEscape(snapshot.JobID)
-		snapshot.CloseURL = "/proxy"
+		if snapshot.CloseURL == "" {
+			snapshot.CloseURL = "/proxy"
+		}
 		toasts = append(toasts, &snapshot)
 	}
 	return toasts

@@ -346,6 +346,10 @@ func caddyRewriteDirectives(requestPath, servicePath string) []string {
 }
 
 func renderCaddyfileWithManagementPort(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain, managementPort int) string {
+	return renderCaddyfileWithSettings(routings, redlaunchDomains, managementPort, nil)
+}
+
+func renderCaddyfileWithSettings(routings []application.Routing, redlaunchDomains []application.RedlaunchDomain, managementPort int, settings map[int64]application.ProxySettings) string {
 	byHost := make(map[string][]application.Routing)
 	for _, item := range routings {
 		host := routingHost(item.DomainName, item.Subdomain)
@@ -401,9 +405,7 @@ func renderCaddyfileWithManagementPort(routings []application.Routing, redlaunch
 				builder.WriteString(directive)
 				builder.WriteString("\n")
 			}
-			builder.WriteString("        reverse_proxy ")
-			builder.WriteString(routingUpstream(item))
-			builder.WriteString("\n")
+			writeProxyPolicy(&builder, settings[item.ApplicationID].Resolve(settings[0]), routingUpstream(item))
 			builder.WriteString("    }\n")
 		}
 		if _, ok := redlaunchHosts[host]; ok {
@@ -477,7 +479,26 @@ func (s *Applications) refreshProxyConfigurationLocked(ctx context.Context) erro
 	if err != nil {
 		return fmt.Errorf("read Caddyfile: %w", err)
 	}
-	configuration := renderCaddyfileWithManagementPort(routings, redlaunchDomains, s.managementPort)
+	var policies map[int64]application.ProxySettings
+	if repo, ok := s.repository.(proxySettingsRepository); ok {
+		policies, err = repo.ListProxySettings(ctx)
+		if err != nil {
+			return fmt.Errorf("read proxy settings: %w", err)
+		}
+	}
+	for _, stored := range policies {
+		policy := stored.Resolve(policies[0])
+		if policy.Compression != nil && policy.Compression.Brotli {
+			var changed bool
+			updatedCompose, changed, err = enableProxyBrotli(s.proxyDirectory, updatedCompose)
+			if err != nil {
+				return err
+			}
+			composeChanged = composeChanged || changed
+			break
+		}
+	}
+	configuration := renderCaddyfileWithSettings(routings, redlaunchDomains, s.managementPort, policies)
 	caddyChanged := !caddySnapshot.exists || string(caddySnapshot.contents) != configuration
 	if !composeChanged && !caddyChanged {
 		return nil

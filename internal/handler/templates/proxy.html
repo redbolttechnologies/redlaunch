@@ -10,6 +10,7 @@
       <p>Inspect the shared Caddy reverse proxy and its routed domains{{with .ProxyPage.Details.ContainerName}} · <code>{{.}}</code>{{end}}.</p>
     </div>
     <div class="service-details-actions" role="group" aria-label="Proxy actions">
+      <a class="button button-secondary" href="/proxy/settings">Settings</a>
       <form class="service-details-action-form" method="post" action="/proxy/start">
         <input type="hidden" name="csrf_token" value="{{.ProxyPage.CSRFToken}}">
         <button class="button button-secondary service-details-action service-details-action-start" type="submit"{{if serviceIsRunning .ProxyPage.Details.Status}} disabled{{end}}>
