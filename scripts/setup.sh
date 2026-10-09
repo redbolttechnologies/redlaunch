@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+# Keep entered credentials in shell variables, even if a caller exported them.
+set +a
+unset local_password password_confirmation local_email
 umask 077
 export LC_ALL=C
 
@@ -92,21 +95,39 @@ write_dotenv_value() {
 [[ ! -e $dotenv_file && ! -L $dotenv_file ]] || fail '.env already exists; remove it before running make setup'
 
 printf 'Redlaunch VPS setup\n\n' >&2
-google_client_id=$(read_value 'Google Client ID: ')
-google_client_secret=$(read_required_secret 'Google Client Secret: ')
-auth_session_secret=$(read_secret 'Auth session secret (optional; press Enter to generate): ')
-authorized_email=$(read_value 'First authorized email address: ')
+local_email=$(read_value 'First user email address: ')
+
+while true; do
+	local_password=$(read_secret 'Password (8–128 characters): ')
+	# The Go command validates Unicode length; this catches common mistakes
+	# before building the image. Do not impose complexity or shell-quoting rules.
+	if [[ ${#local_password} -lt 8 || ${#local_password} -gt 512 ]]; then
+		printf 'Password must contain 8–128 characters.\n' >&2
+		continue
+	fi
+	password_confirmation=$(read_secret 'Confirm password: ')
+	if [[ $local_password == "$password_confirmation" ]]; then break; fi
+	printf 'Passwords do not match. Try again.\n' >&2
+done
+unset password_confirmation
+
+google_client_id=
+google_client_secret=
+printf 'Enable Google sign-in? [y/N]: ' >&2
+IFS= read -r enable_google || fail 'input interrupted'
+case $enable_google in
+	y|Y|yes|YES)
+		google_client_id=$(read_value 'Google Client ID: ')
+		google_client_secret=$(read_required_secret 'Google Client Secret: ')
+		;;
+	''|n|N|no|NO) ;;
+	*) fail 'answer yes or no for Google sign-in' ;;
+esac
+auth_session_secret=$(generate_session_secret) || fail 'could not generate a secure auth session secret'
 
 validate_dotenv_value GOOGLE_CLIENT_ID "$google_client_id"
 validate_dotenv_value GOOGLE_CLIENT_SECRET "$google_client_secret"
 validate_dotenv_value AUTH_SESSION_SECRET "$auth_session_secret"
-
-if [[ -z $auth_session_secret ]]; then
-	auth_session_secret=$(generate_session_secret) || fail 'could not generate a secure auth session secret'
-	printf 'Generated a secure auth session secret.\n' >&2
-elif [[ ${#auth_session_secret} -lt 32 ]]; then
-	fail 'AUTH_SESSION_SECRET must contain at least 32 characters'
-fi
 
 dotenv_tmp=$(mktemp .env.tmp.XXXXXX) || fail 'could not create a temporary .env file'
 chmod 600 "$dotenv_tmp"
@@ -140,6 +161,33 @@ done
 # Ensure values already exported in the VPS shell cannot override the values
 # entered during this setup run when Compose interpolates the .env file.
 unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REDIRECT_URL AUTH_SESSION_SECRET AUTH_COOKIE_SECURE MANAGEMENT_ACCESS_MODE APP_BIND_ADDRESS
+
+# Validate with the application's exact Unicode password policy before any
+# SSH-user changes. Re-prompt for invalid input without writing a credential.
+printf '\nEnsuring the persistent application data volume exists...\n' >&2
+docker volume create "$app_data_volume" >/dev/null
+printf '\nBuilding Redlaunch...\n' >&2
+docker compose build app
+while true; do
+	if printf '%s\n' "$local_password" | docker compose run --rm --no-TTY app auth-validate-password --email "$local_email" --password-stdin; then
+		break
+	else
+		validation_status=$?
+		if [[ $validation_status -eq 3 ]]; then
+			local_email=$(read_value 'First user email address: ')
+			continue
+		fi
+		[[ $validation_status -eq 2 ]] || fail 'could not validate credentials; check the Docker error above'
+	fi
+	local_password=$(read_secret 'Password (8–128 characters): ')
+	password_confirmation=$(read_secret 'Confirm password: ')
+	while [[ $local_password != "$password_confirmation" ]]; do
+		printf 'Passwords do not match. Try again.\n' >&2
+		local_password=$(read_secret 'Password (8–128 characters): ')
+		password_confirmation=$(read_secret 'Confirm password: ')
+	done
+	unset password_confirmation
+done
 
 # Dedicated login user for the Settings SSH keys tab. External automation
 # (for example GitHub Actions) logs in as this user; it owns no Redlaunch
@@ -228,13 +276,13 @@ ensure_redlaunch_host_keys() {
 ensure_redlaunch_ssh_user
 ensure_redlaunch_host_keys
 
-printf '\nEnsuring the persistent application data volume exists...\n' >&2
-docker volume create "$app_data_volume" >/dev/null
+printf '\nCreating the first local user...\n' >&2
+# --no-TTY keeps stdin as a pipe; no password enters argv, env files or logs.
+printf '%s\n' "$local_password" | docker compose run --rm --no-TTY app auth-create-user --email "$local_email" --password-stdin
+unset local_password
 
-printf '\nAdding the first authorized email...\n' >&2
-docker compose run --rm --build app auth-add-email --email "$authorized_email"
 
-printf '\nBuilding and starting Redlaunch...\n' >&2
-docker compose up -d --build
+printf '\nStarting Redlaunch...\n' >&2
+docker compose up -d
 
 printf '\nRedlaunch is running.\n' >&2
