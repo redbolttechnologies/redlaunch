@@ -41,6 +41,26 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 		return nil, err
 	}
 
+	// Create privately before SQLite opens the file so WAL/SHM sidecars inherit
+	// the same permissions. Existing databases now contain password hashes too.
+	file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("prepare database file: %w", err)
+	}
+	permissionErr := file.Chmod(0o600)
+	closeErr := file.Close()
+	if permissionErr != nil {
+		return nil, fmt.Errorf("protect database file: %w", permissionErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close database file: %w", closeErr)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(databasePath+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("protect database sidecar: %w", err)
+		}
+	}
+
 	dsn := "file:" + filepath.ToSlash(databasePath) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -81,8 +101,8 @@ func (s *Store) AddAuthorizedEmail(ctx context.Context, email string) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO authorized_emails (email, created_at)
-		VALUES (?, ?)`, email, time.Now().UTC().Format(time.RFC3339Nano))
+		INSERT INTO users (email, created_at, updated_at)
+		VALUES (?, ?, ?)`, email, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return application.ErrAuthorizedEmailAlreadyExists
@@ -102,7 +122,7 @@ func (s *Store) IsAuthorizedEmail(ctx context.Context, email string) (bool, erro
 	var exists int
 	err = s.db.QueryRowContext(ctx, `
 		SELECT 1
-		FROM authorized_emails
+		FROM users
 		WHERE email = ?
 		LIMIT 1`, email).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -119,7 +139,8 @@ func (s *Store) IsAuthorizedEmail(ctx context.Context, email string) (bool, erro
 func (s *Store) ListAuthorizedEmails(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT email
-		FROM authorized_emails
+		FROM users
+		WHERE email IS NOT NULL
 		ORDER BY email ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list authorized emails: %w", err)
@@ -2139,6 +2160,54 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (22, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record management tokens migration: %w", err)
+		}
+	}
+	var localUsersApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 23`).Scan(&localUsersApplied); err != nil {
+		return fmt.Errorf("check local users migration: %w", err)
+	}
+	if localUsersApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE local_users (
+			username TEXT PRIMARY KEY,
+			password_hash TEXT NOT NULL,
+			credential_version INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`); err != nil {
+			return fmt.Errorf("create local users table: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (23, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record local users migration: %w", err)
+		}
+	}
+	var usersApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=24`).Scan(&usersApplied); err != nil {
+		return err
+	}
+	if usersApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+		 CREATE TABLE users (
+		  id INTEGER PRIMARY KEY AUTOINCREMENT,
+		  email TEXT UNIQUE COLLATE NOCASE,
+		  legacy_username TEXT UNIQUE,
+		  password_hash TEXT NOT NULL DEFAULT '',
+		  credential_version INTEGER NOT NULL DEFAULT 1,
+		  created_at TEXT NOT NULL,
+		  updated_at TEXT NOT NULL,
+		  CHECK(email IS NOT NULL OR legacy_username IS NOT NULL)
+		 );
+		 INSERT INTO users(legacy_username,password_hash,credential_version,created_at,updated_at)
+		 SELECT username,password_hash,credential_version,created_at,updated_at FROM local_users;
+		 INSERT INTO users(email,created_at,updated_at)
+		 SELECT email,created_at,created_at FROM authorized_emails;
+		 CREATE TRIGGER users_keep_last BEFORE DELETE ON users
+		 WHEN (SELECT COUNT(*) FROM users) <= 1
+		 BEGIN SELECT RAISE(ABORT, 'last user cannot be deleted'); END;
+		`); err != nil {
+			return fmt.Errorf("migrate unified users: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(24,?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {

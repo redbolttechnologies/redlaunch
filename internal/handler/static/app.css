@@ -4594,11 +4594,14 @@ h1 {
   }
 
   .settings-tabs {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-tablist {
     flex-direction: row;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-right: 0;
     border-bottom: 1px solid hsl(var(--border));
     padding-right: 0;

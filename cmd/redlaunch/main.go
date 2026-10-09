@@ -34,6 +34,12 @@ func main() {
 
 	if err := dispatch(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, redlaunchauth.ErrPasswordInvalid) {
+			os.Exit(2)
+		}
+		if errors.Is(err, application.ErrEmailInvalid) || errors.Is(err, application.ErrEmailRequired) || errors.Is(err, application.ErrEmailTooLong) {
+			os.Exit(3)
+		}
 		os.Exit(1)
 	}
 }
@@ -55,6 +61,12 @@ func dispatch(ctx context.Context, args []string) error {
 		return runManagedBackup(ctx, args[1:])
 	case "selfupdate-run":
 		return runSelfUpdate(ctx, args[1:])
+	case "auth-validate-password":
+		return runValidatePassword(args[1:], os.Stdin)
+	case "auth-create-user":
+		return runLocalUser(ctx, args[1:], os.Stdin, false)
+	case "auth-reset-password":
+		return runLocalUser(ctx, args[1:], os.Stdin, true)
 	case "auth-add-email", "add-authorized-email":
 		return runAddAuthorizedEmail(ctx, args[1:])
 	case "compose-project-name":
@@ -114,16 +126,8 @@ func run(ctx context.Context) error {
 	if cfg.MetricsScope == config.MetricsScopeVPS && cfg.MetricsProcRoot == "" && cfg.MetricsFilesystemRoot == "" {
 		logger.Warn("METRICS_SCOPE=vps uses the default /proc and / paths without explicit host mounts; dashboard values describe this process's view unless METRICS_PROC_ROOT and METRICS_FILESYSTEM_ROOT point at host mounts (Docker) or the binary runs directly on the VPS")
 	}
-	if !cfg.GoogleAuthEnabled() {
-		return errors.New("Google authentication must be configured before starting Redlaunch")
-	}
-
-	setupService, err := service.NewSetupService(cfg.ProjectsRoot, compose.CommandRunner{})
-	if err != nil {
-		return fmt.Errorf("create setup service: %w", err)
-	}
-	if err := setupService.Initialize(); err != nil {
-		return fmt.Errorf("initialize application directories: %w", err)
+	if len(cfg.AuthSessionSecret) < 32 {
+		return errors.New("AUTH_SESSION_SECRET must contain at least 32 bytes before starting Redlaunch")
 	}
 
 	database, err := store.Open(ctx, cfg.DatabasePath)
@@ -135,6 +139,16 @@ func run(ctx context.Context) error {
 			logger.Error("close application database", "error", err)
 		}
 	}()
+	if err := checkAuthenticationReady(ctx, cfg, database); err != nil {
+		return err
+	}
+	setupService, err := service.NewSetupService(cfg.ProjectsRoot, compose.CommandRunner{})
+	if err != nil {
+		return fmt.Errorf("create setup service: %w", err)
+	}
+	if err := setupService.Initialize(); err != nil {
+		return fmt.Errorf("initialize application directories: %w", err)
+	}
 
 	applications, err := service.NewApplicationsWithOptions(database, cfg.ProjectsRoot, service.ApplicationsOptions{
 		ManagementHTTPAddr: cfg.HTTPAddr,
@@ -213,7 +227,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create self-update service: %w", err)
 	}
 
-	googleAuth, err := redlaunchauth.New(redlaunchauth.Config{
+	authentication, err := redlaunchauth.New(redlaunchauth.Config{
 		ClientID:      cfg.GoogleClientID,
 		ClientSecret:  cfg.GoogleClientSecret,
 		RedirectURL:   cfg.GoogleRedirectURL,
@@ -221,10 +235,15 @@ func run(ctx context.Context) error {
 		CookieSecure:  cfg.AuthCookieSecure || cfg.ManagementAccessMode == config.AccessModeManagedHTTPS,
 	}, database)
 	if err != nil {
-		return fmt.Errorf("create Google authentication service: %w", err)
+		return fmt.Errorf("create authentication service: %w", err)
 	}
 
+	users, err := service.NewUserService(database)
+	if err != nil {
+		return err
+	}
 	dependencies := handler.Dependencies{
+		Users:            users,
 		Setup:            setupService,
 		Applications:     applications,
 		Backups:          backupManager,
@@ -238,7 +257,7 @@ func run(ctx context.Context) error {
 			ProcRoot:       cfg.MetricsProcRoot,
 			FilesystemRoot: cfg.MetricsFilesystemRoot,
 		}),
-		Authentication: googleAuth,
+		Authentication: authentication,
 		Security: handler.SecurityConfig{
 			AccessMode:   cfg.ManagementAccessMode,
 			CookieSecure: cfg.AuthCookieSecure,

@@ -19,6 +19,7 @@ type Dependencies struct {
 	Backups          serviceBackupService
 	ManagedDatabases managedDatabasesService
 	ServerSSHKeys    serverSSHKeyService
+	Users            userManagementService
 	APITokens        apiTokenService
 	Registry         registryImageService
 	Metrics          dashboardMetricsService
@@ -65,6 +66,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	}
 	if deps.ServerSSHKeys != nil {
 		assembled = append(assembled, deps.ServerSSHKeys)
+	}
+	if deps.Users != nil {
+		assembled = append(assembled, deps.Users)
 	}
 	if deps.APITokens != nil {
 		assembled = append(assembled, deps.APITokens)

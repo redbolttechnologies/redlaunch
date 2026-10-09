@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"redlaunch/internal/application"
 )
@@ -31,6 +32,37 @@ func (h *Handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The settings could not be read.", http.StatusInternalServerError)
 		return
 	}
+	data.UsersActive = r.URL.Query().Get("tab") == "users"
+	action := r.URL.Query().Get("user_action")
+	if action == "create" {
+		data.UserDialog = action
+		data.UsersActive = true
+	}
+	if action == "password" || action == "delete" || action == "email" {
+		id, err := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		found := false
+		for _, user := range data.Users {
+			if user.ID == id {
+				found = true
+				data.UserID = id
+				data.UserEmail = user.Email
+				if data.UserEmail == "" {
+					data.UserEmail = user.LegacyUsername
+				}
+			}
+		}
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		data.UserDialog = action
+		data.UsersActive = true
+	}
+
 	h.writeSettingsPage(w, r, http.StatusOK, data, progress)
 }
 
@@ -43,6 +75,14 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 		return settingsPageData{}, err
 	}
 	data := settingsPageData{Domains: domains}
+	if h.users != nil {
+		users, err := h.users.List(ctx)
+		if err != nil {
+			return settingsPageData{}, err
+		}
+		data.Users = users
+		data.CanDeleteUser = len(users) > 1
+	}
 	if h.serverSSHKeys != nil {
 		data.SSHKeysUsername = h.serverSSHKeys.Username()
 		keys, err := h.serverSSHKeys.List(ctx)

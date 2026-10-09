@@ -1,0 +1,89 @@
+{{define "settings-users"}}
+<section class="application-tab-panel" id="users-panel" role="tabpanel" aria-labelledby="users-tab" tabindex="0"{{if not .SettingsPage.UsersActive}} hidden{{end}}>
+  <section class="service-widget" aria-labelledby="users-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="users-title">Users</h2>
+        <p>Manage administrator access. Users can sign in with their email and password, or with Google when Google sign-in is enabled.</p>
+      </div>
+      <a class="button button-primary" href="/settings?tab=users&amp;user_action=create" data-user-action="create" aria-controls="user-create-dialog" aria-haspopup="dialog" aria-expanded="false">Create user</a>
+    </header>
+    <div class="service-widget-body">
+      {{if .SettingsPage.Users}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table">
+          <caption class="sr-only">Users with access to Redlaunch</caption>
+          <thead><tr><th scope="col">Email</th><th scope="col">Password sign-in</th><th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th></tr></thead>
+          <tbody>
+            {{range .SettingsPage.Users}}
+            <tr>
+              <th scope="row">{{if .Email}}{{.Email}}{{else}}<code>{{.LegacyUsername}}</code> <span class="service-status-badge service-status-neutral">Email required</span>{{end}}</th>
+              <td>{{if .HasPassword}}Enabled{{else}}Not set{{end}}</td>
+              <td class="application-environment-actions">
+                <div class="application-environment-action-group">
+                  {{if not .Email}}<a class="button button-secondary" href="/settings?tab=users&amp;user_action=email&amp;user_id={{.ID}}" data-user-action="email" data-user-id="{{.ID}}" data-user-email="{{.LegacyUsername}}" aria-haspopup="dialog" aria-controls="user-email-dialog">Set email</a>{{end}}
+                  <a class="button button-secondary" href="/settings?tab=users&amp;user_action=password&amp;user_id={{.ID}}" data-user-action="password" data-user-id="{{.ID}}" data-user-email="{{if .Email}}{{.Email}}{{else}}{{.LegacyUsername}}{{end}}" aria-haspopup="dialog" aria-controls="user-password-dialog">Change password</a>
+                  {{if $.SettingsPage.CanDeleteUser}}
+                  <a class="button button-destructive" href="/settings?tab=users&amp;user_action=delete&amp;user_id={{.ID}}" data-user-action="delete" data-user-id="{{.ID}}" data-user-email="{{if .Email}}{{.Email}}{{else}}{{.LegacyUsername}}{{end}}" aria-haspopup="dialog" aria-controls="user-delete-dialog">Delete</a>
+                  {{else}}<button class="button button-destructive" type="button" disabled title="The last user cannot be deleted">Delete<span class="sr-only"> — the last user cannot be deleted</span></button>{{end}}
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}<p>No users are configured.</p>{{end}}
+    </div>
+  </section>
+</section>
+{{end}}
+
+{{define "user-dialogs"}}
+<dialog class="application-dialog" id="user-create-dialog" data-user-dialog="create"{{if eq .SettingsPage.UserDialog "create"}} open{{end}} aria-modal="true" aria-labelledby="user-create-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header"><div><h2 id="user-create-title">Create user</h2><p>Add an administrator who can access this server.</p></div></header>
+    <form class="application-form" method="post" action="/settings/users">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      {{if eq .SettingsPage.UserDialog "create"}}{{if .SettingsPage.UserError}}<div class="application-alert application-dialog-alert" role="alert">{{.SettingsPage.UserError}}</div>{{end}}{{end}}
+      <div class="field"><label for="user-create-email">Email</label><input id="user-create-email" name="email" type="email" value="{{if eq .SettingsPage.UserDialog "create"}}{{.SettingsPage.UserEmail}}{{end}}" maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false" required></div>
+      <div class="field"><label for="user-create-password">Password</label><input id="user-create-password" name="password" type="password" autocomplete="new-password" required><span class="field-help">Use 8–128 characters. Spaces and special characters are allowed.</span></div>
+      <div class="field"><label for="user-create-confirmation">Confirm password</label><input id="user-create-confirmation" name="password_confirmation" type="password" autocomplete="new-password" required></div>
+      <footer class="application-form-actions"><a class="button button-secondary" href="/settings?tab=users" data-user-close>Cancel</a><button class="button button-primary" type="submit">Create user</button></footer>
+    </form>
+  </div>
+</dialog>
+<dialog class="application-dialog" id="user-password-dialog" data-user-dialog="password"{{if eq .SettingsPage.UserDialog "password"}} open{{end}} aria-modal="true" aria-labelledby="user-password-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header"><div><h2 id="user-password-title">Change password</h2><p>Set a new password for <span data-user-display>{{.SettingsPage.UserEmail}}</span>. Existing sessions will be signed out.</p></div></header>
+    <form class="application-form" method="post" action="/settings/users/password">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}"><input type="hidden" name="id" value="{{.SettingsPage.UserID}}">
+      {{if eq .SettingsPage.UserDialog "password"}}{{if .SettingsPage.UserError}}<div class="application-alert application-dialog-alert" role="alert">{{.SettingsPage.UserError}}</div>{{end}}{{end}}
+      <div class="field"><label for="user-password">New password</label><input id="user-password" name="password" type="password" autocomplete="new-password" required><span class="field-help">Use 8–128 characters.</span></div>
+      <div class="field"><label for="user-password-confirmation">Confirm password</label><input id="user-password-confirmation" name="password_confirmation" type="password" autocomplete="new-password" required></div>
+      <footer class="application-form-actions"><a class="button button-secondary" href="/settings?tab=users" data-user-close>Cancel</a><button class="button button-primary" type="submit">Change password</button></footer>
+    </form>
+  </div>
+</dialog>
+<dialog class="application-dialog" id="user-delete-dialog" data-user-dialog="delete"{{if eq .SettingsPage.UserDialog "delete"}} open{{end}} aria-modal="true" aria-labelledby="user-delete-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header"><div><h2 id="user-delete-title">Delete user</h2><p>Remove <span data-user-display>{{.SettingsPage.UserEmail}}</span>? They will lose password and Google access. This action cannot be undone.</p></div></header>
+    <form class="application-form" method="post" action="/settings/users/delete">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}"><input type="hidden" name="id" value="{{.SettingsPage.UserID}}"><input type="hidden" name="confirm" value="yes">
+      {{if eq .SettingsPage.UserDialog "delete"}}{{if .SettingsPage.UserError}}<div class="application-alert application-dialog-alert" role="alert">{{.SettingsPage.UserError}}</div>{{end}}{{end}}
+      <footer class="application-form-actions"><a class="button button-secondary" href="/settings?tab=users" data-user-close>Cancel</a><button class="button button-destructive" type="submit">Delete user</button></footer>
+    </form>
+  </div>
+</dialog>
+<dialog class="application-dialog" id="user-email-dialog" data-user-dialog="email"{{if eq .SettingsPage.UserDialog "email"}} open{{end}} aria-modal="true" aria-labelledby="user-email-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header"><div><h2 id="user-email-title">Set email</h2><p>Use an email address to sign in instead of the previous username. Existing sessions will be signed out.</p></div></header>
+    <form class="application-form" method="post" action="/settings/users/email">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}"><input type="hidden" name="id" value="{{.SettingsPage.UserID}}">
+      {{if eq .SettingsPage.UserDialog "email"}}{{if .SettingsPage.UserError}}<div class="application-alert application-dialog-alert" role="alert">{{.SettingsPage.UserError}}</div>{{end}}{{end}}
+      <div class="field"><label for="user-set-email">Email</label><input id="user-set-email" name="email" type="email" value="{{if .SettingsPage.UserError}}{{.SettingsPage.UserEmail}}{{end}}" maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false" required></div>
+      <footer class="application-form-actions"><a class="button button-secondary" href="/settings?tab=users" data-user-close>Cancel</a><button class="button button-primary" type="submit">Save email</button></footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

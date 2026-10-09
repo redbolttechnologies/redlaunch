@@ -206,3 +206,18 @@ func TestLoadRejectsInvalidMetricsConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadAcceptsLocalSessionSettingsWithoutGoogle(t *testing.T) {
+	t.Setenv("GOOGLE_CLIENT_ID", "")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
+	t.Setenv("AUTH_SESSION_SECRET", strings.Repeat("s", 32))
+	t.Setenv("AUTH_COOKIE_SECURE", "false")
+	cfg, err := Load()
+	if err != nil || cfg.GoogleAuthEnabled() || cfg.AuthSessionSecret != strings.Repeat("s", 32) {
+		t.Fatal("local-only configuration rejected", err)
+	}
+	t.Setenv("AUTH_SESSION_SECRET", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("weak local session secret accepted")
+	}
+}

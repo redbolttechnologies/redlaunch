@@ -26,13 +26,14 @@ func TestRunComposeProjectNameSeparatesManagedResourceKinds(t *testing.T) {
 	}
 }
 
-func TestRunFailsClosedWithoutGoogleAuthentication(t *testing.T) {
+func TestRunFailsClosedWithoutSessionSecret(t *testing.T) {
 	t.Setenv("GOOGLE_CLIENT_ID", "")
 	t.Setenv("GOOGLE_CLIENT_SECRET", "")
 	t.Setenv("AUTH_COOKIE_SECURE", "false")
+	t.Setenv("AUTH_SESSION_SECRET", "")
 
-	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "Google authentication must be configured") {
-		t.Fatalf("run() error = %v, want missing Google authentication configuration error", err)
+	if err := run(context.Background()); err == nil || !strings.Contains(err.Error(), "AUTH_SESSION_SECRET must contain at least 32 bytes") {
+		t.Fatalf("run() error = %v, want missing session secret error", err)
 	}
 }
 
