@@ -296,9 +296,22 @@ button {
 }
 
 .brand-logo {
-  display: block;
-  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   height: 1.75rem;
+  color: hsl(var(--foreground));
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.brand-mark {
+  display: block;
+  flex-shrink: 0;
+  width: var(--space-6);
+  height: auto;
 }
 
 .side-menu {
@@ -4592,11 +4605,14 @@ h1 {
   }
 
   .settings-tabs {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-tablist {
     flex-direction: row;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-right: 0;
     border-bottom: 1px solid hsl(var(--border));
     padding-right: 0;

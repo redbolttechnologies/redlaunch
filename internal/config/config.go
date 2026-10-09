@@ -127,6 +127,9 @@ func Load() (Config, error) {
 			return Config{}, errors.New("AUTH_SESSION_SECRET must contain at least 32 bytes when Google authentication is enabled")
 		}
 	}
+	if cfg.AuthSessionSecret != "" && len(cfg.AuthSessionSecret) < 32 {
+		return Config{}, errors.New("AUTH_SESSION_SECRET must contain at least 32 bytes")
+	}
 	cfg.AuthCookieSecure, err = boolValue(environment, "AUTH_COOKIE_SECURE", false)
 	if err != nil {
 		return Config{}, err
@@ -141,9 +144,7 @@ func Load() (Config, error) {
 }
 
 // GoogleAuthEnabled reports whether both Google credentials are configured.
-// The server entry point uses this to fail closed when authentication is not
-// configured; the authorized-email command can still open the database before
-// the server is started.
+// Local login is independent of these optional credentials.
 func (c Config) GoogleAuthEnabled() bool {
 	return c.GoogleClientID != "" && strings.TrimSpace(c.GoogleClientSecret) != ""
 }

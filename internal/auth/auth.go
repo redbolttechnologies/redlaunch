@@ -1,4 +1,4 @@
-// Package auth implements the Google OAuth login flow and signed sessions.
+// Package auth implements local and Google login with signed sessions.
 package auth
 
 import (
@@ -50,7 +50,7 @@ type AuthorizedEmailStore interface {
 	IsAuthorizedEmail(context.Context, string) (bool, error)
 }
 
-// Config contains the credentials and session settings for Google login.
+// Config contains optional Google credentials and shared session settings.
 type Config struct {
 	ClientID        string
 	ClientSecret    string
@@ -65,16 +65,24 @@ type Config struct {
 }
 
 // User contains the non-secret identity details needed by the application UI.
-// Email is the only field used for authorization; the other fields are
-// presentation data returned by the identity provider.
+// Username and CredentialVersion identify local users; Email identifies Google
+// users. Password hashes are never included in browser sessions.
 type User struct {
-	Email      string
-	Name       string
-	PictureURL string
+	AccountID         int64
+	Provider          string
+	Username          string
+	CredentialVersion int64
+	Email             string
+	Name              string
+	PictureURL        string
 }
 
-// Service performs Google OAuth exchanges and validates signed sessions.
+// Service authenticates local and Google users and validates signed sessions.
 type Service struct {
+	localStore      LocalUserStore
+	dummyHash       string
+	hashSlots       chan struct{}
+	loginLimiter    loginLimiter
 	oauthConfig     *oauth2.Config
 	store           AuthorizedEmailStore
 	sessionSecret   []byte
@@ -85,20 +93,19 @@ type Service struct {
 	now             func() time.Time
 }
 
-// New creates a Google authentication service.
+// New creates an authentication service with optional Google login.
 func New(config Config, store AuthorizedEmailStore) (*Service, error) {
-	if strings.TrimSpace(config.ClientID) == "" {
-		return nil, errors.New("Google client ID is required")
-	}
-	if strings.TrimSpace(config.ClientSecret) == "" {
-		return nil, errors.New("Google client secret is required")
-	}
-	if strings.TrimSpace(config.RedirectURL) == "" {
-		return nil, errors.New("Google redirect URL is required")
-	}
-	redirectURLValue, err := parseRedirectURL(config.RedirectURL)
-	if err != nil {
-		return nil, err
+	googleConfigured := strings.TrimSpace(config.ClientID) != "" || strings.TrimSpace(config.ClientSecret) != ""
+	var redirectURLValue string
+	if googleConfigured {
+		if strings.TrimSpace(config.ClientID) == "" || strings.TrimSpace(config.ClientSecret) == "" {
+			return nil, errors.New("Google client ID and secret must be configured together")
+		}
+		var err error
+		redirectURLValue, err = parseRedirectURL(config.RedirectURL)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(config.SessionSecret) < 32 {
 		return nil, errors.New("authentication session secret must contain at least 32 bytes")
@@ -144,7 +151,7 @@ func New(config Config, store AuthorizedEmailStore) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{
+	s := &Service{
 		oauthConfig: &oauth2.Config{
 			ClientID:     strings.TrimSpace(config.ClientID),
 			ClientSecret: config.ClientSecret,
@@ -159,12 +166,29 @@ func New(config Config, store AuthorizedEmailStore) (*Service, error) {
 		userInfoURL:     userInfoURL,
 		httpClient:      httpClient,
 		now:             now,
-	}, nil
+	}
+	if !googleConfigured {
+		s.oauthConfig = nil
+	}
+	s.localStore, _ = store.(LocalUserStore)
+	if s.localStore != nil {
+		var err error
+		s.dummyHash, err = HashPassword("dummy login credential")
+		if err != nil {
+			return nil, err
+		}
+		s.hashSlots = make(chan struct{}, 2)
+		s.loginLimiter.entries = make(map[string]loginAttempts)
+	}
+	if !s.GoogleEnabled() && !s.LocalEnabled() {
+		return nil, errors.New("authentication store is required")
+	}
+	return s, nil
 }
 
 // Enabled reports whether the service is configured for login.
 func (s *Service) Enabled() bool {
-	return s != nil && s.oauthConfig != nil
+	return s != nil && len(s.sessionSecret) >= 32
 }
 
 // AuthorizationURL builds the Google authorization URL for one login attempt.
@@ -197,7 +221,7 @@ func (s *Service) CompleteLoginForRedirect(ctx context.Context, code, redirectUR
 	if err != nil {
 		return User{}, err
 	}
-	if !s.Enabled() {
+	if !s.GoogleEnabled() {
 		return User{}, errors.New("Google authentication is not configured")
 	}
 	if strings.TrimSpace(code) == "" {
@@ -246,15 +270,23 @@ func (s *Service) CompleteLoginForRedirect(ctx context.Context, code, redirectUR
 	if !authorized {
 		return User{}, ErrNotAuthorized
 	}
-	return normalizeUser(User{
-		Email:      email,
-		Name:       user.Name,
-		PictureURL: user.PictureURL,
-	})
+	identity := User{Email: email, Name: user.Name, PictureURL: user.PictureURL}
+	if _, ok := s.localStore.(interface {
+		GetUserByID(context.Context, int64) (application.LocalUser, error)
+	}); ok {
+		account, err := s.localStore.GetLocalUser(ctx, email)
+		if err != nil {
+			return User{}, ErrNotAuthorized
+		}
+		identity.AccountID = account.ID
+		identity.CredentialVersion = account.CredentialVersion
+		identity.Provider = "google"
+	}
+	return normalizeUser(identity)
 }
 
 func (s *Service) oauthConfigForRedirect(redirectURL string) (*oauth2.Config, error) {
-	if !s.Enabled() {
+	if !s.GoogleEnabled() {
 		return nil, errors.New("Google authentication is not configured")
 	}
 	redirectURL = strings.TrimSpace(redirectURL)
@@ -285,7 +317,7 @@ func parseRedirectURL(value string) (string, error) {
 // NewSession creates a signed, expiring session value for an authorized user.
 func (s *Service) NewSession(user User) (string, error) {
 	if !s.Enabled() {
-		return "", errors.New("Google authentication is not configured")
+		return "", errors.New("authentication is not configured")
 	}
 	user, err := normalizeUser(user)
 	if err != nil {
@@ -303,6 +335,12 @@ func (s *Service) NewSession(user User) (string, error) {
 		strconv.FormatInt(s.now().Add(s.sessionDuration).Unix(), 10),
 		base64.RawURLEncoding.EncodeToString(nonce),
 	}, "|")
+	if user.Username != "" {
+		payload = strings.Join([]string{"local-v1", encodeSessionPart(user.Username), strconv.FormatInt(user.CredentialVersion, 10), strconv.FormatInt(s.now().Add(s.sessionDuration).Unix(), 10), base64.RawURLEncoding.EncodeToString(nonce)}, "|")
+	}
+	if user.AccountID > 0 {
+		payload = strings.Join([]string{"user-v1", strconv.FormatInt(user.AccountID, 10), user.Provider, strconv.FormatInt(user.CredentialVersion, 10), encodeSessionPart(user.Email), encodeSessionPart(user.Name), encodeSessionPart(user.PictureURL), strconv.FormatInt(s.now().Add(s.sessionDuration).Unix(), 10), base64.RawURLEncoding.EncodeToString(nonce)}, "|")
+	}
 	return encodeSignedValue(payload, s.sessionSecret), nil
 }
 
@@ -322,6 +360,46 @@ func (s *Service) ValidateSession(ctx context.Context, value string) (User, bool
 		return User{}, false, nil
 	}
 	if s.now().Unix() >= expiresAt {
+		return User{}, false, nil
+	}
+	if user.AccountID > 0 {
+		repository, ok := s.localStore.(interface {
+			GetUserByID(context.Context, int64) (application.LocalUser, error)
+		})
+		if !ok {
+			return User{}, false, nil
+		}
+		account, err := repository.GetUserByID(ctx, user.AccountID)
+		if errors.Is(err, application.ErrUserNotFound) {
+			return User{}, false, nil
+		}
+		if err != nil {
+			return User{}, false, errors.New("could not check session account")
+		}
+		if account.CredentialVersion != user.CredentialVersion || account.Email != user.Email || (user.Provider == "google" && !s.GoogleEnabled()) || (user.Provider == "password" && account.PasswordHash == "") {
+			return User{}, false, nil
+		}
+		return user, true, nil
+	}
+	if user.Username != "" {
+		if !s.LocalEnabled() {
+			return User{}, false, nil
+		}
+		current, err := s.localStore.GetLocalUser(ctx, user.Username)
+		if errors.Is(err, application.ErrLocalUserNotFound) {
+			return User{}, false, nil
+		}
+		if err != nil {
+			return User{}, false, errors.New("could not check session account")
+		}
+		return user, current.CredentialVersion == user.CredentialVersion, nil
+	}
+	if _, ok := s.localStore.(interface {
+		GetUserByID(context.Context, int64) (application.LocalUser, error)
+	}); ok {
+		return User{}, false, nil
+	}
+	if !s.GoogleEnabled() {
 		return User{}, false, nil
 	}
 	authorized, err := s.store.IsAuthorizedEmail(ctx, user.Email)
@@ -356,6 +434,48 @@ type userInfo struct {
 }
 
 func normalizeUser(user User) (User, error) {
+	if user.AccountID > 0 {
+		if user.CredentialVersion < 1 || (user.Provider != "password" && user.Provider != "google") {
+			return User{}, errors.New("invalid account identity")
+		}
+		if user.Email != "" {
+			email, err := application.ValidateEmail(user.Email)
+			if err != nil {
+				return User{}, err
+			}
+			user.Email = email
+			user.Username = ""
+			if user.Name == "" {
+				user.Name = email
+			}
+		}
+		if user.Email == "" {
+			if user.Provider != "password" {
+				return User{}, errors.New("email is required")
+			}
+			name, err := application.ValidateUsername(user.Username)
+			if err != nil {
+				return User{}, err
+			}
+			user.Username = name
+			user.Name = name
+		}
+		if len(user.Name) > maxUserNameSize {
+			user.Name = user.Email
+		}
+		if len(user.PictureURL) > maxPictureURLSize {
+			user.PictureURL = ""
+		}
+		return user, nil
+	}
+
+	if user.Username != "" {
+		username, err := application.ValidateUsername(user.Username)
+		if err != nil || user.Email != "" || user.CredentialVersion < 1 {
+			return User{}, errors.New("invalid local identity")
+		}
+		return User{Username: username, Name: username, CredentialVersion: user.CredentialVersion}, nil
+	}
 	email, err := application.ValidateEmail(user.Email)
 	if err != nil {
 		return User{}, err
@@ -403,7 +523,49 @@ func decodeSessionPart(value string) (string, bool) {
 }
 
 func parseSessionUser(parts []string) (User, int64, bool) {
+	if len(parts) == 0 {
+		return User{}, 0, false
+	}
 	switch parts[0] {
+	case "user-v1":
+		if len(parts) != 9 || parts[8] == "" {
+			return User{}, 0, false
+		}
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || id < 1 {
+			return User{}, 0, false
+		}
+		version, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			return User{}, 0, false
+		}
+		email, ok1 := decodeSessionPart(parts[4])
+		name, ok2 := decodeSessionPart(parts[5])
+		picture, ok3 := decodeSessionPart(parts[6])
+		if !ok1 || !ok2 || !ok3 {
+			return User{}, 0, false
+		}
+		expires, err := strconv.ParseInt(parts[7], 10, 64)
+		if err != nil {
+			return User{}, 0, false
+		}
+		user, err := normalizeUser(User{AccountID: id, Provider: parts[2], CredentialVersion: version, Email: email, Name: name, Username: name, PictureURL: picture})
+		return user, expires, err == nil
+	case "local-v1":
+		if len(parts) != 5 || parts[4] == "" {
+			return User{}, 0, false
+		}
+		username, ok := decodeSessionPart(parts[1])
+		version, err := strconv.ParseInt(parts[2], 10, 64)
+		if !ok || err != nil {
+			return User{}, 0, false
+		}
+		expires, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			return User{}, 0, false
+		}
+		user, err := normalizeUser(User{Username: username, CredentialVersion: version})
+		return user, expires, err == nil
 	case "v1":
 		if len(parts) != 4 || parts[3] == "" {
 			return User{}, 0, false

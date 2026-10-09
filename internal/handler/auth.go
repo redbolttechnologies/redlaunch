@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -86,12 +87,14 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	target := safeRedirectTarget(r.URL.Query().Get("next"))
 	h.writeLoginPage(w, http.StatusOK, loginPageData{
 		Error:          errorMessage,
+		CSRFToken:      h.setCSRFCookie(w, r),
+		Next:           target,
 		GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
 	})
 }
 
 func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
+	if !h.googleAuthenticationEnabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -131,7 +134,7 @@ func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
-	if !h.authenticationEnabled() {
+	if !h.googleAuthenticationEnabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -146,6 +149,8 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 	stateCookie, err := r.Cookie(oauthStateCookieName)
 	if err != nil || !validCSRFToken(r.URL.Query().Get("state"), stateCookie.Value) {
 		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
+			CSRFToken:      h.setCSRFCookie(w, r),
+			Next:           target,
 			Error:          "The Google sign-in session expired. Start again.",
 			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
 		})
@@ -158,6 +163,8 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		h.writeLoginPage(w, http.StatusBadRequest, loginPageData{
+			CSRFToken:      h.setCSRFCookie(w, r),
+			Next:           target,
 			Error:          "Google did not return an authorization code. Start again.",
 			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
 		})
@@ -178,6 +185,8 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("complete Google login", "error", err)
 		h.writeLoginPage(w, http.StatusBadGateway, loginPageData{
+			CSRFToken:      h.setCSRFCookie(w, r),
+			Next:           target,
 			Error:          "Google sign-in could not be completed. Try again.",
 			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
 		})
@@ -187,21 +196,14 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("create authentication session", "error", err)
 		h.writeLoginPage(w, http.StatusInternalServerError, loginPageData{
+			CSRFToken:      h.setCSRFCookie(w, r),
+			Next:           target,
 			Error:          "Your sign-in could not be saved. Try again.",
 			GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target),
 		})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    session,
-		Path:     "/",
-		MaxAge:   int(h.authentication.SessionDuration().Seconds()),
-		Expires:  time.Now().Add(h.authentication.SessionDuration()),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   h.secureCookie(r),
-	})
+	h.setSessionCookie(w, r, session)
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
@@ -323,4 +325,66 @@ func safeRedirectTarget(value string) string {
 		return "/"
 	}
 	return parsed.RequestURI()
+}
+
+// Provider capabilities are independent of shared session authentication.
+type passwordAuthenticationService interface {
+	LocalEnabled() bool
+	AuthenticatePassword(context.Context, string, string, string) (redlaunchauth.User, error)
+}
+
+func (h *Handler) localAuthenticationEnabled() bool {
+	service, ok := h.authentication.(passwordAuthenticationService)
+	return ok && service.LocalEnabled()
+}
+
+func (h *Handler) googleAuthenticationEnabled() bool {
+	if service, ok := h.authentication.(interface{ GoogleEnabled() bool }); ok {
+		return service.GoogleEnabled()
+	}
+	return h.authenticationEnabled()
+}
+
+func (h *Handler) passwordLogin(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.authentication.(passwordAuthenticationService)
+	if !ok || !service.LocalEnabled() {
+		http.NotFound(w, r)
+		return
+	}
+	if err := parseBoundedForm(w, r); err != nil {
+		http.Error(w, "Invalid login request.", http.StatusBadRequest)
+		return
+	}
+	if !h.validRequestCSRF(r) {
+		http.Error(w, "This sign-in request expired. Refresh the page and try again.", http.StatusForbidden)
+		return
+	}
+	target := safeRedirectTarget(r.Form.Get("next"))
+	address, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		address = r.RemoteAddr
+	}
+	user, err := service.AuthenticatePassword(r.Context(), firstFormValue(r.Form, "email", "username"), r.Form.Get("password"), address)
+	if err != nil {
+		status, message := http.StatusUnauthorized, "Invalid email or password."
+		if errors.Is(err, redlaunchauth.ErrLoginThrottled) {
+			status, message = http.StatusTooManyRequests, "Too many sign-in attempts. Try again in a minute."
+			w.Header().Set("Retry-After", "60")
+		} else if !errors.Is(err, redlaunchauth.ErrInvalidCredentials) {
+			status, message = http.StatusInternalServerError, "Sign-in could not be completed. Try again."
+		}
+		h.writeLoginPage(w, status, loginPageData{CSRFToken: h.setCSRFCookie(w, r), Next: target, Error: message, Username: firstFormValue(r.Form, "email", "username"), GoogleLoginURL: "/auth/google?next=" + url.QueryEscape(target)})
+		return
+	}
+	session, err := h.authentication.NewSession(user)
+	if err != nil {
+		http.Error(w, "Sign-in could not be saved.", http.StatusInternalServerError)
+		return
+	}
+	h.setSessionCookie(w, r, session)
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func (h *Handler) setSessionCookie(w http.ResponseWriter, r *http.Request, session string) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: session, Path: "/", MaxAge: int(h.authentication.SessionDuration().Seconds()), Expires: time.Now().Add(h.authentication.SessionDuration()), HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: h.secureCookie(r)})
 }

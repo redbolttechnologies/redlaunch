@@ -1,794 +1,413 @@
 # Installing Redlaunch
 
-This guide installs Redlaunch on an Ubuntu or Debian VPS and walks through the
-first setup steps. Redlaunch runs as a Docker Compose application and stores
-managed applications under the configured projects root.
+Use the install script to set up Redlaunch on an Ubuntu or Debian VPS. It
+asks for your login settings, builds the application, and starts it with
+Docker Compose.
 
-## Prerequisites
+## Before you start
 
-Use a supported 64-bit Ubuntu or Debian VPS with:
+You need:
 
-- an SSH account with <code>sudo</code> access;
-- <code>git</code>, <code>make</code>, <code>bash</code>, <code>openssl</code>, and
-  <code>wget</code>;
-- Docker Engine and the Docker Compose plugin;
-- a hostname and DNS records pointing to the VPS if you will publish services
-  through Caddy; and
-- <code>systemd</code> if you plan to use scheduled PostgreSQL backups.
+- A supported 64-bit Ubuntu or Debian server and an SSH account with `sudo`
+  access.
+- Docker Engine with the Docker Compose plugin, running and accessible to
+  your SSH user.
+- `wget`, `git`, `make`, `bash`, and `openssl` installed on the server.
+- Optionally, a Google OAuth client and an authorized Google email address
+  if you want Google sign-in (see the next section).
 
-The installation below uses Docker's official APT repository. It installs the
-Compose v2 plugin, so the command is <code>docker compose</code>, not the legacy
-<code>docker-compose</code> command.
+The installer does **not** install Docker or these host tools. If they are
+missing, use [the troubleshooting steps below](#missing-host-tools-or-docker).
+Scheduled PostgreSQL backups also require `systemd` on the host.
 
-Docker-published ports can bypass some host firewall rules. Review Docker's
-[firewall guidance](https://docs.docker.com/engine/install/ubuntu/#firewall-limitations)
-before exposing services.
+Redlaunch has host-level access through Docker. Allow only trusted
+administrators to sign in. By default, its web interface is available only
+through an SSH tunnel; you do not need to expose port 8080 publicly.
 
-The included Compose deployment uses the following ports:
+## 1. Choose your login method
 
-| Port | Use |
+Email/password login is the default. The installer asks for your first user’s
+email address and a confirmed password containing 8–128 characters.
+Spaces, passphrases and special characters are supported; there are no
+uppercase, number, symbol or common-password requirements. Passwords are
+stored only as salted Argon2id hashes in SQLite.
+
+You can skip Google configuration entirely. To additionally enable Google
+sign-in, create an OAuth client before running the installer:
+
+1. Open the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+   and select or create a project.
+2. Complete the consent-screen setup if prompted. If the app is in **Testing**
+   status, add your Google account as a test user.
+3. Under **Google Auth Platform → Clients**, create a **Web application** client.
+4. Add this exact **Authorized redirect URI**:
+
+   ```text
+   http://localhost:8080/auth/google/callback
+   ```
+
+5. Save the **Client ID** and **Client Secret** for the installer.
+
+Use the localhost callback even when installing on a remote server: the SSH
+tunnel in step 3 lets your browser reach Redlaunch at that address.
+Keep the client secret private.
+
+## 2. Run the installer
+
+Connect to the VPS over SSH. Run these commands as the user who should own the
+Redlaunch files:
+
+```sh
+wget https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh
+bash install.sh
+```
+
+The installer asks for:
+
+| Prompt | What to enter |
 | --- | --- |
-| <code>22/tcp</code> | SSH administration |
-| <code>8080/tcp</code> | Redlaunch HTTP interface; restrict it to administrators or use an SSH tunnel |
-| <code>80/tcp</code> | Caddy HTTP and certificate challenges, when Caddy is installed |
-| <code>443/tcp</code> and <code>443/udp</code> | Caddy HTTPS and HTTP/3, when Caddy is installed |
-| <code>5000/tcp</code> | Local Docker Registry, bound to loopback only |
+| Installation directory | Press Enter for `/opt/redlaunch`, or enter another absolute path that does not already exist. |
+| First user email address | Enter a valid email address. Email addresses are case-insensitive. |
+| Password / Confirm password | Choose an 8–128 character password. Both inputs are hidden. |
+| Enable Google sign-in? | Press Enter for no; answer yes to enter the optional Google settings below. |
+| Google Client ID | The client ID from step 1. |
+| Google Client Secret | The client secret from step 1. Input is hidden. |
 
-## 1. Install Docker and host tools
+The installer clones Redlaunch and runs `make setup`. Setup creates private
+configuration files and a random session signing secret, prepares the dedicated
+`redlaunch` SSH user, creates your local login in SQLite, and builds and starts
+Redlaunch. If Google sign-in is enabled, the same email automatically works
+with Google. It uses `sudo`
+for host changes; the checkout belongs to the invoking user.
 
-Run these commands as your normal SSH user, using <code>sudo</code> only for
-package and system changes.
+It also creates the persistent Docker volume `redlaunch_app-data` for
+Redlaunch's SQLite database. Keep this volume and the installation's `.env`,
+`vars.env`, and `secrets.env` files: they contain data or credentials. Never
+commit them to Git or include them in a public issue.
 
-### Ubuntu
+The installer refuses to overwrite an existing installation directory, and
+setup refuses to overwrite an existing `.env` file. To update an existing
+installation, use [Updating Redlaunch](#updating-redlaunch).
 
-These commands follow the [official Docker Engine instructions for
-Ubuntu](https://docs.docker.com/engine/install/ubuntu/):
+## 3. Open Redlaunch
 
-~~~sh
-sudo apt update
-sudo apt install -y ca-certificates curl wget git make bash openssl
+On **your computer**, open an SSH tunnel to the VPS:
 
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
-~~~
-
-### Debian
-
-These commands follow the [official Docker Engine instructions for
-Debian](https://docs.docker.com/engine/install/debian/):
-
-~~~sh
-sudo apt update
-sudo apt install -y ca-certificates curl wget git make bash openssl
-
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/debian/gpg \
-  -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/debian
-Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo systemctl enable --now docker
-~~~
-
-If the VPS already has distribution packages such as <code>docker.io</code>,
-<code>docker-compose</code>, <code>containerd</code>, or <code>runc</code>, check
-Docker's list of conflicting packages before installing the official packages.
-
-Allow the SSH user to run Docker without <code>sudo</code>, then start a new
-login session:
-
-~~~sh
-sudo usermod -aG docker "$USER"
-~~~
-
-The <code>docker</code> group grants root-equivalent access to the host. Use it
-only for trusted administrators. After logging out and back in, verify both
-Docker and Compose:
-
-~~~sh
-docker run hello-world
-docker compose version
-~~~
-
-## 2. Create Google OAuth credentials
-
-Redlaunch uses Google OAuth for login. You need a **Web application** OAuth
-client, which provides the <code>GOOGLE_CLIENT_ID</code> and
-<code>GOOGLE_CLIENT_SECRET</code> used by Redlaunch.
-
-1. Open the [Google Cloud Console Credentials
-   page](https://console.cloud.google.com/apis/credentials) and select an
-   existing project or create a new one.
-2. Complete the Google Auth Platform registration or consent-screen steps if
-   Google prompts you to do so. If the application is in **Testing** status,
-   add every account that will sign in as a test user.
-3. Open **Google Auth Platform → Clients**, choose **Create Client**, and select
-   **Web application**.
-4. Add the exact Redlaunch callback URL under **Authorized redirect URIs**:
-   - for the default local/SSH-tunnel setup:
-     <code>http://localhost:8080/auth/google/callback</code>
-   - for an HTTPS management URL:
-     <code>https://redlaunch.example.com/auth/google/callback</code>
-
-   Add both URIs when you will use both local and public access. Replace the
-   example hostname with the public hostname configured in Redlaunch. The
-   scheme, hostname, port, path, and trailing slash must match exactly.
-   Redlaunch does not use a trailing slash on this callback path.
-5. Create the client and copy the **Client ID** and **Client Secret**. Store the
-   secret securely; do not commit it, paste it into an issue, or put it in a
-   public file.
-
-Google's [OAuth 2.0 web-server documentation](https://developers.google.com/identity/protocols/oauth2/web-server)
-contains the current credential and redirect-URI rules.
-
-### Choosing the callback URL
-
-The bundled Compose file defaults to <code>MANAGEMENT_ACCESS_MODE=ssh-only</code>
-and binds port <code>8080</code> to <code>127.0.0.1</code>. The simplest secure
-first login on a VPS is an SSH tunnel:
-
-~~~sh
+```sh
 ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
-~~~
+```
 
-With that tunnel open, visit <code>http://localhost:8080</code> in your local
-browser and use the default callback URL above.
+Replace `your-user` and `your-server` with your SSH login and server address.
+Keep the command running, then open <http://localhost:8080> in your browser.
+Sign in with the email and password you entered during installation, or
+use Google if you enabled it.
 
-For a managed HTTPS deployment through the bundled Caddy proxy, set these
-values in <code>.env</code> before restarting the stack:
+### Complete first-run setup
 
-~~~text
-MANAGEMENT_ACCESS_MODE='managed-https'
-APP_BIND_ADDRESS='0.0.0.0'
-~~~
+On the **Set up your server** screen:
 
-The wider bind is required because Caddy reaches the manager through the host
-gateway. Restrict the VPS firewall to the intended entry points and do not use
-managed HTTPS without a reachable TLS proxy. Managed HTTPS forces secure
-session and CSRF cookies; SSH-only keeps the loopback HTTP callback usable.
-When running the binary outside Docker, the default HTTP listener is also
-loopback; set <code>HTTP_ADDR</code> explicitly only when a local reverse proxy
-needs to reach that listener.
+- Select **Reverse proxy — Caddy** to publish applications on domains.
+- Select **Docker Registry** to store application images locally at
+  `localhost:5000`. You can skip it if you use another registry.
+- Click **Complete setup** and wait for it to finish.
 
-When one or more Redlaunch public-access domains are configured in Settings, a
-login started at a configured public hostname automatically uses that hostname
-for the HTTPS callback URL. Keep <code>GOOGLE_REDIRECT_URL</code> as the local
-fallback and register both callback URLs in Google. Set
-<code>AUTH_COOKIE_SECURE=true</code> is optional in managed HTTPS because the
-mode forces secure cookies. The Caddy
-service installed from Redlaunch's first-run screen is for routing managed
-application services until public access is configured; it is not an automatic
-reverse proxy for the Redlaunch UI itself.
+Both components are optional. Setup prepares the shared `redlaunch-common`
+network even if you select neither.
 
-For an external HTTPS reverse proxy that is not configured through Redlaunch's
-Public access setting, set <code>GOOGLE_REDIRECT_URL</code> to that proxy's
-callback URL instead.
+To publish applications with Caddy, point their DNS records to the VPS and
+allow incoming TCP ports 80 and 443. UDP port 443 is optional for HTTP/3.
+The local registry stays bound to loopback. Docker-published ports can bypass
+some host firewall rules; see
+[Docker's firewall guidance](https://docs.docker.com/engine/install/ubuntu/#firewall-limitations).
 
-## 3. Install Redlaunch and run <code>make setup</code>
-
-The one-step installer asks for the installation directory (default
-<code>/opt/redlaunch</code>, so the checkout is accessible to multiple users)
-and runs <code>make setup</code>:
-
-~~~sh
-wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh | bash
-~~~
-
-Press Enter to accept the default, or type an absolute path. System locations
-such as the default use <code>sudo</code> only to create the directory; the
-checkout itself is owned by the invoking user.
-
-To skip the prompt in automation, set <code>REDLAUNCH_INSTALL_DIR</code> on
-the Bash side of the pipeline:
-
-~~~sh
-wget -qO- https://raw.githubusercontent.com/redbolttechnologies/redlaunch/master/install.sh \
-  | REDLAUNCH_INSTALL_DIR=/srv/redlaunch bash
-~~~
-
-The installer refuses to overwrite an existing installation directory. If you
-prefer to clone manually, use:
-
-~~~sh
-git clone <repository-url> redlaunch
-cd redlaunch
-make setup
-~~~
-
-The setup script asks for:
-
-1. the Google Client ID;
-2. the Google Client Secret (input is hidden);
-3. an optional authentication session secret; press Enter to generate one; and
-4. the first authorized Google email address.
-
-<code>make setup</code> then:
-
-- creates a private <code>.env</code> file;
-- generates a secure session secret when one was not supplied;
-- creates the dedicated <code>redlaunch</code> SSH user with password login
-  locked and an empty <code>/home/redlaunch/.ssh/authorized_keys</code> file
-  for the Settings SSH keys tab (uses <code>sudo</code> unless run as root;
-  existing keys are never overwritten), and adds that user to the
-  <code>docker</code> group for <code>docker exec</code>-based migrations
-  (the <code>docker</code> group is root-equivalent);
-- creates the external <code>redlaunch_app-data</code> Docker volume for the
-  SQLite database;
-- adds the first email address to Redlaunch's SQLite login allowlist; and
-- builds and starts Redlaunch with <code>docker compose up -d --build</code>.
-
-The command intentionally refuses to overwrite an existing <code>.env</code>
-file. Keep <code>.env</code> private; it contains the OAuth client secret and
-session secret. The <code>redlaunch_app-data</code> volume is external to the
-Compose project and must not be removed when cleaning up Docker resources; it
-contains the Redlaunch SQLite database.
-
-The Docker deployment mounts the managed <code>projects</code> directory at the
-same absolute path inside the Redlaunch container and on the VPS. Redlaunch
-starts managed Compose projects through the host Docker socket, so this shared
-path is required for bind-mounted files such as the Caddyfile. The default is
-the <code>projects</code> directory beside the Compose file. If you set
-<code>PROJECTS_ROOT</code> in <code>.env</code>, use an absolute path on the VPS
-and run the Compose commands from the installation directory.
-
-The Dashboard is manager-scoped by default in the bundled container: its
-resource values describe the manager's visible process and filesystem
-environment. To display VPS-wide values, deliberately add read-only host
-mounts for procfs and the filesystem, then set
-<code>METRICS_SCOPE=vps</code>, <code>METRICS_PROC_ROOT</code>, and
-<code>METRICS_FILESYSTEM_ROOT</code> to the corresponding paths inside the
-container. Running the binary directly on the VPS can use the default
-<code>/proc</code> and <code>/</code> paths with <code>METRICS_SCOPE=vps</code>.
-
-The generated <code>.env</code> uses this local fallback callback:
-
-~~~text
-GOOGLE_REDIRECT_URL='http://localhost:8080/auth/google/callback'
-~~~
-
-If you are using a public HTTPS management URL through the bundled proxy, use
-the managed deployment mode before signing in through it:
-
-~~~text
-MANAGEMENT_ACCESS_MODE='managed-https'
-APP_BIND_ADDRESS='0.0.0.0'
-~~~
-
-~~~sh
-docker compose up -d
-~~~
-
-Check the stack with:
-
-~~~sh
-docker compose ps
-docker compose logs --tail=100 app
-~~~
-
-Open Redlaunch at <code>http://localhost:8080</code> through the SSH tunnel and
-sign in with the authorized Google account. The public URL becomes available
-after the first-run Caddy setup described below.
-
-## 4. Complete the Redlaunch first-run setup
-
-After the first login, Redlaunch shows **Set up your server**:
-
-- Select **Reverse proxy — Caddy** if you will publish applications on domains.
-  Caddy listens on ports 80 and 443 and routes application traffic on the
-  shared <code>redlaunch-common</code> network.
-- Select **Docker Registry** if you want the local registry at
-  <code>localhost:5000</code> for application images. It is optional when your
-  images are already available from another registry.
-- Click **Complete setup** and wait for the progress dialog to finish.
-
-Redlaunch creates and labels the shared <code>redlaunch-common</code> Docker
-network independently of the optional services. This happens when Caddy, the
-registry, both, or neither is selected, so applications created after setup
-can use the same network. An existing network with that name is used only when
-it has the Redlaunch management labels; an unrelated network is refused.
-
-Managed database activation and Start also ensure this network exists before
-starting Postgres. If a previous activation failed because the network was
-missing and the Databases page already shows Enabled, use **Settings → Start**
-on that page to retry without replacing the existing environment files or volume.
-
-The selected core services are stored under the configured projects root in
-<code>core/proxy</code> and <code>core/registry</code>.
-
-For Caddy to obtain certificates for public domains, point the domains' DNS
-records to the VPS and make TCP ports 80 and 443 reachable. Add UDP 443 if you
-want HTTP/3.
-
-## 5. First steps in Redlaunch
+## 4. Create your first application
 
 ### Create an application
 
-1. Open **Applications** in the main navigation.
-2. Click **Create application**.
-3. Enter an **Application name**, such as <code>Status page</code>.
-4. The **Folder name** is filled with a lowercase slug containing only letters,
-   numbers, and dashes as you type. Edit it if needed; it must be one directory
-   name under <code>applications</code>. Do not enter a path or include
-   <code>/</code>.
-5. Click **Create application**.
-
-Redlaunch creates a dedicated Compose project under
-<code>&lt;projects-root&gt;/applications/status-page/</code>, including
-<code>compose.yml</code>, <code>vars.env</code>, and <code>secrets.env</code>.
-The project is connected to the shared <code>redlaunch-common</code> network.
-
-### Publish Redlaunch over HTTPS
-
-If Caddy was selected during first-run setup, open **Settings** in the main
-menu and find **Public access**. Add one or more hostnames that should serve
-the Redlaunch management interface. Use only a hostname such as
-<code>redlaunch.example.com</code>, without a scheme or path. Each configured
-domain serves Redlaunch publicly over HTTPS.
-
-Redlaunch stores these installation-wide domains in SQLite, adds each hostname
-to the managed Caddyfile, routes them through Docker's host gateway to the
-configured Redlaunch listener port, and reloads Caddy. The default listener is
-<code>0.0.0.0:8080</code>; if <code>HTTP_ADDR</code> uses another port, Caddy
-uses that port instead.
-Point each hostname's DNS record to the VPS before adding it.
-
-Google authentication automatically uses
-<code>https://redlaunch.example.com/auth/google/callback</code> when sign-in is
-started at the configured public hostname. Add that exact callback URL to the
-Google OAuth client, keep the local callback URI registered if local access is
-also needed, and set <code>AUTH_COOKIE_SECURE=true</code> in Redlaunch's
-<code>.env</code> before using the public URL. Replace the example hostname with
-the configured public hostname.
+Open **Applications → Create application** and enter a name. The generated
+folder name must be a single directory name, without `/`.
 
 ### Create services
 
-Open the application and use **Services → Create service**. Choose the service
-type from the menu:
-
-- **PostgreSQL database**: enter a service name, PostgreSQL image version,
-  database name, and database user. Enter a password or leave it blank to have
-  Redlaunch generate one. The database starts immediately and includes a
-  production-ready <code>pg_isready</code> healthcheck. The service loads the
-  project <code>vars.env</code>/<code>secrets.env</code> files plus its own
-  <code>&lt;service&gt;.vars.env</code> and
-  <code>&lt;service&gt;.secrets.env</code> files, so multiple PostgreSQL services
-  retain separate credentials.
-- **Redis cache**: enter a service name, Redis image version, and host port.
-  Password authentication is optional. Enable **Persist to disk** when the
-  cache should use append-only logging and snapshots. Redis is published on
-  loopback by default, includes a production-ready <code>redis-cli</code>
-  healthcheck, and starts immediately. Password-protected Redis services use
-  the same service-specific environment-file convention.
-- **Application**: enter the Compose service name and Docker image reference.
-  **Automatically start container** is off by default, which is useful when
-  the image is not available yet. Turn it on when the image can be pulled
-  immediately.
-- **More services...**: opens the service catalog with preconfigured
-  containers (for example pgAdmin and Seq), grouped by category with search.
-  Choosing **Use** opens the application container form with image, ports,
-  volumes, and entrypoint prefilled. Review the values before creating; the
-  container stays stopped until started, and any required credentials noted
-  on the card must be added via variables/secrets.
-
-Useful defaults are <code>db</code>/PostgreSQL 17, <code>redis</code>/Redis 7 on
-port 6379, and <code>app</code> for a custom application container. All managed
-services load both <code>vars.env</code> and <code>secrets.env</code>; keep
-non-secret configuration in the former and credentials in the latter.
-
-The managed environment editor supports one assignment per physical line and
-preserves comments, CRLF/BOM markers, quotes, dollar escapes, and interpolation
-tokens when a value is only renamed or moved. Multiline dotenv continuations
-are intentionally unsupported by the editor; edit those files outside
-Redlaunch and re-import them if needed. A replacement or explicit clear is a
-separate operation and may intentionally write a new literal token.
-
-When an older generated project has database services that use only the shared
-environment files, the first later database change migrates each unambiguous
-legacy service to its own files without changing its mounted volume. If more
-than one legacy service of the same database type still shares those files, or
-one of its scoped files is missing, Redlaunch stops with an ambiguity error for
-operator resolution; it does not guess or rotate credentials.
-
-To bring in an existing Compose project, open an application that has no
-registered services and choose **Import Docker Compose project...**. Upload its
-Compose YAML file. Redlaunch first shows a summary of every service, volume,
-and network found in the file with its actual settings, along with the
-detected type (application, PostgreSQL, or Redis) for each service. Uncheck
-anything you do not want, then confirm. Redlaunch validates the selection,
-registers only the selected services, and adds the managed container names,
-labels, <code>vars.env</code>, and <code>secrets.env</code> references.
-Imported services are not started automatically; start them from the Services
-tab when ready.
-
-Imports intentionally support a local, managed subset: service definitions,
-declared images, local build contexts, relative
-<code>env_file</code>/<code>dockerfile</code> paths, and named or
-application-directory bind volumes. Remote file sources, Compose
-includes/extensions, file-backed Compose secrets/configs, host capabilities
-such as privileged mode/devices/host namespaces or Docker socket mounts, and
-paths that escape the application directory are rejected before the upload is
-written or Compose is run. Declared image references may still be pulled when
-an operator starts a service. The upload also cannot choose its Compose project
-name; Redlaunch supplies a stable installation-, scope-, and
-resource-specific identity.
-
-Compose interpolation resolves from the managed project files: an existing
-project-level <code>.env</code> first, then <code>vars.env</code>, then
-<code>secrets.env</code>, with later files winning. When none of those files
-exist, project-level loading stays disabled via <code>/dev/null</code>. The
-configuration subprocess additionally receives Docker settings and explicitly
-referenced application interpolation variables from the host environment,
-which take precedence over the files, while Redlaunch session, OAuth,
-database, and listener settings are filtered out. Variables referenced
-without a fallback value (for example <code>${DB_PASSWORD}</code>) are added
-as empty placeholders to <code>vars.env</code> or <code>secrets.env</code>
-during import so the missing configuration is visible; set their values
-before starting services. Policy errors identify the rejected Compose line
-and leave the existing files and SQLite service metadata unchanged.
-
-Compose anchors, aliases, merge keys, and unsupported inline structures are
-rejected where Redlaunch must edit the structure; supported inline
-<code>env_file</code>/<code>labels</code> forms are normalized while preserving
-their entries. Final Compose validation runs after Redlaunch adds managed
-container names, labels, and required environment files. A failed validation
-leaves the original files and metadata unchanged.
-
-To import application configuration, choose **Import variables...** on the
-Variables tab or **Import secrets...** on the Secrets tab. Paste or type dotenv
-entries directly into the textbox, or upload a dotenv file to load its contents
-into the textbox for review and editing before importing. Redlaunch validates
-the entries, merges them into the managed file (existing entries not included
-in the import are kept, matching entries are overwritten, and new entries are
-added), keeps both managed files in the application directory, and masks
-secret values in the UI.
-
-For a custom application image, the **Use Docker Registry** switch controls how
-the image reference is interpreted:
-
-- leave it off to add the local registry prefix <code>localhost:5000/</code>; or
-- turn it on to use the image reference exactly as entered, for example
-  <code>ghcr.io/example/status-page:1.2.0</code>.
-
-The tag may use a <code>vars.env</code> variable, for example
-<code>my-app:${API_VERSION}</code> or <code>my-app:${API_VERSION:-latest}</code>.
-Set the variable on the application's Variables tab before starting the service.
-
-The custom application service must be running before a domain route can serve
-traffic successfully.
+Open the application and choose **Services → Create service** to add an
+application container, PostgreSQL, Redis, or a service from the catalog.
+Add ordinary settings on the **Variables** tab and credentials on the
+**Secrets** tab. Start the service when its image and configuration are ready.
 
 ### Add one or more domains
 
-1. Open the application's **Domains** tab.
-2. Click **Add domain**.
-3. Enter a hostname such as <code>example.com</code> or
-   <code>www.example.com</code>. Enter only the hostname, not
-   <code>https://</code> and not a path.
-4. Click **Save** and repeat for each additional hostname.
+To publish a service through Caddy, add its hostname on the **Domains** tab,
+then use **Manage routing** to select the service and its container port.
 
-Before testing a domain, create its DNS A/AAAA record(s) pointing to the VPS.
-If Caddy is installed and ports 80/443 are reachable, it can manage HTTPS for
-the public hostname.
+Managed files live inside the installation's `projects` directory:
 
-### Route a domain to a service
+```text
+projects/
+├── applications/
+│   └── my-app/
+│       ├── compose.yml
+│       ├── vars.env
+│       └── secrets.env
+└── core/
+    ├── proxy/
+    └── registry/
+```
 
-1. In the **Domains** tab, click **Manage routing** next to a domain.
-2. Click **Add routing**.
-3. Leave **Subdomain** empty to use the main domain, or enter a label such as
-   <code>api</code> to use <code>api.example.com</code>.
-4. Enter the incoming **Request path**, normally <code>/</code> or
-   <code>/api</code>.
-5. Select an existing application **Service** by its Compose service name.
-6. Enter the **Service port**, the port the service listens on inside its
-   container (usually <code>80</code>, or <code>3000</code>/<code>8080</code> for
-   common application servers).
-7. Enter the **Service path**, normally <code>/</code>, then click **Save**.
+For deployment examples, see [Recipes](RECIPES.md). Open **Help** in Redlaunch
+for the full how-to guides, or see [README.md](README.md) for configuration
+options and application features.
 
-For example, this route sends all requests for <code>api.example.com</code> to
-the application's <code>api</code> service, preserving subpaths such as
-<code>/_app/immutable/app.js</code> when proxying:
+## Publish Redlaunch over HTTPS
 
-| Field | Value |
-| --- | --- |
-| Domain | <code>example.com</code> |
-| Subdomain | <code>api</code> |
-| Request path | <code>/</code> |
-| Service | <code>api</code> |
-| Service port | <code>3000</code> |
-| Service path | <code>/</code> |
+You can keep using the SSH tunnel. If you want a public management hostname,
+first install Caddy through the server setup above, then:
 
-Redlaunch saves the routing in SQLite, regenerates the managed Caddyfile, and
-reloads Caddy. Add additional routes for other subdomains or paths as needed.
-Longer path matchers take precedence when multiple routes share a host.
+1. Point a hostname such as `redlaunch.example.com` to the VPS and make TCP
+   ports 80 and 443 reachable.
+2. While signed in through the tunnel, open **Settings → Public access** and
+   add the hostname, without a scheme or path.
+3. If Google sign-in is enabled, add its exact callback URI to the same OAuth client:
 
-## Before a managed-resource migration
+   ```text
+   https://redlaunch.example.com/auth/google/callback
+   ```
 
-Run this inventory and backup procedure before a release that changes Compose
-project identities, container ownership, volume mappings, database service
-configuration, routing metadata, or backup timers. Use a maintenance window.
-The procedure records labels and non-secret metadata; it never prints
-<code>.env</code>, <code>vars.env</code>, or <code>secrets.env</code> contents.
+4. In the installation's `.env` file, set:
 
-From the Redlaunch installation directory, choose the configured projects root
-(the default is the <code>projects</code> directory), create a private backup
-directory outside that tree, and record the current resource inventory:
+   ```text
+   MANAGEMENT_ACCESS_MODE='managed-https'
+   APP_BIND_ADDRESS='0.0.0.0'
+   ```
 
-~~~sh
-umask 077
-projects_root="$(pwd)/projects"
-backup_dir="$(dirname "$(pwd)")/redlaunch-pre-migration-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -m 0700 "$backup_dir"
+5. From the installation directory, apply the changes:
 
-find "$projects_root/applications" "$projects_root/core" \
-  -mindepth 1 -maxdepth 1 -type d -print | sort > "$backup_dir/project-directories.txt"
-docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Label "redlaunch.managed"}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}\t{{.Label "com.docker.compose.project.config_files"}}' \
-  > "$backup_dir/containers.tsv"
-docker volume ls --filter label=com.docker.compose.project \
-  --format '{{.Name}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.volume"}}' \
-  > "$backup_dir/volumes.tsv"
-docker network ls --filter name=redlaunch-common --no-trunc \
-  > "$backup_dir/networks.txt"
-docker network inspect redlaunch-common --format '{{json .}}' \
-  > "$backup_dir/network-redlaunch-common.json"
-systemctl list-unit-files 'redlaunch-backup-*.timer' --no-pager \
-  > "$backup_dir/backup-timer-files.txt"
-systemctl list-timers 'redlaunch-backup-*.timer' --all --no-pager \
-  > "$backup_dir/backup-timers.txt"
-~~~
+   ```sh
+   docker compose up -d
+   ```
 
-If <code>PROJECTS_ROOT</code> is customized, set <code>projects_root</code> to
-that absolute host path. Review <code>containers.tsv</code> for duplicate Compose
-project labels, especially an application and core component that both use a
-folder such as <code>proxy</code>. Review <code>volumes.tsv</code> before any
-container recreation; a named volume is part of the data identity even when a
-Compose project name changes.
+Then open your HTTPS URL. Managed HTTPS enables secure authentication cookies.
+Restrict direct access to port 8080 with firewall rules that account for
+Docker's published ports; Caddy must be able to reach the manager through the
+host gateway.
 
-Redlaunch derives each managed Compose project name from the absolute projects
-root, its <code>applications</code>/<code>core</code> scope, and the resource
-folder. Destructive service and project operations also require both the
-derived Compose project label and <code>redlaunch.managed=true</code>. A legacy
-container without that label is refused rather than guessed at; inventory it,
-map its volumes, and perform a reviewed adoption before removing anything.
+For Google sign-in, keep the localhost callback registered and
+`GOOGLE_REDIRECT_URL` as the local fallback. Redlaunch automatically uses the HTTPS callback when login starts
+at a configured public hostname. Installing Caddy alone does not publish the
+management interface; you must configure **Public access** too.
 
-The shared <code>redlaunch-common</code> network is adopted, never deleted
-blindly. Installations predating managed-network ownership created it through
-the proxy Compose project (Compose labels, no Redlaunch labels) or plain
-<code>docker network create</code> (no labels). Setup accepts such a network
-in place when <code>network-redlaunch-common.json</code> shows a local bridge
-driver, no <code>Internal</code> flag, and no foreign
-<code>redlaunch.owner</code> label; any other shape stays refused. Because
-Docker network labels are immutable, adoption is re-validated on every call
-rather than recorded. Do not remove an in-use shared network to "fix"
-ownership: attached containers would lose connectivity.
+If you use an external HTTPS proxy instead of Redlaunch's Public access
+setting, enable secure cookies with `AUTH_COOKIE_SECURE=true`. If Google
+sign-in is enabled, also set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
 
-Map legacy project-scoped volumes before recreating anything.
-<code>volumes.tsv</code> pairs each volume name with its owning Compose project
-and volume key: an old <code>OLD_PROJECT_KEY</code> volume holding mounted
-data must be mapped to the new <code>NEW_PROJECT_KEY</code> identity from the
-release instructions (same key, new project prefix) and confirmed present
-before the old project is stopped. Do not proceed when a project-scoped volume
-in the inventory has no mapped new identity.
+## Updating Redlaunch
 
-Stop the manager so SQLite is closed, then copy the complete data volume,
-managed project tree, and installation settings without displaying their
-contents:
+From the installation directory, run:
 
-~~~sh
-docker compose stop app
-docker run --rm \
-  --mount type=volume,src=redlaunch_app-data,dst=/source,readonly \
-  --mount type=bind,src="$backup_dir",dst=/backup \
-  alpine:3.22 tar -C /source -czf /backup/app-data.tar.gz .
-tar -C "$projects_root" -czf "$backup_dir/projects.tar.gz" .
-tar -czf "$backup_dir/installation-settings.tar.gz" .env docker-compose.yml
-chmod 0600 "$backup_dir"/*.tar.gz
-mkdir -m 0700 "$backup_dir/app-data"
-tar -C "$backup_dir/app-data" -xzf "$backup_dir/app-data.tar.gz"
-~~~
+```sh
+cd /opt/redlaunch
+make update
+```
 
-The archives contain credentials and must remain readable only by the operator.
-Do not attach them to issues or copy them into the repository. To inventory the
-non-secret SQLite metadata, install the distribution's <code>sqlite3</code>
-command if necessary and run:
+Replace `/opt/redlaunch` if you chose another directory. This pulls the latest
+code and rebuilds and restarts Redlaunch. You can also use **Settings → Update
+Redlaunch** in the web interface; refresh the page after the restart.
 
-~~~sh
-sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
-  'SELECT a.id, a.folder_name, s.id AS service_id, s.name AS service_name, s.service_type FROM applications a LEFT JOIN services s ON s.application_id = a.id ORDER BY a.id, s.id' \
-  > "$backup_dir/application-services.tsv"
-sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
-  'SELECT application_id, domain_id, subdomain, path, service_name, service_port, service_path FROM routings ORDER BY application_id, domain_id, id' \
-  > "$backup_dir/routings.tsv"
-sqlite3 -header -separator $'\t' "$backup_dir/app-data/redlaunch.db" \
-  'SELECT service_id, enabled, schedule_type, hour, minute, weekday, retention_days, backup_location FROM backup_schedules ORDER BY service_id' \
-  > "$backup_dir/backup-schedules.tsv"
-docker compose start app
-~~~
+Back up your data before an update that changes managed resources, and follow
+any release-specific migration instructions. Older installations that lack the
+Settings SSH keys setup need the one-time host configuration in
+[SSH_KEYS.md](SSH_KEYS.md).
 
-Confirm that the manager is healthy and that the backup contains the expected
-applications, multiple database rows, routes, named volumes, and enabled timer
-rows before proceeding. If any step after <code>docker compose stop app</code>
-fails, keep the private backup directory and restart the manager before
-troubleshooting. Never use an old ambiguous project-wide
-<code>down --volumes</code> as a migration shortcut.
+## Local users and password recovery
 
-### Interrupted backups and deletion recovery
+Use **Settings → Users** to list users, create users with an email and password,
+change passwords, and delete users after confirmation. The last user cannot be
+deleted. Every user has administrator access. Google sign-in, when configured,
+automatically accepts the verified Google email matching a listed user. There
+is no public registration or email-based password recovery.
 
-Web backup and restore requests return a progress operation while the database
-command continues under the manager's execution deadline. Web operations are
-further bounded by the 15-minute tracked-job timeout; every lease-holding
-backup, restore, retention, and deletion operation is additionally capped at
-25 minutes, below the 30-minute service lease, and the generated systemd unit
-stops overruns at the same boundary with <code>TimeoutStartSec=1500</code>.
-The same service lease is used by the scheduled <code>backup-run</code>
-command, so do not manually remove lease rows during a running operation. A
-crashed process leaves an expiring lease; the next operation can reclaim it
-after the lease window. Old temporary dump files are removed conservatively
-by a later successful backup; files without Redlaunch's temporary filename
-prefix are never touched.
+Upgrades preserve Google-only accounts; use **Change password** to add a password
+to one. Existing username accounts can still sign in with their username and
+password until you use **Set email** in Settings. Assigning an email preserves
+the password and replaces username login. Google users must sign in again after
+upgrading to the shared user model.
 
-Restores accept only plain SQL dumps and apply them inside a single database
-transaction: a failure or an interrupted connection rolls the dump back and
-leaves the database unchanged, so retrying the same backup file is safe.
-Custom, tar, or directory archives are rejected before any database work.
-A failed restore reports that the database was left unchanged; check that the
-database service is running and submit the restore again. Restore operations
-share the 25-minute execution bound above.
+Keep SSH access for recovery. To create a user from the installation directory
+in Bash (replace the example email):
 
-Application deletion writes a tombstone before stopping Docker resources. If a
-stage fails, submit the deletion again with the exact application name after
-fixing the reported issue. The service resumes the recorded stage and keeps
-backup schedules, routing state, metadata, and the
-application folder coordinated. The application page reads the retained
-tombstone after a manager restart, so the interrupted stage remains
-operator-visible. Do not delete the SQLite database or manually remove the
-application directory while a deletion tombstone is incomplete. Folder names
-stay reserved until the tombstone reaches completion: creating a replacement
-application with the same folder is rejected while the previous deletion is
-incomplete, and retrying the old deletion never removes a replacement folder.
-A retry after the folder is already gone completes the tombstone instead of
-reporting "application not found".
+```bash
+read -r -s -p 'New password: ' password; printf '\n'
+printf '%s\n' "$password" | docker compose run --rm --no-TTY app auth-create-user --email admin@example.com --password-stdin
+unset password
+```
 
-Service deletion follows the same coordinated guarantees: it records its own
-durable tombstone, disables the service's backup timer first, holds the
-service backup lease across the remaining stages so a running backup is never
-interrupted, removes the service's routing rows with a Caddy reload, then
-removes the container, Compose entry, and metadata. If a stage fails, submit
-the deletion again; the recorded stage resumes. Service backup files are
-retained as operator-managed artifacts while schedule and history records
-cascade with the service metadata; export or remove those files separately
-after confirming the retention policy.
-Backup files under <code>BACKUP_ROOT/&lt;folder&gt;/&lt;service&gt;</code> are retained
-when application metadata is deleted; export or remove those operator-managed
-artifacts separately after confirming the retention policy.
+To reset an existing user's password, replace `auth-create-user` with
+`auth-reset-password`. Password changes and assigning an email invalidate all
+previously issued sessions for that account, including Google sessions. Deleting
+a user also revokes their access immediately. Creation refuses to overwrite an
+existing email; reset refuses to create a missing user. Both commands use the
+same 8–128 character policy and accept the password only through stdin.
 
-When a reviewed release explicitly instructs you to adopt new Compose project
-identities, use the recorded project label and absolute configuration path to
-stop each old project once, without deleting volumes:
+The SQLite database is restricted to its owner's read/write access. Protect the
+data volume and database backups: password hashes are sensitive. Login attempts
+are limited in memory to five per email (or legacy username) and twenty per connection IP per
+minute, with at most two concurrent password verifications. These limits reset
+on restart. Behind a proxy, connection-IP limits are shared; forwarded headers
+are not trusted. Account limits still apply independently.
 
-~~~sh
-  docker compose --project-name OLD_PROJECT --env-file /dev/null -f ABSOLUTE_CONFIG_FILE down --remove-orphans
-~~~
-
-Never add <code>--volumes</code> here: stopping must not delete data volumes.
-When <code>containers.tsv</code> shows two resources sharing one Compose
-project label (for example an application folder and a core component that
-both resolve to <code>proxy</code>), stop each resource with its own absolute
-configuration file from the inventory instead of addressing the shared label
-once; a single project-wide command would touch both resources' containers.
-
-Do not proceed when <code>volumes.tsv</code> shows a project-scoped volume whose
-new identity has not been mapped by the release's migration instructions. After
-updating and rebuilding Redlaunch, recreate each reviewed project under the
-identity calculated by the same production binary:
-
-~~~sh
-while IFS= read -r project_dir; do
-  if [ -f "$project_dir/compose.yml" ]; then
-    compose_file="$project_dir/compose.yml"
-  elif [ -f "$project_dir/compose.yaml" ]; then
-    compose_file="$project_dir/compose.yaml"
-  else
-    continue
-  fi
-  project_name=$(docker compose exec -T app \
-    redlaunch compose-project-name --directory "$project_dir")
-  docker compose --project-name "$project_name" --env-file /dev/null -f "$compose_file" up -d
-done < "$backup_dir/project-directories.txt"
-~~~
-
-The helper prints only the derived project name. Keep the configured absolute
-projects-root path stable: it is part of the installation-scoped identity.
+To enable Google later, set both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+in `.env` and recreate the app using
+`docker compose up -d`. Omitting both client parameters disables Google;
+providing only one is a configuration error. Local login continues to work.
 
 ## Troubleshooting
 
-- **<code>redirect_uri_mismatch</code>**: register both the configured local
-  <code>GOOGLE_REDIRECT_URL</code> and, for each configured public-access
-  domain, the exact
-  <code>https://&lt;public-hostname&gt;/auth/google/callback</code> URI in the
-  Google client. The scheme, host, port, path, and trailing slash must match.
-- **Google login says the account is not authorized**: use the email entered
-  during <code>make setup</code>; it must be a verified Google email and, for a
-  Google app in Testing status, a configured test user.
-- **Caddy routing is unavailable**: confirm that Caddy was selected during
-  first-run setup, the domain resolves to the VPS, ports 80/443 are reachable,
-  and the target service is running.
-- **Caddy reports “mount ... Caddyfile ... not a directory”**: update the
-  deployment so the managed-project path is shared with the host Docker
-  daemon, then recreate Redlaunch and start the proxy again:
+Run the following commands on the VPS from your installation directory unless
+stated otherwise. Avoid sharing configuration files or logs containing secrets.
 
-  ~~~sh
-  cd /opt/redlaunch
-  git pull
-  docker compose up -d --build
-  docker compose -f projects/core/proxy/compose.yml up -d --force-recreate
-  ~~~
+### Missing host tools or Docker
 
-  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
-- **<code>make setup</code> cannot run Docker**: reconnect after adding the SSH
-  user to the <code>docker</code> group, or verify the Docker daemon with
-  <code>docker info</code>.
-- **Duplicate <code>redlaunch:local</code> containers after a Settings
-  update**: each update runs its rebuild in a detached
-  <code>redbolt-redlaunch-updater</code> helper; only
-  <code>redbolt-redlaunch</code> should remain afterwards. Releases before the
-  fixed-name helper may leave random-named updater containers behind because
-  their helper booted a manager image without update support. Remove them
-  once, then deploy the latest code over SSH so the running manager includes
-  the fix:
+Install the host tools:
 
-  ~~~sh
-  cd /opt/redlaunch
-  docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)
-  git pull
-  docker compose up -d --build
-  ~~~
+```sh
+sudo apt update
+sudo apt install -y ca-certificates curl wget git make bash openssl
+```
 
-  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
-  Later Settings updates refuse to start while a rebuild is already running
-  instead of piling up concurrent helpers.
-- **Scheduled backups report “unavailable” or `systemctl: executable file not
-  found in $PATH`**: the bundled container must control host systemd through
-  <code>/usr/bin/dbus-send</code>, not the host <code>systemctl</code> binary.
-  Confirm <code>docker-compose.yml</code> sets
-  <code>SYSTEMD_BINARY: "/usr/bin/dbus-send"</code> with the host mounts for
-  <code>/etc/systemd/system</code>, <code>/run/systemd/system</code>, and
-  <code>/run/dbus/system_bus_socket</code>, then recreate the manager so the
-  corrected environment applies:
+Install Docker Engine and the Compose plugin using the official instructions
+for [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) or
+[Debian](https://docs.docker.com/engine/install/debian/). Check the listed
+conflicting packages if Docker is already installed.
 
-  ~~~sh
-  cd /opt/redlaunch
-  git pull
-  docker compose up -d --build
-  docker compose logs --tail=50 app | grep -i systemd
-  ~~~
+Allow your SSH user to run Docker:
 
-  Replace <code>/opt/redlaunch</code> with the installation directory when needed.
-  Do not set <code>SYSTEMD_BINARY=systemctl</code> inside the Alpine manager
-  container; that binary only exists on the host. When running outside Docker,
-  ensure the configured <code>SYSTEMD_BINARY</code> exists in
-  <code>$PATH</code> (or as an absolute path) for the selected
-  <code>SYSTEMD_SCOPE</code>.
+```sh
+sudo usermod -aG docker "$USER"
+```
+
+The `docker` group grants root-equivalent access. Add only trusted users.
+Log out and reconnect, then check:
+
+```sh
+docker info
+docker compose version
+```
+
+Once both commands succeed, run the installer.
+
+### Manual installation if the installer fails
+
+Use this fallback only when the install script cannot complete. After preparing
+the prerequisites (and optionally Google credentials), clone into a directory owned by
+your SSH user:
+
+```sh
+git clone https://github.com/redbolttechnologies/redlaunch.git "$HOME/redlaunch"
+cd "$HOME/redlaunch"
+make setup
+```
+
+This runs the same setup as the installer. Continue with
+[Open Redlaunch](#3-open-redlaunch) when it finishes.
+
+If the installer already cloned the repository but setup failed, fix the
+reported problem and use that existing checkout. If `.env` exists, do not
+rerun `make setup` or delete it blindly. Setup may already have completed some
+host changes. Preserve the configuration, confirm the SSH-user setup in
+[SSH_KEYS.md](SSH_KEYS.md), then complete the remaining steps:
+
+```sh
+docker volume create redlaunch_app-data
+docker compose build app
+read -r -s -p 'Password: ' password; printf '\n'
+printf '%s\n' "$password" | docker compose run --rm --no-TTY app auth-create-user --email admin@example.com --password-stdin
+unset password
+docker compose up -d
+```
+
+If the local user already exists, do not create it again; proceed to startup
+or use `auth-reset-password`. Google sign-in automatically uses the same email.
+These commands preserve the existing configuration and database volume.
+
+### Redlaunch does not start or the browser cannot connect
+
+Check the containers and recent application logs:
+
+```sh
+docker compose ps
+docker compose logs --tail=100 app
+```
+
+Check that the SSH tunnel is still running and that you are opening
+`http://localhost:8080` on your computer. If you changed `APP_PORT`, use that
+port in the tunnel and update the local Google callback to match.
+
+For custom `PROJECTS_ROOT` settings, use an absolute host path. The managed
+projects directory must be mounted at the same absolute path on the host and
+inside Redlaunch so Docker can find bind-mounted configuration files.
+
+### Google login fails
+
+- **`redirect_uri_mismatch`**: the Google client's redirect URI must match the
+  callback exactly, including scheme, hostname, port, and path. There is no
+  trailing slash. Register the local callback and each public hostname's HTTPS
+  callback that you use.
+- **Account not authorized**: sign in with the email entered during setup. If
+  the Google app is in Testing status, also add that account as a test user.
+  To authorize another trusted account, run:
+
+  ```sh
+  docker compose exec app redlaunch auth-add-email --email you@example.com
+  ```
+
+### Caddy cannot route traffic
+
+Confirm Caddy is installed, the hostname resolves to the VPS, ports 80 and 443
+are reachable, and the target service is running. For the management interface,
+also check **Settings → Public access** and the managed HTTPS settings above.
+
+If Caddy reports a bind-mount error for its `Caddyfile`, check the shared
+projects path described above and recreate the manager after correcting it:
+
+```sh
+docker compose up -d --build
+```
+
+Then retry starting the proxy through Redlaunch.
+
+### Scheduled backups are unavailable
+
+The bundled deployment controls host systemd through `/usr/bin/dbus-send`.
+Check that `docker-compose.yml` sets `SYSTEMD_BINARY` to that path and mounts
+`/etc/systemd/system`, `/run/systemd/system`, and
+`/run/dbus/system_bus_socket`. After correcting the deployment, recreate it
+with `docker compose up -d --build`. Do not set `SYSTEMD_BINARY=systemctl`
+inside the manager container.
+
+### Interrupted backups and deletion recovery
+
+Retry a failed deletion through Redlaunch after fixing the reported error;
+it resumes from its saved stage. Keep the SQLite database and application
+folder intact until deletion finishes. Backup files are retained separately.
+
+A crashed backup or restore may leave a service lease that expires after
+30 minutes. Do not manually remove lease rows while an operation is running.
+
+### Before a managed-resource migration
+
+Before a release that changes Compose project names, ownership labels, volumes,
+or backup configuration:
+
+- Record the existing container labels, Compose project names, volume mappings,
+  routes, and backup schedules.
+- Stop the manager before backing up `redlaunch_app-data`, then restart it.
+  Also copy the managed projects tree and installation settings to a private
+  backup location. These backups contain credentials.
+- Back up application database volumes separately; the manager volume and
+  project files do not contain their database data.
+- Follow the release's migration instructions before recreating resources.
+  Keep the absolute projects-root path stable because it contributes to managed
+  Compose project names.
+
+Do not remove an in-use `redlaunch-common` network or use `down --volumes` as a
+migration shortcut. If ownership or volume mappings are ambiguous, resolve them
+before stopping or recreating resources.

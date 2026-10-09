@@ -56,6 +56,7 @@ type Handler struct {
 	applicationContainerManager    applicationContainerService
 	managedDatabases               managedDatabasesService
 	serverSSHKeys                  serverSSHKeyService
+	users                          userManagementService
 	apiTokens                      apiTokenService
 	apiRunJobs                     *apiRunJobStore
 	managementJobs                 *managementJobStore
@@ -372,6 +373,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	applicationContainer := applicationContainerService(noApplicationService{})
 	var managedDatabases managedDatabasesService
 	var serverSSHKeys serverSSHKeyService
+	var users userManagementService
 	var apiTokens apiTokenService
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
@@ -586,6 +588,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				serverSSHKeys = dependency
 			}
+		case userManagementService:
+			users = dependency
 		case apiTokenService:
 			if dependency != nil {
 				apiTokens = dependency
@@ -683,6 +687,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationContainerManager:    applicationContainer,
 		managedDatabases:               managedDatabases,
 		serverSSHKeys:                  serverSSHKeys,
+		users:                          users,
 		apiTokens:                      apiTokens,
 		apiRunJobs:                     apiRunJobs,
 		managementJobs:                 managementJobs,
@@ -716,6 +721,7 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", h.index)
 	mux.HandleFunc("GET /login", h.login)
+	mux.HandleFunc("POST /login", h.passwordLogin)
 	mux.HandleFunc("GET /auth/google", h.googleLogin)
 	mux.HandleFunc("GET /auth/google/callback", h.googleCallback)
 	mux.HandleFunc("POST /logout", h.logout)
@@ -777,6 +783,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing", h.saveApplicationRouting)
 	mux.HandleFunc("POST /applications/{id}/domains/{domainID}/routing/delete", h.deleteApplicationRouting)
 	mux.HandleFunc("GET /settings", h.settingsPage)
+	mux.HandleFunc("POST /settings/users", h.createUser)
+	mux.HandleFunc("POST /settings/users/password", h.changeUserPassword)
+	mux.HandleFunc("POST /settings/users/delete", h.deleteUser)
+	mux.HandleFunc("POST /settings/users/email", h.assignUserEmail)
 	mux.HandleFunc("GET /help", h.helpPage)
 	mux.HandleFunc("GET /help/{guide}", h.helpPage)
 	mux.HandleFunc("POST /settings/domains", h.createRedlaunchDomain)
@@ -3800,6 +3810,12 @@ func (h *Handler) writeTemplateStatus(w http.ResponseWriter, name string, data p
 }
 
 func (h *Handler) writeLoginPage(w http.ResponseWriter, status int, data loginPageData) {
+	data.LocalEnabled = h.localAuthenticationEnabled()
+	data.GoogleEnabled = h.googleAuthenticationEnabled()
+	if data.Next == "" {
+		data.Next = "/"
+	}
+
 	var body bytes.Buffer
 	if err := h.templates.ExecuteTemplate(&body, "login.html", data); err != nil {
 		h.logger.Error("render login template", "error", err)
@@ -4823,16 +4839,20 @@ func (h *Handler) shellPageData(r *http.Request) pageData {
 		Server:    h.server,
 		CSRFToken: h.csrfTokenForRequest(r),
 	}
-	if user, ok := r.Context().Value(authenticatedUserContextKey{}).(redlaunchauth.User); ok && user.Email != "" {
+	if user, ok := r.Context().Value(authenticatedUserContextKey{}).(redlaunchauth.User); ok && (user.Email != "" || user.Username != "") {
+		identity := user.Email
+		if user.Username != "" {
+			identity = user.Username
+		}
 		name := strings.TrimSpace(user.Name)
 		if name == "" {
-			name = user.Email
+			name = identity
 		}
 		data.User = &sidebarUserData{
 			Name:       name,
-			Email:      user.Email,
+			Email:      identity,
 			PictureURL: safeProfileImageURL(user.PictureURL),
-			Initials:   userInitials(name, user.Email),
+			Initials:   userInitials(name, identity),
 		}
 	}
 	return data
@@ -4871,6 +4891,11 @@ func userInitials(name, email string) string {
 }
 
 type loginPageData struct {
+	CSRFToken      string
+	Next           string
+	Username       string
+	LocalEnabled   bool
+	GoogleEnabled  bool
 	Error          string
 	GoogleLoginURL string
 }
@@ -5094,10 +5119,17 @@ type registryPurgeDialogData struct {
 }
 
 type settingsPageData struct {
-	Domains      []application.RedlaunchDomain
-	CSRFToken    string
-	DomainEdit   *domainEditPageData
-	DomainDelete *domainDeletePageData
+	Users         []application.UserAccount
+	UsersActive   bool
+	UserDialog    string
+	UserID        int64
+	UserEmail     string
+	UserError     string
+	CanDeleteUser bool
+	Domains       []application.RedlaunchDomain
+	CSRFToken     string
+	DomainEdit    *domainEditPageData
+	DomainDelete  *domainDeletePageData
 
 	SSHKeys          []application.ServerSSHKey
 	SSHKeysUsername  string

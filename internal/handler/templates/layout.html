@@ -8,6 +8,7 @@
   <meta name="description" content="Redlaunch application control plane">
   <title>Redlaunch{{if .Setup}} · Setup{{else if .DashboardPage}} · Dashboard{{else if .PostgreSQLServicePage}} · Create PostgreSQL database{{else if .RedisServicePage}} · Create Redis service{{else if .ApplicationContainerPage}} · Create application container{{else if .ApplicationRoutingPage}} · Routing{{else if .ServiceDetailsPage}} · {{.ServiceDetailsPage.Details.Service.Name}}{{else if .ApplicationDetailsPage}} · {{.ApplicationDetailsPage.Application.Name}}{{else if .ProxySettingsPage}} · Proxy settings{{else if .ProxyPage}} · Proxy{{else if .RegistryPage}} · Registry{{else if .DatabasesPage}} · Databases{{else if .HelpPage}} · Help{{with .HelpPage.Guide}} · {{.Title}}{{end}}{{else if .SettingsPage}} · Settings{{else if .ApplicationDeleteProgress}} · Delete application{{else if eq .ActivePage "applications"}} · Applications{{end}}</title>
   {{if .DashboardPage}}<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>{{end}}
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
   {{if or .DashboardPage .ApplicationDetailsPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
@@ -17,7 +18,7 @@
   {{if or .ApplicationDetailsPage .ProxyPage .ProxySettingsPage .ServiceDetailsPage .SettingsPage .DatabasesPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/service-catalog.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-clone.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script><script src="/static/application-name.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ServiceDetailsPage}}<script src="/static/service-action-error.js" defer></script>{{end}}
-  {{if .SettingsPage}}<script src="/static/application-domains.js" defer></script><script src="/static/ssh-keys.js" defer></script><script src="/static/api-tokens.js" defer></script>{{end}}
+  {{if .SettingsPage}}<script src="/static/application-domains.js" defer></script><script src="/static/ssh-keys.js" defer></script><script src="/static/api-tokens.js" defer></script><script src="/static/users.js" defer></script>{{end}}
   {{if .ApplicationRoutingPage}}<script src="/static/application-routings.js" defer></script>{{end}}
   {{if .ApplicationContainerPage}}<script src="/static/application-container.js" defer></script>{{end}}
   {{if .ServiceDetailsPage}}<script src="/static/backup-schedule.js" defer></script><script src="/static/service-details.js" defer></script><script src="/static/postgres-credentials.js" defer></script>{{end}}
@@ -29,7 +30,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a class="brand" href="/" aria-label="Redlaunch home">
-          <img class="brand-logo" src="/static/redlaunch-logo.svg" alt="Redlaunch" width="108" height="28">
+          {{template "brand" .}}
         </a>
       </div>
 

@@ -112,6 +112,13 @@ Use typography hierarchy for:
 
 Technical content such as container names, image names, commands, paths and environment variables may use a monospace font.
 
+## Product logo
+
+The sidebar and sign-in page share the `brand` template: the red stepped mark
+and lowercase Inter wordmark from https://redlaunch.dev/. The wordmark uses the
+foreground token for both themes. Bundle the mark and matching favicon locally;
+do not fetch branding assets from the website at runtime.
+
 ## Spacing
 
 Use the design system spacing scale.

@@ -47,7 +47,7 @@ type helpPageData struct {
 }
 
 var helpGuides = []helpGuide{
-	{Slug: "installation", Title: "Installation", Description: "Prepare a VPS, configure Google login, and complete setup.", File: "INSTALL.md"},
+	{Slug: "installation", Title: "Installation", Description: "Prepare a VPS, create your login, and complete setup.", File: "INSTALL.md"},
 	{Slug: "reference", Title: "Redlaunch reference", Description: "Features, configuration, project layout, and local development.", File: "README.md"},
 	{Slug: "recipes", Title: "Deployment recipes", Description: "Complete GitHub Actions workflows for images, migrations, and deployments.", File: "RECIPES.md"},
 	{Slug: "ssh-keys", Title: "Server SSH keys", Description: "Create, use, rotate, and revoke automation keys.", File: "SSH_KEYS.md"},
@@ -57,9 +57,9 @@ var helpGuides = []helpGuide{
 
 var helpSections = []helpSection{
 	{ID: "getting-started", Title: "Getting started", Description: "Install Redlaunch and connect to your server.", Links: []helpLink{
-		{"Install on Ubuntu or Debian", "Docker prerequisites, the installer, and Google OAuth configuration.", "/help/installation"},
-		{"Configure Google login", "Register the exact local and public callback URLs.", "/help/installation#2-create-google-oauth-credentials"},
-		{"Complete first-run setup", "Choose Caddy, a local registry, or both.", "/help/installation#4-complete-the-redlaunch-first-run-setup"},
+		{"Install on Ubuntu or Debian", "Docker prerequisites, local login, and optional Google OAuth.", "/help/installation"},
+		{"Choose your login method", "Use an email and password, with optional Google sign-in.", "/help/installation#1-choose-your-login-method"},
+		{"Complete first-run setup", "Choose Caddy, a local registry, or both.", "/help/installation#complete-first-run-setup"},
 	}},
 	{ID: "first-steps", Title: "First steps", Description: "Create your first application and make it available.", Links: []helpLink{
 		{"Create an application", "Choose a name and a folder for its managed Compose project.", "/help/installation#create-an-application"},
@@ -68,7 +68,7 @@ var helpSections = []helpSection{
 		{"Understand project files", "Learn where Compose files, variables, secrets, and core components live.", "/help/reference#first-steps"},
 	}},
 	{ID: "how-to", Title: "How-to guides", Description: "Follow practical guides with copyable scripts and workflows.", Links: []helpLink{
-		{"How to publish Redlaunch over HTTPS", "Configure the management hostname, deployment mode, and OAuth callback.", "/help/installation#publish-redlaunch-over-https"},
+		{"How to publish Redlaunch over HTTPS", "Configure the management hostname, deployment mode, and optional OAuth callback.", "/help/installation#publish-redlaunch-over-https"},
 		{"How to push images to the registry", "Build and push images from GitHub Actions through an SSH tunnel.", "/help/recipes#recipe-1-push-docker-images-to-the-local-container-registry"},
 		{"How to run database migrations", "Configure a one-off Drizzle service and trigger it through the API or SSH.", "/help/recipes#recipe-2-trigger-a-drizzle-migration-from-github-actions"},
 		{"How to deploy through the registry", "Push an image and update the managed service from GitHub Actions.", "/help/recipes#recipe-3-deploy-an-application-from-github-actions-via-the-container-registry"},

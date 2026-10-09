@@ -21,13 +21,13 @@ bash install.sh
 
 The installer asks for the installation directory (default `/opt/redlaunch`,
 so the checkout is accessible to multiple users), clones Redlaunch there,
-then asks for the Google OAuth settings and first authorized email address
-and builds and starts the application. It will not overwrite an existing
+then asks for an email address and password and builds and starts
+the application. Google OAuth settings are optional. It will not overwrite an existing
 installation or `.env` file. System locations such as `/opt/redlaunch` use
 `sudo` only to create the directory; the checkout itself is owned by the
 invoking user.
 
-See the [installation guide](INSTALL.md) for prerequisites, Google OAuth setup,
+See the [installation guide](INSTALL.md) for prerequisites, optional Google OAuth setup,
 networking, alternative installation options, and the complete first-run
 walkthrough.
 
@@ -41,7 +41,7 @@ ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
 Keep the tunnel open while using <http://localhost:8080> in your browser.
 Alternatively, place the management interface behind an HTTPS reverse proxy.
 
-When one or more Redlaunch public-access domains are configured in Settings, a
+When Google sign-in is enabled and one or more Redlaunch public-access domains are configured in Settings, a
 login started at a configured public hostname uses
 `https://<hostname>/auth/google/callback` automatically. Register each public
 callback URI in the same Google OAuth client as the local callback URI.
@@ -158,7 +158,7 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
 - Create and revoke server SSH keys for external automation from Settings.
 - Create and revoke per-application API tokens from Settings for
   machine-triggered one-off service runs.
-- Limit access to an allowlist of Google accounts.
+- Sign in with email/password credentials, with optional Google sign-in for the same users. Manage accounts in Settings → Users.
 
 ## First steps
 
@@ -226,10 +226,12 @@ select that patch release through <code>GOTOOLCHAIN</code>.
 
 ```sh
 cp .env.example .env
-# Add your Google OAuth client ID, client secret, and local fallback redirect URL to .env.
 openssl rand -hex 32
 # Add the generated value to .env as AUTH_SESSION_SECRET.
-make add-authorized-email EMAIL=you@example.com
+# Create the first local user without placing the password in shell history.
+read -r -s -p 'Password: ' password; printf '\n'
+printf '%s\n' "$password" | go run ./cmd/redlaunch auth-create-user --email admin@example.com --password-stdin
+unset password
 make run
 ```
 
@@ -245,6 +247,8 @@ The main configuration values are:
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
 | `REDLAUNCH_DIR` | `.` (Compose defaults to `${PWD}`) | Redlaunch checkout directory used by the Settings update action |
 | `REDLAUNCH_IMAGE` | `redlaunch:local` | Image of the Redlaunch container and its detached Settings-update helper |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | empty | Optional Google sign-in; configure both together |
+| `AUTH_SESSION_SECRET` | empty | Required shared session signing key, at least 32 bytes |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
 | `AUTH_COOKIE_SECURE` | `false` | Use secure authentication cookies when TLS terminates in front of Redlaunch |
 | `MANAGEMENT_ACCESS_MODE` | `ssh-only` | `ssh-only` keeps the host listener private; `managed-https` requires a configured TLS proxy |
