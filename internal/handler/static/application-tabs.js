@@ -1,6 +1,7 @@
 (() => {
   document.querySelectorAll("[data-application-tabs]").forEach((tabs) => {
-    const tabButtons = Array.from(tabs.querySelectorAll("[role=tab][data-application-tab]"));
+    const tabButtons = Array.from(tabs.querySelectorAll("[role=tab][data-application-tab]"))
+      .filter((tab) => tab.closest("[data-application-tabs]") === tabs);
     if (!tabButtons.length) {
       return;
     }

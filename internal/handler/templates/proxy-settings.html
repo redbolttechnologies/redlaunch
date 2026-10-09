@@ -5,21 +5,26 @@
     <h1 id="page-title">Proxy settings{{with .ProxySettingsPage.ApplicationName}} · {{.}}{{end}}</h1>
     <p>{{if .ProxySettingsPage.ApplicationID}}Unchecked categories inherit global settings. Enable a category to override all its fields for this application.{{else}}Global defaults for routed applications. Unchecked categories use Caddy defaults and upstream headers.{{end}}</p>
   </div><a class="button button-secondary" href="{{.ProxySettingsPage.BackURL}}">Back</a></header>
-  {{with .ProxySettingsPage.Error}}<div class="application-alert" role="alert">{{.}}</div>{{end}}
-  <form class="application-form proxy-settings-form" method="post">
-    <input type="hidden" name="csrf_token" value="{{.ProxySettingsPage.CSRFToken}}">
+  {{template "proxy-settings-form" .ProxySettingsPage}}
+</section>
+{{end}}
+
+{{define "proxy-settings-form"}}
+  {{with .Error}}<div class="application-alert" role="alert">{{.}}</div>{{end}}
+  <form class="application-form proxy-settings-form" method="post" action="{{.FormAction}}">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <div class="application-tabs settings-tabs" data-application-tabs>
       <div class="application-tablist settings-tablist" role="tablist" aria-label="Proxy settings categories" aria-orientation="vertical">
-        {{range $index, $category := .ProxySettingsPage.Categories}}
-        <button class="application-tab" id="{{$category.Name}}-tab" type="button" role="tab" aria-controls="{{$category.Name}}-panel" aria-selected="{{if eq $index 0}}true{{else}}false{{end}}" tabindex="{{if eq $index 0}}0{{else}}-1{{end}}" data-application-tab="{{$category.Name}}-panel">{{$category.Label}}</button>
+        {{range $index, $category := .Categories}}
+        <button class="application-tab" id="proxy-{{$category.Name}}-tab" type="button" role="tab" aria-controls="proxy-{{$category.Name}}-panel" aria-selected="{{if eq $index 0}}true{{else}}false{{end}}" tabindex="{{if eq $index 0}}0{{else}}-1{{end}}" data-application-tab="proxy-{{$category.Name}}-panel">{{$category.Label}}</button>
         {{end}}
       </div>
-    {{range $index, $category := .ProxySettingsPage.Categories}}
-    <section class="application-tab-panel" id="{{.Name}}-panel" role="tabpanel" aria-labelledby="{{.Name}}-tab" tabindex="0"{{if ne $index 0}} hidden{{end}}>
+    {{range $index, $category := .Categories}}
+    <section class="application-tab-panel" id="proxy-{{.Name}}-panel" role="tabpanel" aria-labelledby="proxy-{{.Name}}-tab" tabindex="0"{{if ne $index 0}} hidden{{end}}>
     <section class="service-widget" aria-labelledby="{{.Name}}-title">
       <header class="service-widget-header"><div class="service-widget-heading"><h2 id="{{.Name}}-title">{{.Label}}</h2></div></header>
       <div class="service-widget-body application-form">
-        <div class="field"><label class="checkbox-field"><input type="checkbox" name="{{.Name}}_enabled"{{if .Enabled}} checked{{end}}> {{if $.ProxySettingsPage.ApplicationID}}Override global settings{{else}}Configure {{.Label}}{{end}}</label></div>
+        <div class="field"><label class="checkbox-field"><input type="checkbox" name="{{.Name}}_enabled"{{if .Enabled}} checked{{end}}> {{if $.ApplicationID}}Override global settings{{else}}Configure {{.Label}}{{end}}</label></div>
         {{range .Fields}}
         <div class="field">
           {{if eq .Type "checkbox"}}
@@ -38,5 +43,4 @@
     </div>
     <footer class="application-form-actions"><button class="button button-primary" type="submit">Save proxy settings</button></footer>
   </form>
-</section>
 {{end}}

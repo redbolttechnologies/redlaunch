@@ -4927,6 +4927,8 @@ type applicationPageData struct {
 }
 
 type applicationDetailsPageData struct {
+	ProxySettings                     *proxySettingsPageData
+	ProxyActive                       bool
 	Application                       application.Application
 	Services                          []application.Service
 	ServicePresets                    []application.ServicePreset
@@ -5436,6 +5438,23 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	data.CSRFToken = csrfToken
 	data.Variables.CSRFToken = csrfToken
 	data.Secrets.CSRFToken = csrfToken
+	data.ProxyActive = data.ProxyActive || r.URL.Query().Get("tab") == "proxy"
+	if data.ProxySettings == nil {
+		if manager, ok := h.applicationDetails.(proxySettingsService); ok {
+			policy, global, err := manager.GetProxySettings(r.Context(), data.Application.ID)
+			data.ProxySettings = &proxySettingsPageData{ApplicationID: data.Application.ID, FormAction: "/applications/" + strconv.FormatInt(data.Application.ID, 10) + "/proxy-settings"}
+			if err != nil {
+				data.ProxySettings.Error = "Proxy settings could not be read. Refresh the page and try again."
+				h.logger.Error("read application proxy settings", "application_id", data.Application.ID, "error", err)
+			} else {
+				data.ProxySettings.Categories = proxyPolicyCategories(policy, global)
+			}
+		}
+	}
+	if data.ProxySettings != nil {
+		data.ProxySettings.CSRFToken = csrfToken
+	}
+
 	if data.ApplicationDeleteProgress != nil {
 		if data.ApplicationDeleteProgress.DeleteURL == "" {
 			data.ApplicationDeleteProgress.DeleteURL = "/applications/" + strconv.FormatInt(data.ApplicationDeleteProgress.ApplicationID, 10) + "/delete"
@@ -5450,6 +5469,7 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	if len(applicationProgress) > 0 {
 		page.ApplicationContainerProgress = applicationProgress[0]
 	}
+	page.ProxyActionToasts = h.proxyActionToastsForPage(r.URL.Query().Get("proxy_action_job"))
 	page.ServiceDeleteProgress = data.ServiceDeleteProgress
 	page.ApplicationDeleteProgress = data.ApplicationDeleteProgress
 	if h.serviceActionJobs != nil {

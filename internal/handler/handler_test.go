@@ -2734,8 +2734,8 @@ func TestApplicationDetailsRendersVariablesAndMasksSecrets(t *testing.T) {
 	if got := strings.Count(body, `data-secret-add`); got != 1 {
 		t.Fatalf("GET /applications/7 rendered %d add secret buttons, want 1: %s", got, body)
 	}
-	if strings.Count(body, `class="application-tab"`) != 5 {
-		t.Fatalf("GET /applications/7 rendered %d tabs, want 5: %s", strings.Count(body, `class="application-tab"`), body)
+	if strings.Count(body, `class="application-tab"`) != 6 {
+		t.Fatalf("GET /applications/7 rendered %d tabs, want 6: %s", strings.Count(body, `class="application-tab"`), body)
 	}
 	if strings.Count(body, `class="service-environment-masked"`) != 1 {
 		t.Fatalf("GET /applications/7 rendered %d masked values, want 1: %s", strings.Count(body, `class="service-environment-masked"`), body)

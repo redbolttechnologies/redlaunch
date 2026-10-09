@@ -331,8 +331,8 @@ and loads both `vars.env` and `secrets.env`.
 
 ## Proxy settings
 
-Open **Proxy → Settings** for global defaults, or **Proxy settings** on an
-application page for overrides. These policies apply to application routes;
+Open **Proxy → Settings** for global defaults, or the **Proxy** tab on an
+application details page for overrides. These policies apply to application routes;
 Redlaunch's management interface keeps its existing policy. An unchecked
 application category inherits the global category. A checked category replaces
 all fields in that category, so an empty category can disable an inherited

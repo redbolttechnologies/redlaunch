@@ -24,9 +24,9 @@ type proxySettingsCategory struct {
 	Fields      []proxySettingsField
 }
 type proxySettingsPageData struct {
-	ApplicationID                              int64
-	ApplicationName, CSRFToken, Error, BackURL string
-	Categories                                 []proxySettingsCategory
+	ApplicationID                                          int64
+	ApplicationName, CSRFToken, Error, BackURL, FormAction string
+	Categories                                             []proxySettingsCategory
 }
 
 func proxyPolicyCategories(p, global application.ProxySettings) []proxySettingsCategory {
@@ -107,7 +107,8 @@ func (h *Handler) proxySettingsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := int64(0)
-	data := proxySettingsPageData{BackURL: "/proxy"}
+	data := proxySettingsPageData{BackURL: "/proxy", FormAction: r.URL.Path}
+	returnURL := r.URL.Path
 	if r.PathValue("id") != "" {
 		var err error
 		id, err = strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -126,6 +127,16 @@ func (h *Handler) proxySettingsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		data.ApplicationName = item.Name
 		data.BackURL = "/applications/" + strconv.FormatInt(id, 10)
+	}
+	if id > 0 {
+		returnURL = data.BackURL + "?tab=proxy"
+		if r.Method == http.MethodGet {
+			if jobID := r.URL.Query().Get("proxy_action_job"); jobID != "" {
+				returnURL += "&proxy_action_job=" + url.QueryEscape(jobID)
+			}
+			http.Redirect(w, r, returnURL, http.StatusSeeOther)
+			return
+		}
 	}
 	data.ApplicationID = id
 	p, global, err := manager.GetProxySettings(r.Context(), id)
@@ -165,7 +176,7 @@ func (h *Handler) proxySettingsPage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			job.mu.Lock()
-			job.closeURL = r.URL.Path
+			job.closeURL = returnURL
 			job.mu.Unlock()
 			if err := h.startTrackedJob("proxy-action", func(ctx context.Context) {
 				if err := manager.SaveProxySettings(ctx, id, submitted); err != nil {
@@ -179,12 +190,27 @@ func (h *Handler) proxySettingsPage(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
 				return
 			}
-			http.Redirect(w, r, r.URL.Path+"?proxy_action_job="+url.QueryEscape(job.id), http.StatusSeeOther)
+			separator := "?"
+			if id > 0 {
+				separator = "&"
+			}
+			http.Redirect(w, r, returnURL+separator+"proxy_action_job="+url.QueryEscape(job.id), http.StatusSeeOther)
 			return
 		}
 	}
 	if data.Categories == nil {
 		data.Categories = proxyPolicyCategories(p, global)
+	}
+	if id > 0 {
+		details, err := h.loadApplicationDetailsPageData(r.Context(), id)
+		if err != nil {
+			http.Error(w, "The application details could not be read.", http.StatusInternalServerError)
+			return
+		}
+		details.ProxySettings = &data
+		details.ProxyActive = true
+		h.writeApplicationDetailsPage(w, r, status, details, nil, nil)
+		return
 	}
 	data.CSRFToken = h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")

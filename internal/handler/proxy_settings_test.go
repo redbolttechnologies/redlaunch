@@ -49,13 +49,13 @@ func TestProxySettingsPagesAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/proxy/settings", "/applications/7/proxy-settings"} {
+	for _, path := range []string{"/proxy/settings", "/applications/7?tab=proxy"} {
 		w := httptest.NewRecorder()
 		web.Routes().ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != 200 {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
 		}
-		if path == "/proxy/settings" && os.Getenv("REDLAUNCH_PROXY_UI_FIXTURE") != "" {
+		if path == "/applications/7?tab=proxy" && os.Getenv("REDLAUNCH_PROXY_UI_FIXTURE") != "" {
 			if err := os.WriteFile(os.Getenv("REDLAUNCH_PROXY_UI_FIXTURE"), w.Body.Bytes(), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -68,6 +68,12 @@ func TestProxySettingsPagesAndSave(t *testing.T) {
 		if strings.Contains(w.Body.String(), "Test <app>") {
 			t.Fatal("unescaped app name")
 		}
+	}
+
+	wRedirect := httptest.NewRecorder()
+	web.Routes().ServeHTTP(wRedirect, httptest.NewRequest("GET", "/applications/7/proxy-settings", nil))
+	if wRedirect.Code != http.StatusSeeOther || wRedirect.Header().Get("Location") != "/applications/7?tab=proxy" {
+		t.Fatalf("legacy page did not redirect to tab: %d %s", wRedirect.Code, wRedirect.Header().Get("Location"))
 	}
 	form := url.Values{"csrf_token": {web.csrfToken}, "cache_enabled": {"on"}, "cache_control": {"private, no-store"}, "body_enabled": {"on"}, "body_bytes": {"1024"}}
 	req := httptest.NewRequest("POST", "/applications/7/proxy-settings", strings.NewReader(form.Encode()))
@@ -90,7 +96,7 @@ func TestProxySettingsPagesAndSave(t *testing.T) {
 	if job.snapshot().State != proxyActionJobStateComplete {
 		t.Fatal("job did not complete")
 	}
-	if job.snapshot().CloseURL != "/applications/7/proxy-settings" {
+	if job.snapshot().CloseURL != "/applications/7?tab=proxy" {
 		t.Fatal("job lost return URL")
 	}
 	if w.Code != 303 || fake.saved != 1 || fake.savedID != 7 || *fake.policy.CacheControl != "private, no-store" || fake.policy.BodyLimit.Bytes != 1024 {
@@ -177,5 +183,35 @@ func TestProxySettingsSaveRunsInBackgroundAndReportsFailure(t *testing.T) {
 	web.Routes().ServeHTTP(w, httptest.NewRequest("GET", "/proxy/action/status?id="+job.id, nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Proxy settings failed") || strings.Contains(w.Body.String(), "private infrastructure detail") {
 		t.Fatalf("incorrect failure response: %s", w.Body.String())
+	}
+}
+
+func TestApplicationProxyTabOrderAndValidation(t *testing.T) {
+	fake := &fakeProxyPolicyService{fakeApplicationService: fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Proxy app"}}}}
+	web, err := New(nil, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	web.Routes().ServeHTTP(w, httptest.NewRequest("GET", "/applications/7?tab=proxy", nil))
+	body := w.Body.String()
+	domains, proxy, settings := strings.Index(body, `id="domains-tab"`), strings.Index(body, `id="proxy-tab"`), strings.Index(body, `id="settings-tab"`)
+	if w.Code != 200 || domains < 0 || proxy <= domains || settings <= proxy {
+		t.Fatal("Proxy tab is not between Domains and Settings")
+	}
+	if strings.Contains(body, `href="/applications/7/proxy-settings"`) {
+		t.Fatal("separate Proxy settings button is still present")
+	}
+	if !strings.Contains(body, `id="proxy-tab" type="button" role="tab" aria-controls="proxy-panel" aria-selected="true"`) || !strings.Contains(body, `action="/applications/7/proxy-settings"`) {
+		t.Fatal("Proxy tab or form is not active")
+	}
+	form := url.Values{"csrf_token": {web.csrfToken}, "body_enabled": {"on"}, "body_bytes": {"invalid"}}
+	req := httptest.NewRequest("POST", "/applications/7/proxy-settings", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: web.csrfToken})
+	w = httptest.NewRecorder()
+	web.Routes().ServeHTTP(w, req)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), `data-application-initial-tab="proxy"`) || !strings.Contains(w.Body.String(), `value="invalid"`) || !strings.Contains(w.Body.String(), "Invalid proxy settings") || fake.saved != 0 {
+		t.Fatalf("invalid submission did not stay in Proxy tab: %d", w.Code)
 	}
 }

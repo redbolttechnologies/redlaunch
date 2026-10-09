@@ -14,7 +14,6 @@
 
   <header class="page-heading application-details-heading">
     {{template "application-name-block" .}}
-    <a class="button button-secondary" href="/applications/{{.ApplicationDetailsPage.Application.ID}}/proxy-settings">Proxy settings</a>
   </header>
 
   {{if .ApplicationDetailsPage.ClonedFrom}}
@@ -23,16 +22,17 @@
   </div>
   {{end}}
 
-  <div class="application-tabs" data-application-tabs>
+  <div class="application-tabs" data-application-tabs{{if .ApplicationDetailsPage.ProxyActive}} data-application-initial-tab="proxy"{{end}}>
     <div class="application-tablist" role="tablist" aria-label="Application details">
-      <button class="application-tab" id="services-tab" type="button" role="tab" aria-controls="services-panel" aria-selected="true" tabindex="0" data-application-tab="services-panel">Services</button>
+      <button class="application-tab" id="services-tab" type="button" role="tab" aria-controls="services-panel" aria-selected="{{if .ApplicationDetailsPage.ProxyActive}}false{{else}}true{{end}}" tabindex="{{if .ApplicationDetailsPage.ProxyActive}}-1{{else}}0{{end}}" data-application-tab="services-panel">Services</button>
       <button class="application-tab" id="variables-tab" type="button" role="tab" aria-controls="variables-panel" aria-selected="false" tabindex="-1" data-application-tab="variables-panel">Variables</button>
       <button class="application-tab" id="secrets-tab" type="button" role="tab" aria-controls="secrets-panel" aria-selected="false" tabindex="-1" data-application-tab="secrets-panel">Secrets</button>
       <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="false" tabindex="-1" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="proxy-tab" type="button" role="tab" aria-controls="proxy-panel" aria-selected="{{if .ApplicationDetailsPage.ProxyActive}}true{{else}}false{{end}}" tabindex="{{if .ApplicationDetailsPage.ProxyActive}}0{{else}}-1{{end}}" data-application-tab="proxy-panel">Proxy</button>
       <button class="application-tab" id="settings-tab" type="button" role="tab" aria-controls="settings-panel" aria-selected="false" tabindex="-1" data-application-tab="settings-panel">Settings</button>
     </div>
 
-    <section class="application-tab-panel" id="services-panel" role="tabpanel" aria-labelledby="services-tab" tabindex="0">
+    <section class="application-tab-panel" id="services-panel" role="tabpanel" aria-labelledby="services-tab" tabindex="0"{{if .ApplicationDetailsPage.ProxyActive}} hidden{{end}}>
       <section class="services-section" aria-labelledby="services-title">
         <header class="services-section-header">
           <div class="services-section-heading">
@@ -338,6 +338,13 @@
           {{end}}
         </div>
       </section>
+    </section>
+
+    <section class="application-tab-panel" id="proxy-panel" role="tabpanel" aria-labelledby="proxy-tab" tabindex="0"{{if not .ApplicationDetailsPage.ProxyActive}} hidden{{end}}>
+      <p class="field-help">Unchecked categories inherit global settings. Enable a category to override all its fields for this application.</p>
+      {{with .ApplicationDetailsPage.ProxySettings}}
+        {{if .Categories}}{{template "proxy-settings-form" .}}{{else}}<div class="application-alert" role="alert">{{.Error}}</div>{{end}}
+      {{else}}<p class="field-help">Proxy settings are not configured.</p>{{end}}
     </section>
 
     <section class="application-tab-panel application-settings-panel" id="settings-panel" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
