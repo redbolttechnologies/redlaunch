@@ -49,6 +49,14 @@ func TestDispatchRejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestManagementRestartCommandRejectsUnsupportedArguments(t *testing.T) {
+	for _, args := range [][]string{{"management-restart-run", "--unknown"}, {"management-restart-run", "unexpected"}, {"management-restart-run", "--directory", t.TempDir()}} {
+		if err := dispatch(context.Background(), args); err == nil {
+			t.Fatal("invalid helper invocation accepted")
+		}
+	}
+}
+
 func TestRunSelfUpdatePullsThenRebuildsSynchronously(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "docker-compose.yml"), []byte("services:\n  app:\n    image: redlaunch:local\n"), 0o644); err != nil {

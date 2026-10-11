@@ -22,6 +22,7 @@
     </div>
 
     <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive .SettingsPage.MCPActive}} hidden{{end}}>
+      {{template "settings-management-access" .}}
       <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">

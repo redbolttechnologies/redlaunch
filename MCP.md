@@ -475,6 +475,13 @@ You need a running Redlaunch server, an account that can sign in to it, and
 your coding assistant installed on the computer where you want to use it.
 For a public connection, configure a Redlaunch domain in **Settings → Domains**
 and make sure you can open Redlaunch at its HTTPS address in your browser.
+Under **Management access mode** on that same Settings tab, select **Managed
+HTTPS**, confirm, and choose **Save and restart**. Wait for Redlaunch to return,
+then refresh Settings and check the running mode. Adding a domain alone does
+not enable the HTTPS startup mode; without it, public MCP discovery can return
+404 even though the login page works. This action does not change your port
+bindings or firewall. See [publishing Redlaunch over HTTPS](INSTALL.md#publish-redlaunch-over-https)
+if the proxy cannot reach the management port.
 If your server is only reachable through SSH, use the [tunnel instructions](#loopback-and-ssh-tunnels).
 
 Choose how much access to give the assistant:

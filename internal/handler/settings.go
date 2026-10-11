@@ -303,6 +303,13 @@ func redlaunchDomainDeleteMessage(err error) string {
 }
 
 func (h *Handler) writeSettingsPage(w http.ResponseWriter, r *http.Request, status int, data settingsPageData, progress ...*selfUpdateProgressData) {
+	_, data.ManagementAccessAvailable = h.selfUpdater.(managementAccessService)
+	// The effective mode remains the startup setting until recreation completes.
+	data.ManagementAccessMode = h.accessMode
+	data.ManagementSecureCookies = h.cookieSecure
+	if data.ManagementAccessSelection == "" {
+		data.ManagementAccessSelection = h.accessMode
+	}
 	csrfToken := h.setCSRFCookie(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	data.CSRFToken = csrfToken

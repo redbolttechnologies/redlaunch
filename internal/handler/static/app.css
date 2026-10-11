@@ -1638,6 +1638,11 @@ h1 {
   margin-top: 0;
 }
 
+.settings-tabs .application-tab-panel:not([hidden]) {
+  display: grid;
+  gap: var(--space-6);
+}
+
 .application-settings-header {
   padding-bottom: var(--space-4);
   border-bottom: 1px solid hsl(var(--border));

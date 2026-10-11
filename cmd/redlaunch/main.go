@@ -61,6 +61,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return runManagedBackup(ctx, args[1:])
 	case "selfupdate-run":
 		return runSelfUpdate(ctx, args[1:])
+	case "management-restart-run":
+		return runManagementRestart(ctx, args[1:])
 	case "auth-validate-password":
 		return runValidatePassword(args[1:], os.Stdin)
 	case "auth-create-user":
@@ -97,6 +99,20 @@ func runMCP(ctx context.Context, args []string, input io.Reader, output io.Write
 		defer stop()
 	}
 	return server.Serve(ctx, input, output)
+}
+
+func runManagementRestart(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("management-restart-run", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	directory := flags.String("directory", "", "installation directory")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: management-restart-run --directory PATH")
+	}
+	updater, err := service.NewSelfUpdateService(*directory, "", "")
+	if err != nil {
+		return err
+	}
+	return updater.RunManagementRestart(ctx)
 }
 
 func runComposeProjectName(args []string, output io.Writer) error {
@@ -225,6 +241,7 @@ func run(ctx context.Context) error {
 	}
 
 	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
+		ProjectsRoot: cfg.ProjectsRoot,
 		Directory:    cfg.RedlaunchDir,
 		UpdaterImage: cfg.RedlaunchImage,
 	})

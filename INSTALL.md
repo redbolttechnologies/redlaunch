@@ -172,23 +172,51 @@ first install Caddy through the server setup above, then:
    https://redlaunch.example.com/auth/google/callback
    ```
 
-4. In the installation's `.env` file, set:
+4. Make sure Caddy can reach Redlaunch's existing management port. For the
+   standard host-gateway setup, set this in the installation's `.env` if needed:
 
    ```text
-   MANAGEMENT_ACCESS_MODE='managed-https'
    APP_BIND_ADDRESS='0.0.0.0'
    ```
 
-5. From the installation directory, apply the changes:
+   Apply any port-binding change from the installation directory:
 
    ```sh
    docker compose up -d
    ```
 
-Then open your HTTPS URL. Managed HTTPS enables secure authentication cookies.
+5. Open **Settings → Domains → Management access mode**. Select **Managed HTTPS**,
+   confirm that you can reconnect through HTTPS or your SSH tunnel, and choose
+   **Save and restart**. The UI changes only `MANAGEMENT_ACCESS_MODE` in the
+   installation's `.env`, validates Compose, and queues recreation of the
+   Redlaunch container without pulling code or rebuilding the image. Wait a
+   moment, refresh Settings, and check that **Running mode** is **Managed HTTPS**.
+
+Then open your HTTPS URL. Managed HTTPS enables secure authentication cookies
+and public OAuth MCP discovery. Adding a domain alone does not enable this mode.
 Restrict direct access to port 8080 with firewall rules that account for
 Docker's published ports; Caddy must be able to reach the manager through the
 host gateway.
+
+The UI does not change port bindings, firewall rules, Caddy domains, or
+`AUTH_COOKIE_SECURE`. An explicitly configured `AUTH_COOKIE_SECURE=true` still
+enables secure-cookie/HTTPS behavior when the selected mode is SSH-only.
+SSH-only is a startup mode, not a firewall or a command to remove public routing.
+
+The UI restart requires the standard Compose `app` service and a regular,
+writable installation `.env` with unique single-line assignments. Unsupported
+multiline or duplicate entries are rejected rather than rewritten. Restart-helper
+files live under `PROJECTS_ROOT/core/manager-restart/`, with separate empty
+`vars.env` and `secrets.env`. Known validation/launch failures restore the original
+configuration unless it was edited concurrently. If the helper's launch status
+cannot be confirmed, the saved setting is retained and the server logs explain
+that manual inspection is required. A queued restart is not proof it completed;
+if Redlaunch does not return, inspect `docker compose ps` and
+`docker logs redbolt-redlaunch-updater` from the host before retrying.
+
+For installations where the restart service is unavailable, set
+`MANAGEMENT_ACCESS_MODE=managed-https` in `.env` and run `docker compose up -d`
+manually instead.
 
 For Google sign-in, keep the localhost callback registered and
 `GOOGLE_REDIRECT_URL` as the local fallback. Redlaunch automatically uses the HTTPS callback when login starts

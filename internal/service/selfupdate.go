@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
@@ -40,16 +41,21 @@ const (
 // does not kill it. The synchronous Update method remains for direct host
 // execution and the `selfupdate-run` operator command.
 type SelfUpdateService struct {
-	directory    string
-	gitBinary    string
-	dockerBinary string
-	dockerSocket string
-	updaterImage string
+	mu            sync.Mutex
+	restartQueued bool
+	projectsRoot  string
+	directory     string
+	gitBinary     string
+	dockerBinary  string
+	dockerSocket  string
+	updaterImage  string
 }
 
 // SelfUpdateOptions configures a SelfUpdateService beyond the basic
 // directory and binaries.
 type SelfUpdateOptions struct {
+	// ProjectsRoot contains per-component helper files. Defaults to Directory/projects.
+	ProjectsRoot string
 	// Directory is the Redlaunch checkout directory. Required.
 	Directory string
 	// GitBinary defaults to git.
@@ -113,7 +119,12 @@ func NewSelfUpdateServiceWithOptions(options SelfUpdateOptions) (*SelfUpdateServ
 	if !validSelfUpdateImage(updaterImage) {
 		return nil, fmt.Errorf("updater image %q is invalid", updaterImage)
 	}
+	projectsRoot := strings.TrimSpace(options.ProjectsRoot)
+	if projectsRoot == "" {
+		projectsRoot = filepath.Join(cleaned, "projects")
+	}
 	return &SelfUpdateService{
+		projectsRoot: filepath.Clean(projectsRoot),
 		directory:    cleaned,
 		gitBinary:    gitBinary,
 		dockerBinary: dockerBinary,
@@ -192,6 +203,11 @@ func (s *SelfUpdateService) UpdateWithProgress(ctx context.Context, progress fun
 func (s *SelfUpdateService) QueueUpdateWithProgress(ctx context.Context, progress func(stage, message string)) error {
 	if s == nil {
 		return errors.New("self-update service is not configured")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restartQueued {
+		return errors.New("a Redlaunch access-mode restart is already queued")
 	}
 	if ctx == nil {
 		ctx = context.Background()

@@ -283,6 +283,10 @@ type selfUpdateService interface {
 	QueueUpdateWithProgress(context.Context, func(stage, message string)) error
 }
 
+type managementAccessService interface {
+	QueueManagementAccessMode(context.Context, string) error
+}
+
 // ServerInfo contains the local machine identity shown in the application shell.
 type ServerInfo struct {
 	Hostname  string
@@ -804,6 +808,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
 	mux.HandleFunc("POST /settings/mcp-connections/delete", h.revokeMCPConnection)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
+	mux.HandleFunc("POST /settings/management-access", h.saveManagementAccess)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/start", h.startService)
@@ -5136,21 +5141,27 @@ type registryPurgeDialogData struct {
 }
 
 type settingsPageData struct {
-	MCPEnabled     bool
-	MCPActive      bool
-	MCPConnections []application.OAuthConnection
-	MCPDelete      *mcpConnectionDeletePageData
-	Users          []application.UserAccount
-	UsersActive    bool
-	UserDialog     string
-	UserID         int64
-	UserEmail      string
-	UserError      string
-	CanDeleteUser  bool
-	Domains        []application.RedlaunchDomain
-	CSRFToken      string
-	DomainEdit     *domainEditPageData
-	DomainDelete   *domainDeletePageData
+	ManagementAccessAvailable bool
+	ManagementAccessMode      string
+	ManagementAccessSelection string
+	ManagementAccessError     string
+	ManagementAccessQueued    bool
+	ManagementSecureCookies   bool
+	MCPEnabled                bool
+	MCPActive                 bool
+	MCPConnections            []application.OAuthConnection
+	MCPDelete                 *mcpConnectionDeletePageData
+	Users                     []application.UserAccount
+	UsersActive               bool
+	UserDialog                string
+	UserID                    int64
+	UserEmail                 string
+	UserError                 string
+	CanDeleteUser             bool
+	Domains                   []application.RedlaunchDomain
+	CSRFToken                 string
+	DomainEdit                *domainEditPageData
+	DomainDelete              *domainDeletePageData
 
 	SSHKeys          []application.ServerSSHKey
 	SSHKeysUsername  string
