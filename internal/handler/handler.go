@@ -348,6 +348,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryTimeISO":             registryTimeISO,
 		"registryTimeTitle":           registryTimeTitle,
 		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
+		"databaseWorkspacePath":       managedDatabaseWorkspacePath,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -761,6 +762,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /databases/stop", h.managedDatabasesClusterAction("stop"))
 	mux.HandleFunc("POST /databases/restart", h.managedDatabasesClusterAction("restart"))
 	mux.HandleFunc("POST /databases/create", h.createManagedDatabase)
+	mux.HandleFunc("GET /databases/{name}", h.databaseWorkspace)
+	mux.HandleFunc("POST /databases/{name}/query", h.databaseWorkspace)
 	mux.HandleFunc("POST /databases/drop", h.dropManagedDatabase)
 	mux.HandleFunc("POST /databases/users/create", h.createManagedDatabaseUser)
 	mux.HandleFunc("POST /databases/users/password", h.updateManagedDatabaseUserPassword)
@@ -4826,6 +4829,7 @@ type pageData struct {
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
 	ManagedDatabasesProgress     *managedDatabasesProgressData
+	DatabaseWorkspacePage        *databaseWorkspacePageData
 	SelfUpdateProgress           *selfUpdateProgressData
 	ServiceActionProgress        *serviceActionProgressData
 	ServiceActionToasts          []*serviceActionProgressData

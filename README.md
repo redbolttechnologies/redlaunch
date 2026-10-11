@@ -152,6 +152,20 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   tab keeps the selected database while editing schedules or managing backup
   history, with confirmation before restoring or deleting a backup. Settings
   separates cluster details and runtime controls from the disable action.
+- Click a database name on **Databases → Databases** to open its SQL workspace.
+  Schemas and tables appear on the left, with an SQL editor above query results
+  on the right. Right-click a table (or click it, or use Shift+F10) and choose
+  **Show data (max. 1000 rows)** to load and automatically execute a quoted
+  SELECT script. Edited SQL and write operations require **Run SQL** or
+  Ctrl/⌘+Enter; writes take effect immediately. **Refresh** reloads the schema
+  browser after schema changes and clears the editor/results. Queries run as
+  the database owner through the container's local socket, not as the cluster
+  administrator. Administrative owners and owners with host-file/program
+  privileges cannot use the workspace. SQL execution uses a 30-second
+  statement timeout, a 5-second lock timeout, and a 4 MiB output limit. Tabular
+  results display at most 1000 rows; use LIMIT in custom queries to bound work.
+  Multi-result scripts with differing column counts display escaped text output.
+  psql backslash commands are not supported.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed

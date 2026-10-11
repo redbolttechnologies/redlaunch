@@ -1,0 +1,41 @@
+{{define "database-workspace.html"}}{{template "layout" .}}{{end}}
+
+{{define "database-workspace-content.html"}}
+<section class="proxy-page" aria-labelledby="page-title">
+<header class="page-heading">
+  <div class="page-heading-copy"><a href="/databases?tab=managed-databases">Databases</a><h1 id="page-title"><code>{{.DatabaseWorkspacePage.Database.Name}}</code></h1><p>Browse schemas and run SQL as <code>{{.DatabaseWorkspacePage.Database.Owner}}</code>.</p></div>
+</header>
+<div class="database-workspace" data-database-workspace>
+  <aside class="service-widget database-schema-browser" aria-labelledby="database-schema-title">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-schema-title">Schemas and tables</h2></div><a class="button button-secondary" href="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}">Refresh</a></header>
+    <div class="service-widget-body">
+      {{range .DatabaseWorkspacePage.Schemas}}
+      {{$schema := .Name}}
+      <details open><summary><code>{{.Name}}</code></summary>
+        <ul class="database-table-list">
+          {{range .Tables}}
+          <li><details class="database-table-menu" data-table-menu><summary data-table-name data-sql="{{.SQL}}" aria-label="Actions for table {{.Name}}"><code>{{.Name}}</code></summary>
+            <form method="post" action="{{databaseWorkspacePath $.DatabaseWorkspacePage.Database.Name}}/query" class="service-actions-options" data-table-context-menu>
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="action" value="show-data"><input type="hidden" name="schema" value="{{$schema}}"><input type="hidden" name="table" value="{{.Name}}">
+              <input type="hidden" name="sql" value="{{.SQL}}">
+              <button class="service-actions-item" type="submit" data-table-show-data>Show data (max. 1000 rows)</button>
+            </form>
+          </details></li>
+          {{else}}<li class="muted">No tables in this schema.</li>{{end}}
+        </ul>
+      </details>
+      {{else}}<p class="muted">No schemas available.</p>{{end}}
+    </div>
+  </aside>
+  <div class="database-query-panels">
+    <section class="service-widget" aria-labelledby="database-editor-title">
+      <form method="post" action="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-post="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-target="#database-query-result" hx-swap="outerHTML" hx-disabled-elt="find button" data-query-form>
+        <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-editor-title">SQL editor</h2></div><button class="button button-primary" type="submit">Run SQL</button></header>
+        <div class="service-widget-body"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><div class="field"><label class="sr-only" for="database-sql">SQL statement or script</label><textarea id="database-sql" class="database-sql-editor" name="sql" rows="10" maxlength="65536" spellcheck="false" required placeholder="SELECT * FROM &quot;public&quot;.&quot;your_table&quot; LIMIT 1000;">{{.DatabaseWorkspacePage.SQL}}</textarea></div><p class="muted">Write operations change the database immediately. Use Run SQL or Ctrl/⌘ + Enter. Right-click a table for prepared queries.</p><p class="muted htmx-indicator" role="status">Running SQL…</p></div>
+      </form>
+    </section>
+    {{template "database-query-result.html" .}}
+  </div>
+</div>
+</section>
+{{end}}

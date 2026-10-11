@@ -1,3 +1,81 @@
+.database-workspace {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(0, 3fr);
+  align-items: start;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+.database-query-panels {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.database-query-panels .htmx-indicator {
+  display: none;
+}
+
+.database-query-panels .htmx-request .htmx-indicator {
+  display: block;
+}
+
+.database-workspace .muted {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+
+.database-schema-browser summary {
+  padding: var(--space-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.database-schema-browser summary:hover {
+  background: hsl(var(--accent));
+}
+
+.database-table-list {
+  margin: 0;
+  padding: 0 0 0 var(--space-4);
+  list-style: none;
+}
+
+.database-table-menu {
+  position: relative;
+}
+
+.database-table-menu .service-actions-options {
+  top: 100%;
+  left: 0;
+  right: auto;
+  min-width: 16rem;
+}
+
+.database-sql-editor,
+.database-script-output {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+  overflow: auto;
+}
+
+.database-result-scroll,
+.database-script-output {
+  max-height: 32rem;
+}
+
+.database-result-scroll td code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .database-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Inter 4.1, bundled under the SIL Open Font License (Inter-LICENSE.txt). */
 @font-face {
   font-family: Inter;

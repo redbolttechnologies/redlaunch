@@ -1,0 +1,15 @@
+{{define "database-query-result.html"}}
+{{with .DatabaseWorkspacePage}}
+<section class="service-widget" id="database-query-result" aria-labelledby="database-result-title" aria-live="polite">
+  <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-result-title">Results</h2>{{with .Result}}<p>{{if .Columns}}{{len .Rows}} {{if eq (len .Rows) 1}}row{{else}}rows{{end}}{{if .Truncated}} · Showing the first 1000 rows{{end}}{{else}}Statement completed.{{end}}</p>{{end}}</div></header>
+  <div class="service-widget-body">
+    {{if .Error}}<div class="application-alert" role="alert">{{.Error}}</div>
+    {{else if .Result}}{{with .Result}}
+      {{if .Output}}<pre class="database-script-output"><code>{{.Output}}</code></pre>
+      {{else if .Columns}}<div class="service-environment-table-wrap database-result-scroll"><table class="service-environment-table"><caption class="sr-only">SQL query results</caption><thead><tr>{{range .Columns}}<th scope="col"><code>{{.}}</code></th>{{end}}</tr></thead><tbody>{{range .Rows}}<tr>{{range .}}<td><code>{{.}}</code></td>{{end}}</tr>{{else}}<tr><td colspan="{{len .Columns}}">No rows returned.</td></tr>{{end}}</tbody></table></div>
+      {{else}}<p class="muted">SQL completed successfully.</p>{{end}}
+    {{end}}{{else}}<p class="muted">Run a query to see its results here.</p>{{end}}
+  </div>
+</section>
+{{end}}
+{{end}}
