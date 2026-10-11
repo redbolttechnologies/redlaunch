@@ -434,6 +434,23 @@ func (s *OAuthService) RevokeToken(ctx context.Context, token string) error {
 	return nil
 }
 
+// ValidateAccessTokenResource enforces the OAuth audience independently of
+// the ordinary API-token expiry and permission checks made by the caller.
+// Manually issued API tokens are not OAuth credentials for remote MCP.
+func (s *OAuthService) ValidateAccessTokenResource(ctx context.Context, token, resource string) error {
+	grant, err := s.repository.GetOAuthGrantByAccessTokenHash(ctx, sha256Sum(token))
+	if errors.Is(err, application.ErrOAuthGrantNotFound) {
+		return application.NewOAuthError(application.OAuthErrorInvalidGrant, "An OAuth access token is required.")
+	}
+	if err != nil {
+		return fmt.Errorf("check OAuth resource: %w", err)
+	}
+	if grant.Resource != resource {
+		return application.NewOAuthError(application.OAuthErrorInvalidTarget, "The access token belongs to a different resource.")
+	}
+	return nil
+}
+
 func oauthValuesAllowed(values []string, allowed ...string) bool {
 	for _, value := range values {
 		found := false

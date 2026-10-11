@@ -450,7 +450,7 @@ at 60 attempts; timeout does not stop the server-side task.
 
 For token rotation and API errors, see [API tokens](API_TOKENS.md). For complete
 deployment workflows, see [Deployment recipes](RECIPES.md).
-# Remote OAuth rollout
+## Remote OAuth rollout
 
 The OAuth authorization-server foundation is implemented: dynamic public-client
 registration, signed-in browser consent with S256 PKCE, single-use one-minute
@@ -459,5 +459,35 @@ hour; refresh grants expire after 30 days idle or 90 days absolute. Only token
 hashes are persisted. A 60-second in-memory replay window handles lost refresh
 responses; that window does not survive a server restart.
 
-This foundation alone does not expose remote MCP. Existing stdio configuration
-and manually issued API tokens continue to work unchanged.
+Remote MCP is now served over stateless Streamable HTTP at:
+
+- `https://your-vps.example.com/mcp/manage` for server-wide management.
+- `https://your-vps.example.com/mcp/apps/123` for runs pinned to application 123.
+
+Configure the URL as a remote MCP server in your assistant, then complete the
+assistant's browser sign-in flow. Only the URL belongs in committed MCP
+configuration; OAuth credentials are stored and refreshed by the assistant,
+not in repository files or Redlaunch environment variables. Changing VPS URLs
+requires a separate approval for the new server.
+
+The server publishes resource-specific discovery documents under
+`/.well-known/oauth-protected-resource/mcp/manage` and
+`/.well-known/oauth-protected-resource/mcp/apps/123`. Tokens are bound to the
+exact approved origin and endpoint: management and application endpoints cannot
+share tokens. Public access requires a configured Redlaunch domain over HTTPS.
+Loopback HTTP is supported server-side for local access and SSH tunnels; actual
+assistant interoperability still needs verification.
+
+The transport accepts single JSON-RPC POSTs with `Content-Type: application/json`
+and `Accept: application/json, text/event-stream`. It returns JSON responses or
+empty 202 responses for notifications, without session IDs or an SSE stream.
+GET and DELETE return 405. Tool calls use the existing machine APIs in-process.
+There is no read-only grant split: approval enables the full existing `manage`
+or application-pinned `run` permissions. Treat client names as unverified and
+approve only connections you initiated.
+
+Existing stdio configuration and manually issued API tokens continue to work
+unchanged, but manually issued tokens are not accepted at the OAuth remote MCP
+endpoints. OAuth access tokens currently appear in Settings → API tokens;
+dedicated connection management is planned in the next phase. Real-client
+verification with OpenCode, Codex, and Claude Code has not yet been performed.

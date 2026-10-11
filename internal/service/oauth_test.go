@@ -530,3 +530,24 @@ func TestOAuthRefreshRejectsOtherClientsAndAccessTokens(t *testing.T) {
 		t.Fatalf("legitimate refresh rejected after misuse attempts: %v", err)
 	}
 }
+
+func TestOAuthAccessTokenResourceBinding(t *testing.T) {
+	s, _, _, appID := newOAuthServiceForTest(t)
+	client := registerOAuthClientForTest(t, s)
+	runResource := application.OAuthApplicationResource(oauthTestOrigin, appID)
+	manage := issueOAuthTokensForTest(t, s, client.ID, oauthTestManage)
+	run := issueOAuthTokensForTest(t, s, client.ID, runResource)
+	for _, tc := range []struct{ token, resource string }{{manage.AccessToken, oauthTestManage}, {run.AccessToken, runResource}} {
+		if err := s.ValidateAccessTokenResource(t.Context(), tc.token, tc.resource); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ token, resource string }{{manage.AccessToken, runResource}, {run.AccessToken, oauthTestManage}, {manage.AccessToken, "https://other.example.com/mcp/manage"}} {
+		if code := oauthErrorCode(t, s.ValidateAccessTokenResource(t.Context(), tc.token, tc.resource)); code != application.OAuthErrorInvalidTarget {
+			t.Fatalf("audience error = %s", code)
+		}
+	}
+	if code := oauthErrorCode(t, s.ValidateAccessTokenResource(t.Context(), manage.RefreshToken, oauthTestManage)); code != application.OAuthErrorInvalidGrant {
+		t.Fatalf("refresh token error = %s", code)
+	}
+}

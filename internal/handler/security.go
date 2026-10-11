@@ -48,6 +48,12 @@ func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
 
 func (h *Handler) withOriginCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// MCP validates Origin against its advertised OAuth resource origin on
+		// every method, including loopback tunnels with secure browser cookies.
+		if isMCPMachinePath(r.URL.Path) && !strings.HasPrefix(r.URL.Path, protectedResourcePrefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return

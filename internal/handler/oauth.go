@@ -21,6 +21,7 @@ type oauthService interface {
 	CompleteAuthorization(context.Context, string, application.OAuthAuthorizationRequest, bool) (string, error)
 	ExchangeToken(context.Context, application.OAuthTokenRequest) (application.OAuthTokenResponse, error)
 	RevokeToken(context.Context, string) error
+	ValidateAccessTokenResource(context.Context, string, string) error
 }
 
 const maxOAuthRegistrationBody = 16 << 10
@@ -28,6 +29,9 @@ const maxOAuthRegistrationBody = 16 << 10
 // isOAuthMachinePath lists the endpoints MCP clients call without a browser
 // session or CSRF cookie. Authorization and consent stay browser-protected.
 func isOAuthMachinePath(path string) bool {
+	if isMCPMachinePath(path) {
+		return true
+	}
 	switch path {
 	case "/.well-known/oauth-authorization-server", "/oauth/register", "/oauth/token", "/oauth/revoke":
 		return true

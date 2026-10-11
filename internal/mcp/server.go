@@ -1,4 +1,4 @@
-// Package mcp provides a local stdio MCP interface to public integration guides
+// Package mcp provides stdio and stateless HTTP MCP interfaces to integration guides
 // and the authenticated Redlaunch machine APIs. It never opens the
 // database, reads local configuration files, or invokes Docker.
 package mcp
