@@ -500,6 +500,15 @@ Application access can start service runs that change that application's data.
 Neither option is read-only.** Approve only connections you started yourself;
 the client name on the approval page is self-reported, not a verified identity.
 
+After approval, the browser returns to your assistant's callback address,
+usually on your own computer. Redlaunch's approval page permits that validated
+callback origin in its form security policy; other pages keep same-origin-only
+form submissions. If approval returns a 303 response but the browser reports a
+`form-action` policy violation, update Redlaunch and start a fresh sign-in.
+An additional Content Security Policy set by an external proxy can also block
+the callback; it must not impose a conflicting same-origin-only form policy on
+the approval page. Do not disable browser security or relax all pages to fix it.
+
 The instructions below use management access. Follow only the section for
 your assistant:
 

@@ -210,10 +210,64 @@ func TestOAuthAuthorizeRequiresSignInThenShowsConsent(t *testing.T) {
 	if signedIn.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("consent page is cacheable")
 	}
+	callback, _ := url.Parse(oauthHandlerRedirect)
+	expectedPolicy := strings.Replace(defaultContentSecurityPolicy, "form-action 'self';", "form-action 'self' "+callback.Scheme+"://"+callback.Host+";", 1)
+	if signedIn.Header().Get("Content-Security-Policy") != expectedPolicy {
+		t.Fatal("consent policy must allow exactly the registered callback origin and retain other restrictions")
+	}
 	body := signedIn.Body.String()
 	for _, expected := range []string{"Approve MCP connection", "Codex", "Manage this server", `name="decision" value="approve"`, `name="decision" value="deny"`, `name="code_challenge" value="` + oauthHandlerChallenge + `"`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("consent page missing %q", expected)
+		}
+	}
+}
+
+func TestOAuthConsentPolicyAllowsOnlyCallbackOrigin(t *testing.T) {
+	for _, tc := range []struct{ uri, source string }{
+		{"http://127.0.0.1:19876/callback?state=not-in-policy", "http://127.0.0.1:19876"},
+		{"http://localhost:54321/callback", "http://localhost:54321"},
+		{"http://[::1]:54321/callback", "http://[::1]:54321"},
+		{"https://assistant.example.com/oauth/callback?next=%3B", "https://assistant.example.com"},
+	} {
+		t.Run(tc.uri, func(t *testing.T) {
+			policy, err := oauthConsentContentSecurityPolicy(tc.uri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Replace(defaultContentSecurityPolicy, "form-action 'self';", "form-action 'self' "+tc.source+";", 1)
+			if policy != want {
+				t.Fatalf("policy = %q, want %q", policy, want)
+			}
+		})
+	}
+	for _, uri := range []string{
+		"http://remote.example.com/callback",
+		"javascript:alert(1)",
+		"https://user@example.com/callback",
+		"https://example.com/callback#fragment",
+		"https://*.example.com/callback",
+		"https://example.com;script-src/callback",
+		"https://example.com\n/callback",
+	} {
+		if policy, err := oauthConsentContentSecurityPolicy(uri); err == nil || policy != "" {
+			t.Fatalf("unsafe callback %q produced policy %q", uri, policy)
+		}
+	}
+}
+
+func TestOAuthCallbackPolicyIsScopedToValidatedConsent(t *testing.T) {
+	fixture := newOAuthHandlerFixture(t)
+	query := fixture.authorizeQuery(oauthHandlerOrigin + "/mcp/manage")
+	query.Set("redirect_uri", "https://unregistered.example.com/callback")
+	response := oauthHandlerRequest(fixture.web, http.MethodGet, oauthHandlerOrigin+"/oauth/authorize?"+query.Encode(), nil, "", fixture.session)
+	if response.Code != http.StatusBadRequest || response.Header().Get("Content-Security-Policy") != defaultContentSecurityPolicy {
+		t.Fatal("unregistered callback must not relax the form policy")
+	}
+	for _, path := range []string{"/login", "/settings"} {
+		response := oauthHandlerRequest(fixture.web, http.MethodGet, oauthHandlerOrigin+path, nil, "", fixture.session)
+		if response.Header().Get("Content-Security-Policy") != defaultContentSecurityPolicy {
+			t.Fatalf("%s policy allows external form destinations", path)
 		}
 	}
 }
@@ -225,6 +279,9 @@ func TestOAuthAuthorizeShowsErrorPageForUnsafeRequests(t *testing.T) {
 	recorder := oauthHandlerRequest(fixture.web, http.MethodGet, oauthHandlerOrigin+"/oauth/authorize?"+noPKCE.Encode(), nil, "", fixture.session)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "PKCE with an S256 code_challenge is required.") {
 		t.Fatalf("request without PKCE = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Content-Security-Policy") != defaultContentSecurityPolicy {
+		t.Fatal("invalid authorization request relaxed the form policy")
 	}
 
 	otherOrigin := fixture.authorizeQuery("https://attacker.example.com/mcp/manage")

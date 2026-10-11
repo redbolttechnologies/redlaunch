@@ -280,6 +280,14 @@ type oauthErrorPageData struct {
 }
 
 func (h *Handler) writeOAuthConsent(w http.ResponseWriter, r *http.Request, authorization application.OAuthAuthorization, request application.OAuthAuthorizationRequest) {
+	// Browsers can apply form-action to the POST's redirect as well as its
+	// same-origin destination. Allow only this already validated callback origin.
+	policy, err := oauthConsentContentSecurityPolicy(authorization.RedirectURI)
+	if err != nil {
+		h.writeOAuthPage(w, http.StatusBadRequest, "The callback address cannot be used for browser approval.")
+		return
+	}
+	w.Header().Set("Content-Security-Policy", policy)
 	data := oauthConsentPageData{
 		CSRFToken:     h.setCSRFCookie(w, r),
 		ClientName:    authorization.Client.Name,
@@ -288,6 +296,28 @@ func (h *Handler) writeOAuthConsent(w http.ResponseWriter, r *http.Request, auth
 		Request:       request,
 	}
 	h.writeOAuthTemplate(w, http.StatusOK, "oauth-consent.html", data)
+}
+
+func oauthConsentContentSecurityPolicy(redirectURI string) (string, error) {
+	validated, err := application.ValidateOAuthRedirectURI(redirectURI)
+	if err != nil {
+		return "", err
+	}
+	callback, err := url.Parse(validated)
+	if err != nil {
+		return "", errors.New("invalid OAuth callback")
+	}
+	// URL validation alone is not CSP-source validation. In particular, reject
+	// directive separators, wildcards and whitespace rather than putting any
+	// client-controlled directive syntax in the header. Paths/query values never
+	// enter the policy; the explicit callback port remains part of the source.
+	for _, char := range callback.Host {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune(".-:[]", char)) {
+			return "", errors.New("invalid OAuth callback CSP host")
+		}
+	}
+	source := callback.Scheme + "://" + callback.Host
+	return strings.Replace(defaultContentSecurityPolicy, "form-action 'self';", "form-action 'self' "+source+";", 1), nil
 }
 
 func (h *Handler) writeOAuthPage(w http.ResponseWriter, status int, message string) {
