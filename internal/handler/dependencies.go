@@ -21,6 +21,7 @@ type Dependencies struct {
 	ServerSSHKeys    serverSSHKeyService
 	Users            userManagementService
 	APITokens        apiTokenService
+	OAuth            oauthService
 	Registry         registryImageService
 	Metrics          dashboardMetricsService
 	Authentication   authenticationService
@@ -72,6 +73,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	}
 	if deps.APITokens != nil {
 		assembled = append(assembled, deps.APITokens)
+	}
+	if deps.OAuth != nil {
+		assembled = append(assembled, deps.OAuth)
 	}
 	if deps.Registry != nil {
 		assembled = append(assembled, deps.Registry)

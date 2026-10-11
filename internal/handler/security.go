@@ -32,7 +32,7 @@ func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
 		// the API prefix. Browsers cannot set the Authorization header from
 		// cross-site contexts, so exempting the prefix does not weaken CSRF
 		// protection for session-authenticated routes.
-		if isAPITokenPath(r) {
+		if isAPITokenPath(r) || isOAuthMachinePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

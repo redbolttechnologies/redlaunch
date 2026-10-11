@@ -129,7 +129,10 @@ func TestManagementTokenMigrationPreservesExistingRunTokens(t *testing.T) {
 	}
 	// Reconstruct v21's actual NOT NULL table with a populated token before
 	// reopening, so this tests the migration rather than only the fresh schema.
-	_, err = database.db.Exec(`DROP INDEX idx_api_tokens_application_id;
+	// v21 had no OAuth tables; dropping them keeps the rename below from
+	// leaving their foreign keys pointing at a missing api_tokens_new table.
+	_, err = database.db.Exec(`DROP TABLE oauth_superseded_refresh_tokens; DROP TABLE oauth_grants; DROP TABLE oauth_clients; DELETE FROM schema_migrations WHERE version=26;
+ DROP INDEX idx_api_tokens_application_id;
  ALTER TABLE api_tokens RENAME TO api_tokens_new;
  CREATE TABLE api_tokens (
  id INTEGER PRIMARY KEY AUTOINCREMENT,display_name TEXT NOT NULL,prefix TEXT NOT NULL,

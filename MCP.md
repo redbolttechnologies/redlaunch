@@ -450,3 +450,14 @@ at 60 attempts; timeout does not stop the server-side task.
 
 For token rotation and API errors, see [API tokens](API_TOKENS.md). For complete
 deployment workflows, see [Deployment recipes](RECIPES.md).
+# Remote OAuth rollout
+
+The OAuth authorization-server foundation is implemented: dynamic public-client
+registration, signed-in browser consent with S256 PKCE, single-use one-minute
+codes, token exchange, refresh rotation, and revocation. Access tokens last one
+hour; refresh grants expire after 30 days idle or 90 days absolute. Only token
+hashes are persisted. A 60-second in-memory replay window handles lost refresh
+responses; that window does not survive a server restart.
+
+This foundation alone does not expose remote MCP. Existing stdio configuration
+and manually issued API tokens continue to work unchanged.

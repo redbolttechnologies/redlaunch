@@ -58,6 +58,7 @@ type Handler struct {
 	serverSSHKeys                  serverSSHKeyService
 	users                          userManagementService
 	apiTokens                      apiTokenService
+	oauth                          oauthService
 	apiRunJobs                     *apiRunJobStore
 	managementJobs                 *managementJobStore
 	proxyManager                   proxyDetailsService
@@ -375,6 +376,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	var serverSSHKeys serverSSHKeyService
 	var users userManagementService
 	var apiTokens apiTokenService
+	var oauth oauthService
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
 	var registryImages registryImageService
@@ -594,6 +596,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				apiTokens = dependency
 			}
+		case oauthService:
+			if dependency != nil {
+				oauth = dependency
+			}
 		case proxyDetailsService:
 			if dependency != nil {
 				proxy = dependency
@@ -689,6 +695,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		serverSSHKeys:                  serverSSHKeys,
 		users:                          users,
 		apiTokens:                      apiTokens,
+		oauth:                          oauth,
 		apiRunJobs:                     apiRunJobs,
 		managementJobs:                 managementJobs,
 		proxyManager:                   proxy,
@@ -830,6 +837,12 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/management/jobs/{job}", h.managementJobStatus)
 	mux.HandleFunc("POST /api/v1/applications/{id}/services/{service}/run", h.runServiceViaAPI)
 	mux.HandleFunc("GET /api/v1/applications/{id}/services/{service}/run/status", h.apiRunJobStatus)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", h.oauthMetadata)
+	mux.HandleFunc("POST /oauth/register", h.oauthRegister)
+	mux.HandleFunc("GET /oauth/authorize", h.oauthAuthorize)
+	mux.HandleFunc("POST /oauth/authorize", h.oauthAuthorizeDecision)
+	mux.HandleFunc("POST /oauth/token", h.oauthToken)
+	mux.HandleFunc("POST /oauth/revoke", h.oauthRevoke)
 	static, err := fs.Sub(embeddedFiles, "static")
 	if err == nil {
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))

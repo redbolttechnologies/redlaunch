@@ -62,6 +62,7 @@ func isPublicAuthenticationPath(path string) bool {
 		path == "/auth/google" ||
 		path == "/auth/google/callback" ||
 		path == "/healthz" ||
+		isOAuthMachinePath(path) ||
 		strings.HasPrefix(path, "/static/")
 }
 

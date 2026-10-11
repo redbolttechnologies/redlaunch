@@ -219,6 +219,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create API token service: %w", err)
 	}
 
+	oauthServer, err := service.NewOAuthService(database, applications)
+	if err != nil {
+		return fmt.Errorf("create OAuth service: %w", err)
+	}
+
 	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
 		Directory:    cfg.RedlaunchDir,
 		UpdaterImage: cfg.RedlaunchImage,
@@ -250,6 +255,7 @@ func run(ctx context.Context) error {
 		ManagedDatabases: managedDatabases,
 		ServerSSHKeys:    serverSSHKeys,
 		APITokens:        apiTokens,
+		OAuth:            oauthServer,
 		Registry:         registry,
 		SelfUpdate:       selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
