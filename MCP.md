@@ -5,7 +5,7 @@ write GitHub Actions workflows and manage server resources. You can ask for help
 such as “Create a workflow to run my database migrations.” MCP is the connection
 that gives the assistant access to these Redlaunch tools.
 
-For a running VPS, use [remote OAuth MCP](#remote-oauth-rollout): configure its
+For a running VPS, use [browser sign-in](#connect-to-your-server-with-browser-sign-in): configure its
 URL and sign in, without installing a local Redlaunch binary or supplying token
 environment variables. The URL can be committed; assistant credentials cannot.
 
@@ -458,54 +458,60 @@ at 60 attempts; timeout does not stop the server-side task.
 
 For token rotation and API errors, see [API tokens](API_TOKENS.md). For complete
 deployment workflows, see [Deployment recipes](RECIPES.md).
-## Remote OAuth rollout
+## Connect to your server with browser sign-in
 
-The OAuth authorization-server foundation is implemented: dynamic public-client
-registration, signed-in browser consent with S256 PKCE, single-use one-minute
-codes, token exchange, refresh rotation, and revocation. Access tokens last one
-hour; refresh grants expire after 30 days idle or 90 days absolute. Only token
-hashes are persisted. A 60-second in-memory replay window handles lost refresh
-responses; that window does not survive a server restart.
+You can connect your assistant directly to Redlaunch on your VPS. Add the
+server's MCP address to your assistant, sign in to Redlaunch in your browser,
+and approve the connection. This is called **OAuth authentication**.
 
-Remote MCP is now served over stateless Streamable HTTP at:
+**You do not need to create an API token, set token environment variables, or
+install the Redlaunch program on your laptop.** Your assistant saves its
+credentials privately and renews them automatically. Signing in to OpenCode,
+Codex, or Claude Code itself does not replace signing in to Redlaunch.
 
-- `https://your-vps.example.com/mcp/manage` for server-wide management.
-- `https://your-vps.example.com/mcp/apps/123` for runs pinned to application 123.
+### Before you connect
 
-Configure the URL as a remote MCP server in your assistant, then complete the
-assistant's browser sign-in flow. Only the URL belongs in committed MCP
-configuration; OAuth credentials are stored and refreshed by the assistant,
-not in repository files or Redlaunch environment variables. Changing VPS URLs
-requires a separate approval for the new server.
+You need a running Redlaunch server, an account that can sign in to it, and
+your coding assistant installed on the computer where you want to use it.
+For a public connection, configure a Redlaunch domain in **Settings → Domains**
+and make sure you can open Redlaunch at its HTTPS address in your browser.
+If your server is only reachable through SSH, use the [tunnel instructions](#loopback-and-ssh-tunnels).
 
-The server publishes resource-specific discovery documents under
-`/.well-known/oauth-protected-resource/mcp/manage` and
-`/.well-known/oauth-protected-resource/mcp/apps/123`. Tokens are bound to the
-exact approved origin and endpoint: management and application endpoints cannot
-share tokens. Public access requires a configured Redlaunch domain over HTTPS.
-Loopback HTTP is supported and tested with OpenCode and Codex. An actual SSH
-forward and public-HTTPS deployment still need end-to-end verification.
+Choose how much access to give the assistant:
 
-The transport accepts single JSON-RPC POSTs with `Content-Type: application/json`
-and `Accept: application/json, text/event-stream`. It returns JSON responses or
-empty 202 responses for notifications, without session IDs or an SSE stream.
-GET and DELETE return 405. Tool calls use the existing machine APIs in-process.
-There is no read-only grant split: approval enables the full existing `manage`
-or application-pinned `run` permissions. Treat client names as unverified and
-approve only connections you initiated.
+| What you want to do | MCP address | Permission name |
+| --- | --- | --- |
+| Manage the server and its applications | `https://your-vps.example.com/mcp/manage` | `manage` |
+| Run services in one application only | `https://your-vps.example.com/mcp/apps/123` | `run` |
 
-Existing stdio configuration and manually issued API tokens continue to work
-unchanged, but manually issued tokens are not accepted at the OAuth remote MCP
-endpoints.
+Replace `your-vps.example.com` with your Redlaunch domain. For application-only
+access, replace `123` with that application's ID; you can find it in the
+application page's address, such as `/applications/123`.
 
-### Remote client configuration
+**Management access can change all applications and shared server resources.
+Application access can start service runs that change that application's data.
+Neither option is read-only.** Approve only connections you started yourself;
+the client name on the approval page is self-reported, not a verified identity.
 
-These examples grant **server-wide management**, including mutations. For
-application-only service runs, replace `/mcp/manage` with `/mcp/apps/123` and
-use the `run` scope instead of `manage`. Do not add an Authorization header,
-API token, client secret, or token environment-variable reference.
+The instructions below use management access. Follow only the section for
+your assistant:
 
-**OpenCode V2** — merge into `opencode.json`:
+- [OpenCode](#sign-in-from-opencode)
+- [Codex](#sign-in-from-codex)
+- [Claude Code](#sign-in-from-claude-code)
+
+If you already have a local/stdio server named `redlaunch`, replace that entry
+with the remote one below, or choose a different name such as `redlaunch-vps`.
+Use the same name in the configuration and all commands.
+
+### Sign in from OpenCode
+
+These instructions are for **OpenCode V2**.
+
+1. Open your project folder and open or create `opencode.json`.
+2. Add the entry below, replacing the example domain. If the file already has
+   settings or other MCP servers, keep them and add `redlaunch` under
+   `mcp.servers` rather than replacing the whole file.
 
 ```json
 {
@@ -522,39 +528,132 @@ API token, client secret, or token environment-variable reference.
 }
 ```
 
-Run `opencode mcp list`. In OpenCode, use `/mcps`, select Redlaunch, and sign
-in. OAuth is enabled by default; the scope selects the resource's permission.
-The installed 2.0.26 CLI also supports `opencode mcp auth redlaunch`.
+3. Start OpenCode in that project folder. Type `/mcps`, select **redlaunch**,
+   and choose the sign-in option.
+4. In the browser, sign in to **your Redlaunch server** if asked. Check the
+   requested access and approve the connection.
+5. Return to OpenCode. Use `/mcps` to check that **redlaunch** is connected.
+   You can also run `opencode mcp list` from the project folder.
 
-**Codex** — merge into `~/.codex/config.toml` (or your trusted project config):
+For application-only access, change the URL to end in `/mcp/apps/123` and change
+`"scope": "manage"` to `"scope": "run"` before signing in.
+
+To use the same connection in every project, put the entry in
+`~/.config/opencode/opencode.json` instead. OpenCode keeps OAuth credentials
+outside these configuration files; do not add a token or `client_secret`.
+
+### Sign in from Codex
+
+1. Open or create `~/.codex/config.toml`.
+2. Add this entry, replacing the example domain. Keep any existing settings
+   and other server entries:
 
 ```toml
 [mcp_servers.redlaunch]
 url = "https://your-vps.example.com/mcp/manage"
 ```
 
-Then run:
+3. In a terminal, start the Redlaunch sign-in:
 
 ```sh
 codex mcp login redlaunch --scopes manage
 ```
 
-Use `/mcp` in Codex to inspect the connection. With Codex 0.156.1, the explicit
-scope is required: omitting it requests both `manage` and `run`, which Redlaunch
-rejects for a single resource. For headless login, add `--no-browser` and paste
-the callback URL as prompted. Redlaunch supports dynamic client registration;
-`--oauth-client-registration dcr` explicitly selects it if needed.
+4. Follow the browser sign-in, sign in to **your Redlaunch server** if asked,
+   and approve the requested access.
+5. Start a new Codex session and type `/mcp` to check the connection.
+   `codex mcp list` in a terminal also lists the configured server.
 
-**Claude Code** — documented configuration; not live-tested here:
+For application-only access, use a URL ending in `/mcp/apps/123` and sign in with:
+
+```sh
+codex mcp login redlaunch --scopes run
+```
+
+**Keep `--scopes manage` or `--scopes run` in the login command.** With the tested
+Codex 0.156.1, leaving it out requests both permissions, which Redlaunch rejects
+for a single connection.
+
+If a browser cannot open automatically, add `--no-browser` to the login command.
+Open the displayed sign-in link yourself, complete approval, and paste the
+callback URL back into the terminal when prompted. Treat that callback URL as
+private: do not put it in chat, logs, or Git.
+
+You can use `.codex/config.toml` in a trusted project instead of the global
+configuration. Either way, Codex stores OAuth credentials separately; do not
+add `bearer_token_env_var` or an Authorization header for this connection.
+
+### Sign in from Claude Code
+
+These steps follow Claude Code's official instructions. **Redlaunch's
+connection has not yet been live-tested with Claude Code.** If authentication
+fails, do not work around it by copying an API token into the configuration.
+
+1. Open a terminal in your project folder.
+2. Add Redlaunch, replacing the example domain:
 
 ```sh
 claude mcp add --transport http --scope project redlaunch https://your-vps.example.com/mcp/manage
 ```
 
-Use `/mcp` in Claude Code to authenticate. Project scope writes the URL to
-`.mcp.json`; keep OAuth credentials in Claude Code's own credential storage.
-Claude Code was not installed in the verification environment, so its scope
-selection, refresh, and loopback behavior remain unverified.
+3. Start Claude Code in that folder. If it asks whether to allow the project's
+   MCP server, review and allow **redlaunch**. This lets Claude Code load the
+   configuration; it is separate from approving access in Redlaunch.
+4. Type `/mcp`, select **redlaunch**, and choose **Authenticate**. Follow the
+   browser sign-in, sign in to Redlaunch if asked, and approve the access.
+5. Return to Claude Code and use `/mcp` to check that the connection is ready.
+
+The command saves the server address in your project's `.mcp.json`. You can
+commit that URL-only configuration; each team member still signs in separately.
+Use `--scope user` instead of `--scope project` if you want the connection
+available in all your projects without sharing its configuration.
+
+For application-only access, use `/mcp/apps/123` in the address. Claude Code
+handles the sign-in permissions itself; its scope selection and token renewal
+with Redlaunch are still unverified.
+
+### Check that it works
+
+Once your assistant reports the connection is ready, try a non-mutating request:
+
+> Use Redlaunch MCP to read the service-run guide. Do not change anything on
+> my server.
+
+With management access, you can also ask it to list your applications. A server
+appearing in a configuration list only means it was added; check its connection
+status and that its tools are available before relying on it.
+
+### Switch to another VPS or sign in again
+
+To switch servers, change the domain in the configured URL and repeat your
+assistant's sign-in steps. **Do not copy credentials from the old server.** The
+new server needs its own approval. To keep both servers available, add a second
+entry with a different name, such as `redlaunch-staging`.
+
+The same rule applies when changing from management access to an application
+URL, or when changing the port of an SSH tunnel: each address and access level
+needs its own approval.
+
+Normally, your assistant renews the connection in the background. If it asks
+you to authenticate again, repeat the browser sign-in. Approval lasts at most
+90 days and expires sooner if the assistant goes 30 days without renewing it.
+Revoking a connection also requires a new sign-in before it can be used again.
+
+### If sign-in does not work
+
+| What you see | What to check |
+| --- | --- |
+| Needs authentication | Start sign-in from `/mcps` in OpenCode, `codex mcp login redlaunch --scopes manage` in Codex, or `/mcp` in Claude Code. Use `run` for a Codex application connection. |
+| The server cannot be reached | Open its Redlaunch HTTPS address in your browser. Check the domain and connection; for SSH access, keep the tunnel running. |
+| Codex rejects the requested permissions | Match the URL and login permission: `/mcp/manage` with `--scopes manage`, or `/mcp/apps/123` with `--scopes run`. |
+| Access denied after changing the URL | Sign in again for the new address. A connection approved for another server or application cannot be reused. |
+| Sign-in was revoked or has expired | Start a fresh sign-in from your assistant. In OpenCode, `opencode mcp logout redlaunch` clears stored credentials if needed; then sign in through `/mcps`. |
+| Claude Code says pending approval | Start Claude Code in the project and allow the project MCP configuration before authenticating through `/mcp`. |
+
+For client-specific options, see the official guides for
+[OpenCode V2](https://opencode.ai/v2/docs/mcp-servers),
+[Codex](https://developers.openai.com/codex/mcp/), and
+[Claude Code](https://code.claude.com/docs/en/mcp).
 
 ### Loopback and SSH tunnels
 
@@ -571,7 +670,27 @@ requires a new approval. A public-HTTPS approval cannot be reused through the
 tunnel. Only the URL changes in assistant configuration; no token variables
 are needed. Loopback tests validate the HTTP OAuth flow, not SSH connectivity.
 
-### Interoperability verification
+### Remove an assistant's access
+
+In Redlaunch, open **Settings → MCP connections**. This lists the clients you
+approved, what they can access, when they last used the connection, and when
+the approval expires. Credentials are never displayed here.
+
+To remove access:
+
+1. Find the connection you want to remove and choose **Revoke**.
+2. Check the client name and server/application address in the dialog.
+3. Confirm revocation.
+
+The connection's credentials stop working immediately. The assistant must sign
+in again to reconnect. **Revocation does not stop work already started on the
+server.** Expired connections stay listed until you remove them.
+
+Use **Settings → MCP connections** for browser-approved assistants.
+**Settings → API tokens** is the separate list for manually created CI and
+local/stdio credentials; those tokens cannot authenticate remote OAuth MCP.
+
+### What has been tested
 
 Verified with disposable real-client processes on macOS, using isolated homes
 and SQLite fixtures; consent uses a fixture's signed-in session, not a manual
@@ -595,20 +714,26 @@ To repeat installed-client checks (absent clients skip):
 REDLAUNCH_MCP_INTEROP_TEST=1 GOTOOLCHAIN=go1.26.8 go test -race -count=1 -timeout 120s -run 'TestMCP(OpenCode|Codex)Interop' ./internal/handler
 ```
 
-### Manage approved connections
+### Technical details for integrations
 
-Open **Settings → MCP connections** to inspect each approval's client name and
-public client ID, access scope, exact resource URL, last use, and refresh-grant
-expiry. Client names are self-reported, not verified identities. Expired grants
-remain listed until removed. Last use records successful API authentication
-and survives token refreshes; grant expiry is separate from the hourly access
-token's expiry.
+You do not need these details to follow the sign-in instructions above.
 
-Choose **Revoke**, check the client and resource in the confirmation dialog,
-then confirm. This removes both the current access token and the refresh grant,
-including superseded-token verifiers. Subsequent access and refresh requests
-fail; the assistant must sign in again to reconnect. Revocation does not cancel
-operations already dispatched. OAuth access tokens are hidden from
-**Settings → API tokens**, which remains the list for manually issued CI and
-stdio credentials. No token values or token hashes are shown in connection
-management.
+- OAuth supports dynamic public-client registration, S256 PKCE, signed-in
+  consent, and single-use authorization codes valid for one minute.
+- Access tokens last one hour. Refresh grants expire after 30 days without a
+  refresh or 90 days since approval. Tokens rotate on refresh; only token hashes
+  are persisted. A 60-second in-memory replay window handles lost refresh
+  responses and does not survive a server restart.
+- Tokens are bound to the exact approved origin and endpoint. Public access
+  requires a configured Redlaunch domain over HTTPS; loopback HTTP is allowed.
+- Resource-specific discovery is published at
+  `/.well-known/oauth-protected-resource/mcp/manage` and
+  `/.well-known/oauth-protected-resource/mcp/apps/123`.
+- MCP uses stateless Streamable HTTP: single JSON-RPC POSTs with
+  `Content-Type: application/json` and
+  `Accept: application/json, text/event-stream`. Responses are JSON or empty
+  202 responses for notifications. There are no session IDs or SSE streams;
+  GET and DELETE return 405. Tool calls use the existing machine APIs in-process.
+- The connection's last-use timestamp records successful API authentication
+  and survives token refreshes. Its displayed expiry is the refresh-grant
+  expiry, not the hourly access-token expiry.

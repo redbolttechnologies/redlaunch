@@ -86,12 +86,13 @@ For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
 
-Connect your coding assistant to Redlaunch with `redlaunch mcp`. The
-[Redlaunch MCP guide](MCP.md) walks through prerequisites, setup for Codex,
-OpenCode, and Claude Code, your first workflow request, and an optional
-connection to your VPS for checking progress and running one-off services.
-Use a separate server-wide management token to manage applications, services,
-environment values, routing, and managed databases.
+Connect OpenCode, Codex, or Claude Code to your VPS by adding its MCP URL and
+signing in to Redlaunch in your browser. No API token or token environment
+variables are needed. Follow the [MCP browser sign-in guide](MCP.md#connect-to-your-server-with-browser-sign-in)
+to choose server-wide management or application-only service runs and set up
+your assistant. The [full MCP guide](MCP.md) also covers the existing local
+`redlaunch mcp` setup for offline guides, workflow generation, and token-based
+stdio connections.
 
 Open **Help** in the sidebar (or visit `/help`) for Getting started, First
 steps, how-to guides, and troubleshooting. The online help includes these
