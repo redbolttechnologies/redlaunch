@@ -196,6 +196,21 @@ type OAuthTokenResponse struct {
 	Scope        string
 }
 
+// OAuthConnection is safe connection metadata for Settings. Token values,
+// hashes, and redirect URIs are deliberately absent from this projection.
+type OAuthConnection struct {
+	ID            int64
+	ClientID      string
+	ClientName    string
+	Resource      string
+	Scope         string
+	ApplicationID int64
+	CreatedAt     time.Time
+	LastUsedAt    *time.Time
+	ExpiresAt     time.Time
+	Expired       bool
+}
+
 // ValidateOAuthClientName trims a client's display name. A missing name falls
 // back to a generic label so minimal clients can still register.
 func ValidateOAuthClientName(value string) (string, error) {

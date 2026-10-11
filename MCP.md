@@ -488,6 +488,23 @@ approve only connections you initiated.
 
 Existing stdio configuration and manually issued API tokens continue to work
 unchanged, but manually issued tokens are not accepted at the OAuth remote MCP
-endpoints. OAuth access tokens currently appear in Settings → API tokens;
-dedicated connection management is planned in the next phase. Real-client
-verification with OpenCode, Codex, and Claude Code has not yet been performed.
+endpoints. Real-client verification with OpenCode, Codex, and Claude Code has
+not yet been performed.
+
+### Manage approved connections
+
+Open **Settings → MCP connections** to inspect each approval's client name and
+public client ID, access scope, exact resource URL, last use, and refresh-grant
+expiry. Client names are self-reported, not verified identities. Expired grants
+remain listed until removed. Last use records successful API authentication
+and survives token refreshes; grant expiry is separate from the hourly access
+token's expiry.
+
+Choose **Revoke**, check the client and resource in the confirmation dialog,
+then confirm. This removes both the current access token and the refresh grant,
+including superseded-token verifiers. Subsequent access and refresh requests
+fail; the assistant must sign in again to reconnect. Revocation does not cancel
+operations already dispatched. OAuth access tokens are hidden from
+**Settings → API tokens**, which remains the list for manually issued CI and
+stdio credentials. No token values or token hashes are shown in connection
+management.

@@ -16,6 +16,10 @@ They do not broaden existing run tokens. See the management API contract below.
 ## Create a token
 
 1. Open **Settings → API tokens**.
+
+   This list contains manually issued automation and stdio credentials only.
+   Browser-approved remote MCP grants are managed separately in
+   **Settings → MCP connections**; see [remote OAuth MCP](MCP.md#remote-oauth-rollout).
 2. Select **Create API token**, enter a display name, pick the application (or **Server-wide management**),
    and pick an expiry (30/90/180/365 days, or never).
 3. Copy the token from the one-time dialog. It is shown only there

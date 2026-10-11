@@ -802,6 +802,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/ssh-keys/delete", h.revokeServerSSHKey)
 	mux.HandleFunc("POST /settings/api-tokens", h.createAPIToken)
 	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
+	mux.HandleFunc("POST /settings/mcp-connections/delete", h.revokeMCPConnection)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
@@ -5135,17 +5136,21 @@ type registryPurgeDialogData struct {
 }
 
 type settingsPageData struct {
-	Users         []application.UserAccount
-	UsersActive   bool
-	UserDialog    string
-	UserID        int64
-	UserEmail     string
-	UserError     string
-	CanDeleteUser bool
-	Domains       []application.RedlaunchDomain
-	CSRFToken     string
-	DomainEdit    *domainEditPageData
-	DomainDelete  *domainDeletePageData
+	MCPEnabled     bool
+	MCPActive      bool
+	MCPConnections []application.OAuthConnection
+	MCPDelete      *mcpConnectionDeletePageData
+	Users          []application.UserAccount
+	UsersActive    bool
+	UserDialog     string
+	UserID         int64
+	UserEmail      string
+	UserError      string
+	CanDeleteUser  bool
+	Domains        []application.RedlaunchDomain
+	CSRFToken      string
+	DomainEdit     *domainEditPageData
+	DomainDelete   *domainDeletePageData
 
 	SSHKeys          []application.ServerSSHKey
 	SSHKeysUsername  string
@@ -5182,6 +5187,13 @@ type sshKeyDeletePageData struct {
 	ID          int64
 	DisplayName string
 	Error       string
+}
+
+type mcpConnectionDeletePageData struct {
+	ID         int64
+	ClientName string
+	Resource   string
+	Error      string
 }
 
 type apiTokenDeletePageData struct {

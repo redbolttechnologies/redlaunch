@@ -251,3 +251,59 @@ func TestOAuthGrantRejectsScopeWithoutApplication(t *testing.T) {
 		t.Fatal("failed grant insert left its access token behind")
 	}
 }
+
+func TestOAuthConnectionMetadataAndLastUseSurviveRotation(t *testing.T) {
+	database := openOAuthTestStore(t)
+	createOAuthClientForTest(t, database, "rlc_settings", oauthTestBase)
+	grant, access, err := database.CreateOAuthGrant(t.Context(), manageGrantIssueForTest("rlc_settings", "settings-refresh-1", "settings-access-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual, err := database.CreateAPIToken(t.Context(), application.APIToken{DisplayName: "Manual automation", Scope: application.APITokenScopeManage, Prefix: "rlr_manual"}, []byte("manual-hash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := database.ListAPITokens(t.Context())
+	if err != nil || len(tokens) != 1 || tokens[0].ID != manual.ID {
+		t.Fatalf("manual token list = %#v, %v", tokens, err)
+	}
+	items, err := database.ListOAuthConnections(t.Context())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("connection list = %#v, %v", items, err)
+	}
+	item := items[0]
+	if item.ID != grant.ID || item.ClientID != "rlc_settings" || item.Resource != grant.Resource || item.LastUsedAt != nil || !item.ExpiresAt.Equal(grant.RefreshIdleExpiresAt) {
+		t.Fatalf("connection metadata = %#v", item)
+	}
+	used := oauthTestBase.Add(20 * time.Minute)
+	if err := database.TouchAPITokenLastUsed(t.Context(), access.ID, used); err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.RotateOAuthGrant(t.Context(), application.OAuthGrantRotation{
+		GrantID: grant.ID, ExpectedRefreshHash: []byte("settings-refresh-1"),
+		Access:     application.APIToken{DisplayName: "Assistant", Prefix: "rlr_settings", Scope: application.APITokenScopeManage},
+		AccessHash: []byte("settings-access-2"), RefreshHash: []byte("settings-refresh-2"),
+		RotatedAt: oauthTestBase.Add(time.Hour), RefreshIdleExpiresAt: grant.AbsoluteExpiresAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = database.ListOAuthConnections(t.Context())
+	if err != nil || len(items) != 1 || items[0].ID != grant.ID {
+		t.Fatalf("rotated list = %#v, %v", items, err)
+	}
+	if items[0].LastUsedAt == nil || !items[0].LastUsedAt.Equal(used) || !items[0].ExpiresAt.Equal(grant.AbsoluteExpiresAt) {
+		t.Fatalf("rotation lost metadata = %#v", items[0])
+	}
+	if err := database.RevokeOAuthGrant(t.Context(), grant.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = database.ListOAuthConnections(t.Context())
+	if err != nil || len(items) != 0 {
+		t.Fatalf("revoked list = %#v, %v", items, err)
+	}
+	tokens, err = database.ListAPITokens(t.Context())
+	if err != nil || len(tokens) != 1 || tokens[0].ID != manual.ID {
+		t.Fatal("revocation changed a manual token")
+	}
+}

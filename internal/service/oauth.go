@@ -25,6 +25,7 @@ const (
 
 // OAuthRepository persists dynamically registered clients and grants.
 type OAuthRepository interface {
+	ListOAuthConnections(context.Context) ([]application.OAuthConnection, error)
 	CreateOAuthClient(context.Context, application.OAuthClient) error
 	GetOAuthClient(context.Context, string) (application.OAuthClient, error)
 	CountOAuthClients(context.Context) (int, error)
@@ -449,6 +450,31 @@ func (s *OAuthService) ValidateAccessTokenResource(ctx context.Context, token, r
 		return application.NewOAuthError(application.OAuthErrorInvalidTarget, "The access token belongs to a different resource.")
 	}
 	return nil
+}
+
+// ListConnections returns display-safe grants, including expired grants so
+// operators can remove them. Expiry is independent of the hourly access token.
+func (s *OAuthService) ListConnections(ctx context.Context) ([]application.OAuthConnection, error) {
+	items, err := s.repository.ListOAuthConnections(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	for i := range items {
+		items[i].Expired = !now.Before(items[i].ExpiresAt)
+	}
+	return items, nil
+}
+
+// RevokeConnection removes a browser-selected grant and its current access
+// token atomically. Serializing with refreshes prevents replay races.
+func (s *OAuthService) RevokeConnection(ctx context.Context, id int64) error {
+	if id < 1 {
+		return application.ErrOAuthGrantNotFound
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	return s.repository.RevokeOAuthGrant(ctx, id)
 }
 
 func oauthValuesAllowed(values []string, allowed ...string) bool {

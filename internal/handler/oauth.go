@@ -16,6 +16,8 @@ import (
 // oauthService is the authorization server behind the /oauth endpoints and
 // the authorization server metadata document.
 type oauthService interface {
+	ListConnections(context.Context) ([]application.OAuthConnection, error)
+	RevokeConnection(context.Context, int64) error
 	RegisterClient(context.Context, application.OAuthClientRegistration) (application.OAuthClient, error)
 	ValidateAuthorization(context.Context, string, application.OAuthAuthorizationRequest) (application.OAuthAuthorization, error)
 	CompleteAuthorization(context.Context, string, application.OAuthAuthorizationRequest, bool) (string, error)

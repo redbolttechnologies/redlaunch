@@ -33,12 +33,34 @@ func (h *Handler) settingsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.UsersActive = r.URL.Query().Get("tab") == "users"
+	data.MCPActive = data.MCPEnabled && r.URL.Query().Get("tab") == "mcp"
+	if rawID := r.URL.Query().Get("mcp_revoke"); rawID != "" {
+		id, err := strconv.ParseInt(rawID, 10, 64)
+		if err != nil || id < 1 || !data.MCPEnabled {
+			http.NotFound(w, r)
+			return
+		}
+		for _, connection := range data.MCPConnections {
+			if connection.ID == id {
+				data.MCPDelete = &mcpConnectionDeletePageData{ID: id, ClientName: connection.ClientName, Resource: connection.Resource}
+			}
+		}
+		if data.MCPDelete == nil {
+			http.NotFound(w, r)
+			return
+		}
+		data.MCPActive, data.UsersActive = true, false
+		h.writeSettingsPage(w, r, http.StatusOK, data, progress)
+		return
+	}
 	action := r.URL.Query().Get("user_action")
 	if action == "create" {
+		data.MCPActive = false
 		data.UserDialog = action
 		data.UsersActive = true
 	}
 	if action == "password" || action == "delete" || action == "email" {
+		data.MCPActive = false
 		id, err := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
 		if err != nil {
 			http.NotFound(w, r)
@@ -108,6 +130,14 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 			return settingsPageData{}, err
 		}
 		data.APITokens = tokens
+	}
+	data.MCPEnabled = h.oauthAuthorizationEnabled()
+	if data.MCPEnabled {
+		connections, err := h.oauth.ListConnections(ctx)
+		if err != nil {
+			return settingsPageData{}, err
+		}
+		data.MCPConnections = connections
 	}
 	return data, nil
 }

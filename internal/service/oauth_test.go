@@ -551,3 +551,76 @@ func TestOAuthAccessTokenResourceBinding(t *testing.T) {
 		t.Fatalf("refresh token error = %s", code)
 	}
 }
+
+func TestOAuthConnectionListingExpiryAndRevocation(t *testing.T) {
+	s, db, clock, _ := newOAuthServiceForTest(t)
+	client := registerOAuthClientForTest(t, s)
+	tokens := issueOAuthTokensForTest(t, s, client.ID, oauthTestManage)
+	items, err := s.ListConnections(t.Context())
+	if err != nil || len(items) != 1 || items[0].Expired || items[0].ClientName != client.Name {
+		t.Fatalf("connections = %#v, %v", items, err)
+	}
+	id := items[0].ID
+	clock.Advance(application.OAuthRefreshIdleLifetime)
+	items, err = s.ListConnections(t.Context())
+	if err != nil || len(items) != 1 || !items[0].Expired {
+		t.Fatalf("expired connections = %#v, %v", items, err)
+	}
+	if err := s.RevokeConnection(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refreshOAuthForTest(s, client.ID, tokens.RefreshToken); oauthErrorCode(t, err) != application.OAuthErrorInvalidGrant {
+		t.Fatal("connection refresh survived revocation")
+	}
+	if _, err := oauthAPITokensForTest(t, db).Authenticate(t.Context(), tokens.AccessToken); err == nil {
+		t.Fatal("access token survived connection revocation")
+	}
+	if err := s.RevokeConnection(t.Context(), id); !errors.Is(err, application.ErrOAuthGrantNotFound) {
+		t.Fatalf("unknown connection error = %v", err)
+	}
+	if err := s.RevokeConnection(t.Context(), 0); !errors.Is(err, application.ErrOAuthGrantNotFound) {
+		t.Fatalf("invalid connection error = %v", err)
+	}
+}
+
+func TestOAuthConnectionRevocationInvalidatesRefreshReplay(t *testing.T) {
+	s, _, _, _ := newOAuthServiceForTest(t)
+	client := registerOAuthClientForTest(t, s)
+	first := issueOAuthTokensForTest(t, s, client.ID, oauthTestManage)
+	second, err := refreshOAuthForTest(s, client.ID, first.RefreshToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.ListConnections(t.Context())
+	if err != nil || len(items) != 1 {
+		t.Fatal("missing connection", err)
+	}
+	if err := s.RevokeConnection(t.Context(), items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, refresh := range []string{first.RefreshToken, second.RefreshToken} {
+		if _, err := refreshOAuthForTest(s, client.ID, refresh); oauthErrorCode(t, err) != application.OAuthErrorInvalidGrant {
+			t.Fatal("revoked connection replayed cached tokens")
+		}
+	}
+}
+
+func TestOAuthConnectionRevocationLeavesOtherApprovalsIntact(t *testing.T) {
+	s, _, _, appID := newOAuthServiceForTest(t)
+	client := registerOAuthClientForTest(t, s)
+	manage := issueOAuthTokensForTest(t, s, client.ID, oauthTestManage)
+	run := issueOAuthTokensForTest(t, s, client.ID, application.OAuthApplicationResource(oauthTestOrigin, appID))
+	items, err := s.ListConnections(t.Context())
+	if err != nil || len(items) != 2 {
+		t.Fatal("missing approvals", err)
+	}
+	if err := s.RevokeConnection(t.Context(), items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := refreshOAuthForTest(s, client.ID, manage.RefreshToken); oauthErrorCode(t, err) != application.OAuthErrorInvalidGrant {
+		t.Fatal("management grant survived revocation")
+	}
+	if _, err := refreshOAuthForTest(s, client.ID, run.RefreshToken); err != nil {
+		t.Fatal("another approval for the same client was revoked", err)
+	}
+}

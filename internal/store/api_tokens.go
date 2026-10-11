@@ -18,6 +18,7 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]application.APIToken, erro
 		SELECT id, display_name, prefix, COALESCE(application_id, 0), scope, created_at,
 			expires_at, last_used_at
 		FROM api_tokens
+		WHERE NOT EXISTS (SELECT 1 FROM oauth_grants WHERE access_token_id = api_tokens.id)
 		ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list API tokens: %w", err)

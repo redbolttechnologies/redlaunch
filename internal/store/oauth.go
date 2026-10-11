@@ -213,15 +213,24 @@ func (s *Store) RotateOAuthGrant(ctx context.Context, rotation application.OAuth
 	defer tx.Rollback()
 
 	var previousAccessTokenID int64
+	var lastUsedAt sql.NullString
 	err = tx.QueryRowContext(ctx, `
-		SELECT access_token_id
+		SELECT access_token_id, (SELECT last_used_at FROM api_tokens WHERE id = access_token_id)
 		FROM oauth_grants
-		WHERE id = ? AND refresh_token_hash = ?`, rotation.GrantID, rotation.ExpectedRefreshHash).Scan(&previousAccessTokenID)
+		WHERE id = ? AND refresh_token_hash = ?`, rotation.GrantID, rotation.ExpectedRefreshHash).Scan(&previousAccessTokenID, &lastUsedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.APIToken{}, application.ErrOAuthRotationConflict
 	}
 	if err != nil {
 		return application.APIToken{}, fmt.Errorf("read OAuth grant for rotation: %w", err)
+	}
+	// Carry the connection's last successful API authentication across refreshes.
+	if lastUsedAt.Valid {
+		at, err := time.Parse(time.RFC3339Nano, lastUsedAt.String)
+		if err != nil {
+			return application.APIToken{}, fmt.Errorf("parse OAuth last-use timestamp: %w", err)
+		}
+		rotation.Access.LastUsedAt = &at
 	}
 	access, err := insertAPIToken(ctx, tx, rotation.Access, rotation.AccessHash)
 	if err != nil {
@@ -297,4 +306,56 @@ func (s *Store) RevokeOAuthGrant(ctx context.Context, grantID int64) error {
 		return fmt.Errorf("commit OAuth revocation: %w", err)
 	}
 	return nil
+}
+
+// ListOAuthConnections returns only display-safe metadata, never token hashes.
+func (s *Store) ListOAuthConnections(ctx context.Context) ([]application.OAuthConnection, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT g.id, g.client_id, g.display_name, g.resource, g.scope,
+			COALESCE(g.application_id, 0), g.created_at, a.last_used_at,
+			g.refresh_idle_expires_at, g.absolute_expires_at
+		FROM oauth_grants g JOIN api_tokens a ON a.id = g.access_token_id
+		ORDER BY g.id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list OAuth connections: %w", err)
+	}
+	defer rows.Close()
+	var connections []application.OAuthConnection
+	for rows.Next() {
+		var item application.OAuthConnection
+		var createdAt, idleExpiry, absoluteExpiry string
+		var lastUsedAt sql.NullString
+		if err := rows.Scan(&item.ID, &item.ClientID, &item.ClientName, &item.Resource,
+			&item.Scope, &item.ApplicationID, &createdAt, &lastUsedAt, &idleExpiry, &absoluteExpiry); err != nil {
+			return nil, fmt.Errorf("scan OAuth connection: %w", err)
+		}
+		item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse OAuth connection creation time: %w", err)
+		}
+		if lastUsedAt.Valid {
+			at, err := time.Parse(time.RFC3339Nano, lastUsedAt.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse OAuth connection last use: %w", err)
+			}
+			item.LastUsedAt = &at
+		}
+		idle, err := time.Parse(time.RFC3339Nano, idleExpiry)
+		if err != nil {
+			return nil, fmt.Errorf("parse OAuth connection idle expiry: %w", err)
+		}
+		absolute, err := time.Parse(time.RFC3339Nano, absoluteExpiry)
+		if err != nil {
+			return nil, fmt.Errorf("parse OAuth connection absolute expiry: %w", err)
+		}
+		item.ExpiresAt = absolute
+		if idle.Before(absolute) {
+			item.ExpiresAt = idle
+		}
+		connections = append(connections, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate OAuth connections: %w", err)
+	}
+	return connections, nil
 }
