@@ -25,6 +25,7 @@ import (
 	"redlaunch/internal/application"
 	redlaunchauth "redlaunch/internal/auth"
 	systemmetrics "redlaunch/internal/metrics"
+	"redlaunch/internal/service"
 )
 
 //go:embed templates/*.html static/*
@@ -65,6 +66,7 @@ type Handler struct {
 	proxyActions                   proxyActionService
 	registryImages                 registryImageService
 	dashboardMetrics               dashboardMetricsService
+	dashboardDocker                dashboardDockerService
 	authentication                 authenticationService
 	selfUpdater                    selfUpdateService
 	setupJobs                      *setupJobStore
@@ -252,6 +254,11 @@ type proxyActionService interface {
 	RestartProxy(context.Context) error
 }
 
+type dashboardDockerService interface {
+	CollectDockerDashboard(context.Context) (service.DockerDashboard, error)
+	PruneUnusedImages(context.Context) (uint64, error)
+}
+
 type dashboardMetricsService interface {
 	Collect(context.Context) (systemmetrics.Snapshot, error)
 }
@@ -350,6 +357,18 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryTimeTitle":           registryTimeTitle,
 		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
 		"databaseWorkspacePath":       managedDatabaseWorkspacePath,
+		"dashboardRatio":              dashboardRatio,
+		"dashboardDiskTotal":          func(d systemmetrics.Disk) uint64 { return d.TotalBytes },
+		"dashboardChartData": func(trends []service.ServiceTrend, memory bool) any {
+			return struct {
+				Trends []service.ServiceTrend
+				Memory bool
+			}{trends, memory}
+		},
+		"dashboardTrendMax":    dashboardTrendMax,
+		"dashboardTrendScale":  dashboardTrendScale,
+		"dashboardTrendColor":  func(i int) int { return i % 5 },
+		"dashboardTrendPoints": dashboardTrendPoints,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -387,6 +406,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	proxyActions := proxyActionService(noProxyService{})
 	var registryImages registryImageService
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
+	var dashboardDocker dashboardDockerService
 	var authentication authenticationService
 	var selfUpdater selfUpdateService
 	security := SecurityConfig{AccessMode: accessModeSSHOnly}
@@ -621,6 +641,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				registryImages = dependency
 			}
+		case dashboardDockerService:
+			dashboardDocker = dependency
 		case dashboardMetricsService:
 			if dependency != nil {
 				dashboardMetrics = dependency
@@ -708,6 +730,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
 		dashboardMetrics:               dashboardMetrics,
+		dashboardDocker:                dashboardDocker,
 		authentication:                 authentication,
 		selfUpdater:                    selfUpdater,
 		setupJobs:                      setupJobs,
@@ -743,6 +766,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /applications", h.applications)
 	mux.HandleFunc("GET /dashboard", h.dashboard)
 	mux.HandleFunc("GET /dashboard/metrics", h.dashboardMetricsFragment)
+	mux.HandleFunc("POST /dashboard/images/prune", h.dashboardPruneImages)
+	mux.HandleFunc("GET /dashboard/images/prune", h.dashboard)
 	mux.HandleFunc("GET /proxy", h.proxyPage)
 	mux.HandleFunc("GET /proxy/settings", h.proxySettingsPage)
 	mux.HandleFunc("POST /proxy/settings", h.proxySettingsPage)

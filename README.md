@@ -336,6 +336,20 @@ only after deliberately adding read-only host mounts and setting
 Running the binary directly on a VPS can use `METRICS_SCOPE=vps` with the
 default `/proc` and `/` paths.
 
+The dashboard lists individual containers labeled `redlaunch.managed=true`, with
+core projects first, and reports CPU, working-set memory, cumulative network
+traffic, and Docker status. These values come from the local Docker Engine at
+`/var/run/docker.sock`, independently of the host-metrics scope. Attached named
+volumes show actual used bytes; bind mounts and per-volume capacity estimates
+are excluded. Trends retain up to one hour of dashboard observations in memory
+and reset when the manager restarts; collection occurs on dashboard refreshes.
+
+**Prune unused images** requires confirmation and removes all local Docker
+images not referenced by any container, including tagged images. Images used
+by running or stopped containers are retained. Containers, volumes, networks,
+and registry tags are not pruned. Deleted images must be pulled or rebuilt
+before future use. The dashboard reports reclaimed bytes after cleanup.
+
 See [.env.example](.env.example) for the authentication settings. Environment
 variables override values loaded from `.env`.
 

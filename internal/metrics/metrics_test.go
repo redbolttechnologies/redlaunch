@@ -123,7 +123,7 @@ func TestCollectorSamplesAndRanksProcesses(t *testing.T) {
 	if snapshot.Memory.UsedBytes != 512*1024 {
 		t.Fatalf("used memory = %d, want %d", snapshot.Memory.UsedBytes, 512*1024)
 	}
-	if snapshot.Disk != (Disk{UsedBytes: 60 * 4096, AvailableBytes: 35 * 4096}) {
+	if snapshot.Disk != (Disk{TotalBytes: 100 * 4096, UsedBytes: 60 * 4096, AvailableBytes: 35 * 4096}) {
 		t.Fatalf("disk = %#v, want used/free fixture values", snapshot.Disk)
 	}
 	if len(snapshot.TopCPU) != 2 || snapshot.TopCPU[0].PID != 101 {

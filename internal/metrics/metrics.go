@@ -63,6 +63,7 @@ type Memory struct {
 
 // Disk contains root filesystem values in bytes.
 type Disk struct {
+	TotalBytes     uint64
 	UsedBytes      uint64
 	AvailableBytes uint64
 }
@@ -522,7 +523,7 @@ func diskFromFilesystemStats(stats filesystemStats) (Disk, error) {
 	if available > total {
 		available = total
 	}
-	return Disk{UsedBytes: total - free, AvailableBytes: available}, nil
+	return Disk{TotalBytes: total, UsedBytes: total - free, AvailableBytes: available}, nil
 }
 
 func statFilesystem(path string) (filesystemStats, error) {
