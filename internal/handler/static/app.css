@@ -6228,7 +6228,7 @@ h1 {
 .dashboard-page .dashboard-process-table td { padding: var(--space-3); }
 .dashboard-page .dashboard-process-table tbody th code { display: inline; font-size: 0.75rem; }
 .dashboard-page .dashboard-process-table tbody td { font-size: 0.75rem; white-space: nowrap; }
-.dashboard-page .dashboard-process-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+.dashboard-page .dashboard-process-grid { grid-template-columns: minmax(0, 1fr); }
 .dashboard-page .dashboard-trends .dashboard-process-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 1280px) {
  .dashboard-page .dashboard-process-grid { grid-template-columns: minmax(0, 1fr); }
@@ -6242,4 +6242,5 @@ h1 {
 .dashboard-page .dashboard-volumes-table { min-width: 0; table-layout: fixed; }
 .dashboard-page .dashboard-volumes-table th:first-child { width: 30%; }
 .dashboard-page .dashboard-volumes-table th:last-child { width: 20%; }
-.dashboard-page .dashboard-volumes-table code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-page .dashboard-volumes-table tbody th code,
+.dashboard-page .dashboard-volumes-table tbody td code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
