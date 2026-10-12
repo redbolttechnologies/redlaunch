@@ -16,22 +16,24 @@ type databaseQueryRunner interface {
 	QueryPostgresDatabase(context.Context, string, string, string, string, string) (string, error)
 }
 
-// GetDatabaseWorkspace returns a managed database and its user schemas/tables.
+// GetDatabaseWorkspace returns a managed database and its user schemas, tables,
+// and columns in their PostgreSQL ordinal order.
 func (s *ManagedDatabases) GetDatabaseWorkspace(ctx context.Context, name string) (application.ManagedDatabase, []application.DatabaseSchema, error) {
 	item, directory, runner, err := s.databaseQueryTarget(ctx, name)
 	if err != nil {
 		return item, nil, err
 	}
-	output, err := runner.QueryPostgresDatabase(ctx, directory, managedDatabaseServiceName, item.Name, item.Owner, `SELECT n.nspname, COALESCE(c.relname, '')
+	output, err := runner.QueryPostgresDatabase(ctx, directory, managedDatabaseServiceName, item.Name, item.Owner, `SELECT n.nspname, COALESCE(c.relname, ''), COALESCE(a.attname, '')
 FROM pg_catalog.pg_namespace n
 LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
 WHERE left(n.nspname, 3) <> 'pg_' AND n.nspname <> 'information_schema'
-ORDER BY n.nspname, c.relname;`)
+ORDER BY n.nspname, c.relname, a.attnum;`)
 	if err != nil {
 		return item, nil, err
 	}
 	records, err := csv.NewReader(strings.NewReader(output)).ReadAll()
-	if err != nil || len(records) == 0 || len(records[0]) != 2 {
+	if err != nil || len(records) == 0 || len(records[0]) != 3 {
 		return item, nil, errors.New("database schemas could not be read")
 	}
 	var schemas []application.DatabaseSchema
@@ -41,7 +43,13 @@ ORDER BY n.nspname, c.relname;`)
 		}
 		if row[1] != "" {
 			schema := &schemas[len(schemas)-1]
-			schema.Tables = append(schema.Tables, application.DatabaseTable{Name: row[1], SQL: databaseTableSQL(row[0], row[1])})
+			if len(schema.Tables) == 0 || schema.Tables[len(schema.Tables)-1].Name != row[1] {
+				schema.Tables = append(schema.Tables, application.DatabaseTable{Name: row[1], SQL: databaseTableSQL(row[0], row[1])})
+			}
+			if row[2] != "" {
+				table := &schema.Tables[len(schema.Tables)-1]
+				table.Columns = append(table.Columns, row[2])
+			}
 		}
 	}
 	return item, schemas, nil

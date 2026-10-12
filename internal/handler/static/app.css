@@ -112,6 +112,9 @@
   align-items: center;
   gap: var(--space-3);
   list-style: none;
+  min-height: var(--space-8);
+  padding: var(--space-1) var(--space-2);
+  padding-right: var(--space-8);
 }
 
 .database-table-menu > summary::-webkit-details-marker {
@@ -123,9 +126,12 @@
   flex-shrink: 0;
 }
 
-.database-table-menu.database-table-selected > summary,
-.database-table-menu.database-table-selected > summary svg {
+.database-table-row.database-table-selected .database-table-menu > summary,
+.database-table-row.database-table-selected .database-table-menu > summary svg {
   color: hsl(var(--info));
+}
+
+.database-table-row.database-table-selected .database-table-menu > summary {
   background: hsl(var(--info) / 0.08);
 }
 
@@ -320,15 +326,54 @@
   list-style: none;
 }
 
-.database-table-menu {
+.database-table-row {
   position: relative;
 }
 
-.database-table-menu .service-actions-options {
+.database-table-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.database-table-actions > summary {
+  list-style: none;
+  padding: var(--space-1);
+}
+
+.database-table-actions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.database-table-actions .service-actions-options {
   top: 100%;
-  left: 0;
-  right: auto;
+  left: auto;
+  right: 0;
   min-width: 16rem;
+}
+
+.database-table-menu[open] > summary .database-table-chevron {
+  transform: rotate(90deg);
+}
+
+.database-column-list {
+  margin: var(--space-1) 0;
+  padding: 0 0 0 calc(var(--space-8) + var(--space-6));
+  list-style: none;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+
+.database-column-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  overflow-wrap: anywhere;
+}
+
+.database-column-list svg {
+  flex-shrink: 0;
 }
 
 .database-sql-editor,

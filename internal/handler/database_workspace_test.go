@@ -48,7 +48,7 @@ func newWorkspaceHandler(t *testing.T) (*Handler, *fakeWorkspaceDatabases) {
 	t.Helper()
 	f := &fakeWorkspaceDatabases{
 		fakeManagedDatabases: &fakeManagedDatabases{cluster: application.ManagedDatabaseCluster{Enabled: true}, databases: []application.ManagedDatabase{{Name: "shop", Owner: "shop"}}},
-		schemas:              []application.DatabaseSchema{{Name: "public", Tables: []application.DatabaseTable{{Name: "orders", SQL: `SELECT * FROM "public"."orders" LIMIT 1000;`}}}},
+		schemas:              []application.DatabaseSchema{{Name: "public", Tables: []application.DatabaseTable{{Name: "orders", SQL: `SELECT * FROM "public"."orders" LIMIT 1000;`, Columns: []string{"id", "name", "created_at"}}}}},
 		result:               application.DatabaseQueryResult{Columns: []string{"value"}, Rows: [][]string{{"<script>alert(1)</script>"}}},
 	}
 	h, err := NewForTests(nil, fakeSetupManagerForDatabases(), f)
@@ -56,6 +56,32 @@ func newWorkspaceHandler(t *testing.T) (*Handler, *fakeWorkspaceDatabases) {
 		t.Fatal(err)
 	}
 	return h, f
+}
+
+func TestDatabaseWorkspaceTableColumns(t *testing.T) {
+	h, f := newWorkspaceHandler(t)
+	f.schemas[0].Tables[0].Columns = []string{"id", "z_column", "<script>alert(1)</script>", "a_column"}
+	w := databasesRequest(t, h, "GET", "/databases/shop", nil)
+	body := w.Body.String()
+	for _, value := range []string{`data-table-columns`, `aria-label="Columns for table orders"`, `class="database-column-list"`, `aria-label="Columns of orders"`, `data-table-actions`, `aria-label="Actions for table orders"`} {
+		if !strings.Contains(body, value) {
+			t.Fatalf("missing expandable table markup: %s", value)
+		}
+	}
+	if strings.Contains(body, "<script>alert(1)</script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatal("column name was not escaped")
+	}
+	if strings.Index(body, ">z_column<") > strings.Index(body, ">a_column<") {
+		t.Fatal("column order changed")
+	}
+	if f.sql != "" {
+		t.Fatal("loading columns executed user SQL")
+	}
+	f.schemas[0].Tables[0].Columns = nil
+	w = databasesRequest(t, h, "GET", "/databases/shop", nil)
+	if !strings.Contains(w.Body.String(), "No columns.") {
+		t.Fatal("missing empty column state")
+	}
 }
 
 func workspacePost(t *testing.T, h *Handler, form url.Values, partial bool) *httptest.ResponseRecorder {

@@ -13,8 +13,9 @@ type DatabaseSchema struct {
 
 // DatabaseTable includes the prepared script used by the table context menu.
 type DatabaseTable struct {
-	Name string
-	SQL  string
+	Name    string
+	SQL     string
+	Columns []string
 }
 
 // DatabaseQueryResult holds CSV query output or command/script output.

@@ -154,7 +154,8 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   separates cluster details and runtime controls from the disable action.
 - Click a database name on **Databases → Databases** to open its SQL workspace.
   Schemas and tables appear on the left, with an SQL editor above query results
-  on the right. Right-click a table (or click it, or use Shift+F10) and choose
+  on the right. Expand a table to see its columns in database order. Right-click
+  a table (or use its actions button or Shift+F10) and choose
   **Show data (max. 1000 rows)** to load and automatically execute a quoted
   SELECT script. Edited SQL and write operations require **Run Query** or
   Ctrl/⌘+Enter; writes take effect immediately. The console includes table
