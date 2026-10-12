@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,11 +17,23 @@ import (
 
 type fakeWorkspaceDatabases struct {
 	*fakeManagedDatabases
-	name, sql string
-	schemas   []application.DatabaseSchema
-	result    application.DatabaseQueryResult
-	err       error
-	queryErr  error
+	name, sql  string
+	schemas    []application.DatabaseSchema
+	result     application.DatabaseQueryResult
+	err        error
+	queryErr   error
+	imported   string
+	importName string
+	importErr  error
+}
+
+func (f *fakeWorkspaceDatabases) ImportDatabaseDump(_ context.Context, name string, source io.Reader) error {
+	contents, err := io.ReadAll(source)
+	if err != nil {
+		return err
+	}
+	f.imported, f.importName = string(contents), name
+	return f.importErr
 }
 
 func (f *fakeWorkspaceDatabases) GetDatabaseWorkspace(_ context.Context, name string) (application.ManagedDatabase, []application.DatabaseSchema, error) {
@@ -63,7 +78,7 @@ func TestDatabaseWorkspacePageAndLink(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	for _, value := range []string{"Schemas and tables", "orders", "SQL editor", "Results", "Show data (max. 1000 rows)", `data-sql="SELECT * FROM`, `name="schema" value="public"`, `/static/database-workspace.js`, `/static/htmx.min.js`} {
+	for _, value := range []string{"Schemas &amp; Tables", "orders", "SQL Editor", "Results", "Show data (max. 1000 rows)", `data-sql="SELECT * FROM`, `name="schema" value="public"`, `/static/database-workspace.js`, `/static/htmx.min.js`, "Import dump file…", "Search tables…", "Run Query", "data-sql-highlight", "Active"} {
 		if !strings.Contains(w.Body.String(), value) {
 			t.Fatalf("missing %s", value)
 		}
@@ -74,6 +89,73 @@ func TestDatabaseWorkspacePageAndLink(t *testing.T) {
 	w = databasesRequest(t, h, "GET", "/databases?tab=managed-databases", nil)
 	if !strings.Contains(w.Body.String(), `href="/databases/shop"`) {
 		t.Fatal("database name is not linked")
+	}
+}
+
+func TestDatabaseDumpImport(t *testing.T) {
+	for _, test := range []struct {
+		name, token, confirm, filename, content string
+		fail                                    bool
+		status                                  int
+	}{
+		{name: "SQL", confirm: "1", filename: "dump.sql", content: "CREATE TABLE sample (id integer);", status: 303},
+		{name: "custom", confirm: "1", filename: "dump.backup", content: "PGDMPfixture", status: 303},
+		{name: "hostile filename", confirm: "1", filename: "../../outside.sql", content: "SELECT 1;", status: 303},
+		{name: "confirmation required", filename: "dump.sql", content: "SELECT 1;", status: 422},
+		{name: "invalid token", token: "wrong", confirm: "1", filename: "dump.sql", content: "SELECT 1;", status: 403},
+		{name: "empty file", confirm: "1", filename: "dump.sql", status: 422},
+		{name: "import failure", confirm: "1", filename: "dump.sql", content: "bad SQL", fail: true, status: 422},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, fake := newWorkspaceHandler(t)
+			if test.fail {
+				fake.importErr = errors.New("sensitive dump data")
+			}
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			token := h.csrfToken
+			if test.token != "" {
+				token = test.token
+			}
+			if err := writer.WriteField("csrf_token", token); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.WriteField("confirm", test.confirm); err != nil {
+				t.Fatal(err)
+			}
+			file, err := writer.CreateFormFile("dump", test.filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(file, test.content); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("POST", "/databases/shop/import", &body)
+			r.Header.Set("Content-Type", writer.FormDataContentType())
+			r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: h.csrfToken})
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, r)
+			if w.Code != test.status {
+				t.Fatalf("status %d, expected %d: %s", w.Code, test.status, w.Body.String())
+			}
+			if test.status == 303 && (fake.importName != "shop" || fake.imported != test.content || w.Header().Get("Location") != "/databases/shop?notice=dump-imported") {
+				t.Fatal("dump did not import into selected database")
+			}
+			if test.status == 403 || (test.status == 422 && !test.fail) {
+				if fake.imported != "" {
+					t.Fatal("invalid form imported dump")
+				}
+			}
+			if strings.Contains(w.Body.String(), "sensitive dump data") {
+				t.Fatal("dump diagnostics leaked")
+			}
+			if w.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("import response can be cached")
+			}
+		})
 	}
 }
 

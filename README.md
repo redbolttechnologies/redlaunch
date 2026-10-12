@@ -156,8 +156,13 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   Schemas and tables appear on the left, with an SQL editor above query results
   on the right. Right-click a table (or click it, or use Shift+F10) and choose
   **Show data (max. 1000 rows)** to load and automatically execute a quoted
-  SELECT script. Edited SQL and write operations require **Run SQL** or
-  Ctrl/⌘+Enter; writes take effect immediately. **Refresh** reloads the schema
+  SELECT script. Edited SQL and write operations require **Run Query** or
+  Ctrl/⌘+Enter; writes take effect immediately. The console includes table
+  search, syntax highlighting, line numbers, and a whitespace-only formatter
+  (Ctrl/⌘+K or Query actions → Format SQL). Results paginate locally in groups
+  of 25 rows and can be downloaded as CSV or JSON without rerunning the query.
+  CSV downloads protect spreadsheet formula-like values; JSON preserves the
+  displayed values. **Refresh schemas and tables** reloads the schema
   browser after schema changes and clears the editor/results. Queries run as
   the database owner through the container's local socket, not as the cluster
   administrator. Administrative owners and owners with host-file/program
@@ -166,6 +171,23 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   results display at most 1000 rows; use LIMIT in custom queries to bound work.
   Multi-result scripts with differing column counts display escaped text output.
   psql backslash commands are not supported.
+- **Import dump file…** opens a confirmation dialog for restoring into the
+  selected managed database. Plain UTF-8 `.sql` and PostgreSQL custom-format
+  dumps (`pg_dump -Fc`, commonly `.dump` or `.backup`) are supported, up to
+  32 MiB. Externally compressed (.gz/.zip), tar, and directory-format dumps are
+  not supported; compression inside custom-format archives is supported.
+  Take a backup first and import only trusted files. Generate portable SQL
+  dumps with `pg_dump --no-owner --no-privileges`; custom imports ignore ownership
+  and grants. SQL import requires a current PostgreSQL client supporting psql
+  restricted mode (PostgreSQL 17.6 / 16.10 / 15.14 or newer); older clients fail
+  closed. COPY data is supported, but shell/file/connection-switching psql
+  commands are blocked. Restores execute as the non-administrative database
+  owner, stop at the first error, and use a single transaction and a 10-minute
+  execution deadline. Explicit transaction control in SQL dumps can prevent
+  complete rollback. Existing conflicting objects are not automatically
+  dropped, and source roles are not created. Successful import refreshes the
+  workspace and displays a confirmation toast; dump contents are not displayed
+  or retained by Redlaunch after the request.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed

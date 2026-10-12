@@ -17,6 +17,41 @@ type workspaceRunnerFake struct {
 	err             error
 	queries         []string
 	owner, database string
+	dump            []byte
+	importErr       error
+}
+
+func (r *workspaceRunnerFake) ImportPostgresDatabase(_ context.Context, _, _, database, owner string, contents []byte) error {
+	r.database, r.owner, r.dump = database, owner, contents
+	return r.importErr
+}
+
+func TestDatabaseDumpImportService(t *testing.T) {
+	s, runner := newWorkspaceService(t)
+	if err := s.ImportDatabaseDump(t.Context(), "shop", strings.NewReader("CREATE TABLE imported (id integer);")); err != nil {
+		t.Fatal(err)
+	}
+	if runner.database != "shop" || runner.owner != "shop owner" || string(runner.dump) != "CREATE TABLE imported (id integer);" {
+		t.Fatal("dump import used incorrect target or contents")
+	}
+	runner.dump = nil
+	for _, contents := range []string{"", strings.Repeat("x", application.DatabaseDumpMaxBytes+1)} {
+		if err := s.ImportDatabaseDump(t.Context(), "shop", strings.NewReader(contents)); err == nil {
+			t.Fatal("accepted invalid dump size")
+		}
+	}
+	runner.execFunc = func(string) (string, error) { return "t", nil }
+	if err := s.ImportDatabaseDump(t.Context(), "shop", strings.NewReader("SELECT 1;")); err == nil {
+		t.Fatal("restored as privileged owner")
+	}
+	if runner.dump != nil {
+		t.Fatal("invalid import reached runner")
+	}
+	runner.execFunc = func(string) (string, error) { return "f", nil }
+	runner.importErr = errors.New("sensitive SQL diagnostic")
+	if err := s.ImportDatabaseDump(t.Context(), "shop", strings.NewReader("SELECT 1;")); err == nil || strings.Contains(err.Error(), "sensitive") {
+		t.Fatal("import diagnostic leaked")
+	}
 }
 
 func (r *workspaceRunnerFake) QueryPostgresDatabase(_ context.Context, _, _, database, owner, sql string) (string, error) {

@@ -1,41 +1,76 @@
 {{define "database-workspace.html"}}{{template "layout" .}}{{end}}
 
 {{define "database-workspace-content.html"}}
-<section class="proxy-page" aria-labelledby="page-title">
-<header class="page-heading">
-  <div class="page-heading-copy"><a href="/databases?tab=managed-databases">Databases</a><h1 id="page-title"><code>{{.DatabaseWorkspacePage.Database.Name}}</code></h1><p>Browse schemas and run SQL as <code>{{.DatabaseWorkspacePage.Database.Owner}}</code>.</p></div>
-</header>
-<div class="database-workspace" data-database-workspace>
-  <aside class="service-widget database-schema-browser" aria-labelledby="database-schema-title">
-    <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-schema-title">Schemas and tables</h2></div><a class="button button-secondary" href="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}">Refresh</a></header>
-    <div class="service-widget-body">
-      {{range .DatabaseWorkspacePage.Schemas}}
-      {{$schema := .Name}}
-      <details open><summary><code>{{.Name}}</code></summary>
-        <ul class="database-table-list">
-          {{range .Tables}}
-          <li><details class="database-table-menu" data-table-menu><summary data-table-name data-sql="{{.SQL}}" aria-label="Actions for table {{.Name}}"><code>{{.Name}}</code></summary>
-            <form method="post" action="{{databaseWorkspacePath $.DatabaseWorkspacePage.Database.Name}}/query" class="service-actions-options" data-table-context-menu>
-              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="action" value="show-data"><input type="hidden" name="schema" value="{{$schema}}"><input type="hidden" name="table" value="{{.Name}}">
-              <input type="hidden" name="sql" value="{{.SQL}}">
-              <button class="service-actions-item" type="submit" data-table-show-data>Show data (max. 1000 rows)</button>
-            </form>
-          </details></li>
-          {{else}}<li class="muted">No tables in this schema.</li>{{end}}
-        </ul>
-      </details>
-      {{else}}<p class="muted">No schemas available.</p>{{end}}
+<section class="database-console-page" aria-labelledby="page-title">
+  <header class="page-heading">
+    <div class="page-heading-copy">
+      <nav class="application-details-breadcrumb" aria-label="Breadcrumb"><a href="/databases?tab=managed-databases">{{template "managed-database-icon"}} Databases</a><span aria-hidden="true">›</span><span aria-current="page">{{.DatabaseWorkspacePage.Database.Name}}</span></nav>
+      <div class="database-console-title"><h1 id="page-title">{{.DatabaseWorkspacePage.Database.Name}}</h1><span class="service-status-badge {{if .DatabaseWorkspacePage.Available}}service-status-running{{else}}service-status-stopped{{end}}"><span class="status-dot" aria-hidden="true"></span>{{if .DatabaseWorkspacePage.Available}}Active{{else}}Unavailable{{end}}</span></div>
+      <p>Browse schemas and run SQL as <code>{{.DatabaseWorkspacePage.Database.Owner}}</code>.</p>
     </div>
-  </aside>
-  <div class="database-query-panels">
-    <section class="service-widget" aria-labelledby="database-editor-title">
-      <form method="post" action="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-post="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-target="#database-query-result" hx-swap="outerHTML" hx-disabled-elt="find button" data-query-form>
-        <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-editor-title">SQL editor</h2></div><button class="button button-primary" type="submit">Run SQL</button></header>
-        <div class="service-widget-body"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><div class="field"><label class="sr-only" for="database-sql">SQL statement or script</label><textarea id="database-sql" class="database-sql-editor" name="sql" rows="10" maxlength="65536" spellcheck="false" required placeholder="SELECT * FROM &quot;public&quot;.&quot;your_table&quot; LIMIT 1000;">{{.DatabaseWorkspacePage.SQL}}</textarea></div><p class="muted">Write operations change the database immediately. Use Run SQL or Ctrl/⌘ + Enter. Right-click a table for prepared queries.</p><p class="muted htmx-indicator" role="status">Running SQL…</p></div>
-      </form>
-    </section>
-    {{template "database-query-result.html" .}}
+  </header>
+  <div class="database-workspace" data-database-workspace>
+    <aside class="service-widget database-schema-browser" aria-labelledby="database-schema-title">
+      <header class="service-widget-header"><h2 class="database-panel-title" id="database-schema-title">{{template "managed-database-icon"}} Schemas &amp; Tables</h2><a class="button button-secondary database-refresh-button" href="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}" aria-label="Refresh schemas and tables" title="Refresh schemas and tables">{{template "database-refresh-icon"}}</a></header>
+      <div class="database-schema-body">
+        <div class="field database-table-search">{{template "database-search-icon"}}<label class="sr-only" for="database-table-search">Search tables</label><input id="database-table-search" type="search" placeholder="Search tables…" data-table-search></div>
+        {{range .DatabaseWorkspacePage.Schemas}}{{$schema := .Name}}
+        <details class="database-schema" data-schema data-schema-name="{{.Name}}"{{if eq .Name "public"}} open{{end}}><summary>{{template "managed-database-icon"}}<span>{{.Name}}</span></summary>
+          <ul class="database-table-list">
+            {{range .Tables}}
+            <li data-table-row data-table-search-name="{{.Name}}"><details class="database-table-menu" data-table-menu><summary data-table-name data-sql="{{.SQL}}" aria-label="Actions for table {{.Name}}">{{template "database-table-icon"}}<span>{{.Name}}</span></summary>
+              <form method="post" action="{{databaseWorkspacePath $.DatabaseWorkspacePage.Database.Name}}/query" class="service-actions-options" data-table-context-menu>
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="action" value="show-data"><input type="hidden" name="schema" value="{{$schema}}"><input type="hidden" name="table" value="{{.Name}}">
+                <button class="service-actions-item" type="submit">Show data (max. 1000 rows)</button>
+              </form>
+            </details></li>
+            {{else}}<li class="muted">No tables in this schema.</li>{{end}}
+          </ul>
+        </details>
+        {{else}}<p class="muted">No schemas available.</p>{{end}}
+        <p class="muted" data-table-search-empty hidden>No matching schemas or tables.</p>
+      </div>
+    </aside>
+    <div class="database-query-panels">
+      <section class="service-widget database-editor-panel" aria-labelledby="database-editor-title">
+        <form method="post" action="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-post="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/query" hx-target="#database-query-result" hx-swap="outerHTML" hx-disabled-elt="find button" data-query-form>
+          <header class="service-widget-header"><h2 class="database-panel-title" id="database-editor-title">{{template "database-code-icon"}} SQL Editor</h2>
+            <div class="database-editor-actions"><a class="button button-secondary" href="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}?import=1" data-dump-import-open>{{template "database-upload-icon"}} Import dump file…</a>
+              <div class="database-run-actions"><button class="button button-primary database-run-button" type="submit">{{template "database-play-icon"}} Run Query</button><details class="database-run-menu"><summary class="button button-primary database-run-button" aria-label="Query actions">⌄</summary><div class="service-actions-options"><button class="service-actions-item" type="button" data-format-sql>Format SQL</button><button class="service-actions-item" type="button" data-clear-sql>Clear editor</button></div></details></div>
+            </div>
+          </header>
+          <div class="database-editor-body"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <div class="database-code-surface" data-code-surface>
+              <pre class="database-line-numbers" aria-hidden="true" data-line-numbers>1</pre>
+              <div class="database-code-input"><pre class="database-sql-highlight" aria-hidden="true" data-sql-highlight></pre><label class="sr-only" for="database-sql">SQL statement or script</label><textarea id="database-sql" class="database-sql-editor" name="sql" rows="5" maxlength="65536" spellcheck="false" wrap="off" required placeholder="SELECT * FROM &quot;public&quot;.&quot;your_table&quot; LIMIT 1000;">{{.DatabaseWorkspacePage.SQL}}</textarea></div>
+            </div>
+            <div class="database-editor-help muted"><span>Ctrl/⌘ + Enter to run query</span><span>Ctrl/⌘ + K to format</span><span>Results are limited to 1,000 rows.</span></div><p class="muted database-write-warning">Write operations change the database immediately.</p><p class="muted htmx-indicator" role="status">Running query…</p>
+          </div>
+        </form>
+      </section>
+      {{template "database-query-result.html" .}}
+    </div>
   </div>
-</div>
+
+  <dialog class="application-dialog" id="database-dump-import-dialog" aria-labelledby="database-dump-import-title" data-dump-import-dialog{{if .DatabaseWorkspacePage.ImportOpen}} open{{end}}>
+    <div class="application-dialog-panel"><header class="application-dialog-header"><div><h2 id="database-dump-import-title">Import database dump</h2><p>Restore a plain SQL or PostgreSQL custom-format dump into <strong>{{.DatabaseWorkspacePage.Database.Name}}</strong> as its database owner.</p></div></header>
+      {{if .DatabaseWorkspacePage.ImportError}}<div class="application-alert" role="alert">{{.DatabaseWorkspacePage.ImportError}}</div>{{end}}
+      <form class="application-form" method="post" action="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}/import" enctype="multipart/form-data" data-dump-import-form>
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <div class="field"><label for="database-dump-file">Dump file</label><input id="database-dump-file" name="dump" type="file" accept=".sql,.dump,.backup,application/octet-stream" required><span class="field-help">Maximum 32 MiB. SQL must be UTF-8; gzip/zip and directory-format dumps are not supported. Use a current PostgreSQL client. Plain SQL dumps should use --no-owner --no-privileges.</span></div>
+        <label class="checkbox-field"><input type="checkbox" name="confirm" value="1" required> I understand that this import may change existing objects and data. I have a current backup.</label>
+        <p class="field-help">Import stops on the first error. Only import dumps you trust. Transaction control inside SQL dumps can prevent a complete rollback.</p>
+        <footer class="application-form-actions"><a class="button button-secondary" href="{{databaseWorkspacePath .DatabaseWorkspacePage.Database.Name}}" data-dump-import-close>Cancel</a><button class="button button-destructive" type="submit" data-dump-import-submit>Import dump</button></footer><p class="field-help" role="status" data-dump-import-progress hidden>Importing dump… Keep this page open. This may take several minutes.</p>
+      </form>
+    </div>
+  </dialog>
 </section>
 {{end}}
+
+{{define "database-table-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M9 9v12M15 9v12M3 15h18"></path></svg>{{end}}
+{{define "database-code-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-16-2 20"></path></svg>{{end}}
+{{define "database-refresh-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6M20 7l-3-2"></path></svg>{{end}}
+{{define "database-upload-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V3m-4 4 4-4 4 4M5 12H3v9h18v-9h-2"></path></svg>{{end}}
+{{define "database-play-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><path d="m6 3 15 9-15 9Z"></path></svg>{{end}}
+{{define "database-download-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-4-4 4 4 4-4M3 16v5h18v-5"></path></svg>{{end}}
+{{define "database-search-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 5 5"></path></svg>{{end}}

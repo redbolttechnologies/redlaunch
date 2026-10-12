@@ -1,5 +1,6 @@
 {{define "layout"}}
 {{$notice := ""}}{{with .DatabasesPage}}{{$notice = .Notice}}{{end}}
+{{with .DatabaseWorkspacePage}}{{$notice = .Notice}}{{end}}
 <!doctype html>
 <html lang="en">
 <head>

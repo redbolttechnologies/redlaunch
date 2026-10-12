@@ -1,15 +1,17 @@
-{{define "database-query-result.html"}}
-{{with .DatabaseWorkspacePage}}
-<section class="service-widget" id="database-query-result" aria-labelledby="database-result-title" aria-live="polite">
-  <header class="service-widget-header"><div class="service-widget-heading"><h2 id="database-result-title">Results</h2>{{with .Result}}<p>{{if .Columns}}{{len .Rows}} {{if eq (len .Rows) 1}}row{{else}}rows{{end}}{{if .Truncated}} · Showing the first 1000 rows{{end}}{{else}}Statement completed.{{end}}</p>{{end}}</div></header>
+{{define "database-query-result.html"}}{{with .DatabaseWorkspacePage}}
+<section class="service-widget database-results-panel" id="database-query-result" aria-labelledby="database-result-title" aria-live="polite" data-query-results>
+  <header class="service-widget-header"><h2 class="database-panel-title" id="database-result-title">{{template "database-table-icon"}} Results</h2>
+    {{if and .Result (not .Error)}}<div class="database-result-actions"><span class="database-query-success"><span aria-hidden="true">✓</span> Query completed successfully</span><span class="muted">{{.Result.Duration.Milliseconds}} ms</span>{{if .Result.Columns}}<span class="muted">{{len .Result.Rows}} {{if eq (len .Result.Rows) 1}}row{{else}}rows{{end}}</span><details class="database-download-menu" data-result-download hidden><summary class="button button-secondary">{{template "database-download-icon"}} Download ⌄</summary><div class="service-actions-options"><button type="button" class="service-actions-item" data-download-format="csv">Download CSV</button><button type="button" class="service-actions-item" data-download-format="json">Download JSON</button></div></details>{{end}}</div>{{end}}
+  </header>
   <div class="service-widget-body">
     {{if .Error}}<div class="application-alert" role="alert">{{.Error}}</div>
     {{else if .Result}}{{with .Result}}
       {{if .Output}}<pre class="database-script-output"><code>{{.Output}}</code></pre>
-      {{else if .Columns}}<div class="service-environment-table-wrap database-result-scroll"><table class="service-environment-table"><caption class="sr-only">SQL query results</caption><thead><tr>{{range .Columns}}<th scope="col"><code>{{.}}</code></th>{{end}}</tr></thead><tbody>{{range .Rows}}<tr>{{range .}}<td><code>{{.}}</code></td>{{end}}</tr>{{else}}<tr><td colspan="{{len .Columns}}">No rows returned.</td></tr>{{end}}</tbody></table></div>
+      {{else if .Columns}}<div class="service-environment-table-wrap database-result-scroll"><table class="service-environment-table" data-result-table><caption class="sr-only">SQL query results</caption><thead><tr>{{range .Columns}}<th scope="col"><code>{{.}}</code></th>{{end}}</tr></thead><tbody>{{range .Rows}}<tr data-result-row>{{range .}}<td data-result-cell="{{.}}">{{if eq . "NULL"}}<span class="database-null-value">NULL</span>{{else}}<code title="{{.}}">{{.}}</code>{{end}}</td>{{end}}</tr>{{else}}<tr><td colspan="{{len .Columns}}">No rows returned.</td></tr>{{end}}</tbody></table></div>
+        {{if .Truncated}}<p class="muted">Showing the first 1000 rows. Add LIMIT to custom queries to bound database work.</p>{{end}}
+        <nav class="database-result-pagination" aria-label="Result pages" data-result-pagination hidden><span class="muted" data-result-page-summary></span><div class="database-page-actions"><button type="button" class="icon-button" data-result-prev aria-label="Previous result page">‹</button><span data-result-pages></span><button type="button" class="icon-button" data-result-next aria-label="Next result page">›</button></div></nav>
       {{else}}<p class="muted">SQL completed successfully.</p>{{end}}
-    {{end}}{{else}}<p class="muted">Run a query to see its results here.</p>{{end}}
+    {{end}}{{else}}<div class="database-results-empty"><span aria-hidden="true">{{template "database-table-icon"}}</span><p>Run a query to see its results here.</p></div>{{end}}
   </div>
 </section>
-{{end}}
-{{end}}
+{{end}}{{end}}

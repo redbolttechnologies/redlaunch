@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -60,7 +61,9 @@ func (s *ManagedDatabases) RunDatabaseQuery(ctx context.Context, name, sql strin
 	if err != nil {
 		return result, err
 	}
+	started := time.Now()
 	output, err := runner.QueryPostgresDatabase(ctx, directory, managedDatabaseServiceName, item.Name, item.Owner, sql)
+	result.Duration = time.Since(started)
 	if err != nil {
 		return result, errors.New("SQL execution failed or exceeded its time/output limit; check the statement and database availability")
 	}
@@ -79,6 +82,36 @@ func (s *ManagedDatabases) RunDatabaseQuery(ctx context.Context, name, sql strin
 		}
 	}
 	return result, nil
+}
+
+// ImportDatabaseDump restores uploaded bytes without using the upload's filename
+// or retaining its contents on disk. SQL diagnostics must not expose dump data.
+func (s *ManagedDatabases) ImportDatabaseDump(ctx context.Context, name string, source io.Reader) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	contents, err := io.ReadAll(io.LimitReader(source, application.DatabaseDumpMaxBytes+1))
+	if err != nil || len(contents) == 0 || len(contents) > application.DatabaseDumpMaxBytes {
+		return errors.New("select a non-empty SQL or custom-format dump up to 32 MiB")
+	}
+	item, directory, _, err := s.databaseQueryTarget(ctx, name)
+	if err != nil {
+		return err
+	}
+	runner, ok := s.runner.(interface {
+		ImportPostgresDatabase(context.Context, string, string, string, string, []byte) error
+	})
+	if !ok {
+		return errors.New("database dump import is not configured")
+	}
+	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+	if err := runner.ImportPostgresDatabase(ctx, directory, managedDatabaseServiceName, item.Name, item.Owner, contents); err != nil {
+		return errors.New("dump import failed; check the format, owner permissions, conflicting objects, and PostgreSQL version")
+	}
+	return nil
 }
 
 func (s *ManagedDatabases) databaseQueryTarget(ctx context.Context, name string) (application.ManagedDatabase, string, databaseQueryRunner, error) {

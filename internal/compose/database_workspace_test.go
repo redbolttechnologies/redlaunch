@@ -126,4 +126,45 @@ func TestQueryPostgresDatabaseIntegration(t *testing.T) {
 			t.Fatal("database owner gained administrative/host access")
 		}
 	}
+	plain := "-- PostgreSQL database dump\n\\restrict OldDumpKey\nCREATE TABLE imported (value text);\nCOPY imported (value) FROM stdin;\nhello\n\\N\n\\! touch /tmp/redlaunch-dump-unsafe\n\\.\n\\unrestrict OldDumpKey\n-- dump complete\n"
+	if err := runner.ImportPostgresDatabase(ctx, project, "postgres", "shop", "shop", []byte(plain)); err != nil {
+		t.Fatalf("plain dump import failed: %v", err)
+	}
+	if output, err := query("SELECT count(*) FROM imported;"); err != nil || output != "count\n3\n" {
+		t.Fatalf("COPY dump data not restored: %q %v", output, err)
+	}
+	for _, dump := range []string{
+		"\\! touch /tmp/redlaunch-dump-unsafe\n",
+		"\\connect admin admin\nCREATE TABLE privileged_import (id integer);\n",
+		"\\copy imported TO PROGRAM 'touch /tmp/redlaunch-dump-unsafe'\n",
+		"\\unrestrict guessing\n\\! touch /tmp/redlaunch-dump-unsafe\n",
+		"\\echo `touch /tmp/redlaunch-dump-unsafe`\n",
+	} {
+		if err := runner.ImportPostgresDatabase(ctx, project, "postgres", "shop", "shop", []byte(dump)); err == nil {
+			t.Fatal("untrusted dump escaped restricted mode")
+		}
+	}
+	if err := compose(ctx, "exec", "-T", "postgres", "test", "!", "-e", "/tmp/redlaunch-dump-unsafe"); err != nil {
+		t.Fatal("dump import executed an unauthorized shell command")
+	}
+	if err := runner.ImportPostgresDatabase(ctx, project, "postgres", "shop", "shop", []byte("CREATE TABLE rolled_back (id integer);\nSELECT missing_column;")); err == nil {
+		t.Fatal("invalid dump succeeded")
+	}
+	if output, err := query("SELECT to_regclass('rolled_back');"); err != nil || output != "to_regclass\nNULL\n" {
+		t.Fatalf("failed import did not roll back: %q %v", output, err)
+	}
+	dumpCommand := composeCommand(ctx, "docker", project, filepath.Join(project, "compose.yml"), "exec", "-T", "postgres", "pg_dump", "--username=shop", "--dbname=shop", "--format=custom", "--table=sample")
+	archive, err := dumpCommand.Output()
+	if err != nil {
+		t.Fatal("could not generate disposable custom archive")
+	}
+	if _, err := query("DROP TABLE sample;"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.ImportPostgresDatabase(ctx, project, "postgres", "shop", "shop", archive); err != nil {
+		t.Fatalf("custom dump import failed: %v", err)
+	}
+	if output, err := query("SELECT * FROM sample;"); err != nil || output != "value\n\"hello, world\"\n" {
+		t.Fatalf("custom archive not restored: %q %v", output, err)
+	}
 }

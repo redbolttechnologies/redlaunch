@@ -1,5 +1,10 @@
 package application
 
+import "time"
+
+// DatabaseDumpMaxBytes is the maximum accepted SQL/custom-format dump size.
+const DatabaseDumpMaxBytes = 32 * 1024 * 1024
+
 // DatabaseSchema contains the user-visible relations in a PostgreSQL schema.
 type DatabaseSchema struct {
 	Name   string
@@ -18,4 +23,5 @@ type DatabaseQueryResult struct {
 	Rows      [][]string
 	Output    string
 	Truncated bool
+	Duration  time.Duration
 }

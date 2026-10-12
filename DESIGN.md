@@ -71,11 +71,14 @@ Required semantic tokens include:
 * accent
 * accent-foreground
 * success
+* info
+* info-foreground
 * warning
 * destructive
 * destructive-foreground
 * code
 * code-foreground
+* code-string
 * border
 * input
 * ring
@@ -88,6 +91,15 @@ Use `brand` and `brand-foreground` for the red activation action and matching
 feature icons in the managed-databases introduction. Keep destructive actions
 on the `destructive` tokens. The brand action supports white text at normal
 body sizes in both themes.
+
+The SQL console uses the shadcn blue `info` / `info-foreground` tokens for its
+query action, selected table, and result heading. Reuse the standard Button,
+Table, Dropdown Menu, Alert Dialog, and status badge patterns. Its code surface
+adds a monospace line-number gutter and escaped syntax highlighting; keywords
+use info, strings code-string (destructive in light mode, an accessible red in
+dark mode), numbers success, and comments muted-foreground. Dark-mode info
+actions use dark foreground text on the lighter blue token to maintain contrast.
+Result pagination changes only presentation of the already bounded result set.
 
 ## Typography
 
