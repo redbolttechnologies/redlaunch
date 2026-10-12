@@ -1,0 +1,51 @@
+{{define "service-delete-dialog.html"}}
+<dialog class="application-dialog service-delete-dialog" id="service-delete-dialog-{{.Service.ID}}" data-service-delete-dialog data-service-name="{{.Service.Name}}" aria-modal="true" aria-labelledby="service-delete-dialog-title-{{.Service.ID}}" aria-describedby="service-delete-dialog-description-{{.Service.ID}}">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="service-delete-dialog-title-{{.Service.ID}}">Delete service</h2>
+        <p id="service-delete-dialog-description-{{.Service.ID}}">This stops and removes the <code>{{.Service.Name}}</code> service container, removes its service and owned volume definitions from the Docker Compose file, and deletes its metadata. This action cannot be undone.</p>
+      </div>
+      <button class="icon-button" type="button" data-service-delete-close aria-label="Close delete service dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+      </button>
+    </header>
+    <form class="application-form" method="post" action="{{serviceDetailsPath .ApplicationID .Service.Name}}/delete">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="field">
+        <label for="service-delete-confirmation-{{.Service.ID}}">Type <code>{{.Service.Name}}</code> to confirm</label>
+        <input id="service-delete-confirmation-{{.Service.ID}}" name="confirmation" type="text" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" data-service-delete-confirmation required>
+        <span class="field-help">Enter the service name exactly as shown.</span>
+      </div>
+      <fieldset class="form-fieldset" id="service-delete-volumes-{{.Service.ID}}" aria-live="polite">
+        <legend>Volume data</legend>
+        <p class="field-help">Volumes are retained by default. Loading optional volume deletion choices…</p>
+      </fieldset>
+      <div class="application-form-note service-delete-impact">
+        <span class="application-form-note-mark" aria-hidden="true">!</span>
+        <span>The container will be stopped and removed, its service and owned volume definitions will be removed from the Docker Compose file, and its metadata will be deleted. Checked volumes will have their data permanently deleted. Retrying an interrupted deletion uses its original volume selections. Backup files and bind-mounted directories are retained.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-service-delete-close>Cancel</button>
+        <button class="button button-destructive" type="submit" data-service-delete-submit>Delete service</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}
+
+{{define "service-delete-volumes.html"}}
+{{with .ServiceDeleteVolumes}}
+<legend>Volume data</legend>
+{{if .Unavailable}}
+<p class="field-help">Volume choices could not be loaded. A new deletion will retain all volume data. An interrupted deletion will resume with its original volume selections.</p>
+{{else if .Volumes}}
+<p class="field-help">Select volumes to permanently delete their data. Unchecked volumes are retained. Shared and external volumes cannot be deleted here. Locked choices are saved selections from an interrupted deletion and cannot be changed.</p>
+{{range .Volumes}}
+<label class="checkbox-field"><input type="checkbox" name="delete_volumes" value="{{.Name}}"{{if .Selected}} checked{{end}}{{if .Frozen}} disabled{{end}}><span class="checkbox-field-copy"><span class="checkbox-field-title">Delete volume <code>{{.Name}}</code></span>{{if .Frozen}}<span class="checkbox-field-help">Saved choice — deletion will resume with this volume selected.</span>{{end}}</span></label>
+{{end}}
+{{else}}
+<p class="field-help">No eligible named volumes. Shared and external volumes, anonymous volumes, and bind-mounted directories are retained.</p>
+{{end}}
+{{end}}
+{{end}}

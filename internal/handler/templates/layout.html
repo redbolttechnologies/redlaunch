@@ -12,13 +12,14 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
-  {{if or .DashboardPage .ApplicationDetailsPage .DatabaseWorkspacePage}}<script src="/static/htmx.min.js" defer></script>{{end}}
+  {{if or .DashboardPage .ApplicationDetailsPage .ServiceDetailsPage .DatabaseWorkspacePage}}<script src="/static/htmx.min.js" defer></script>{{end}}
   {{if .DatabaseWorkspacePage}}<script src="/static/database-workspace.js" defer></script>{{end}}
   {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .BackupProgress .ManagedDatabasesProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if or .ServiceActionToasts .ProxyActionToasts $notice}}<script src="/static/toasts.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ProxySettingsPage .ServiceDetailsPage .SettingsPage .DatabasesPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
-  {{if .ApplicationDetailsPage}}<script src="/static/service-menu.js" defer></script><script src="/static/service-catalog.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-clone.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script><script src="/static/application-name.js" defer></script>{{end}}
+  {{if or .ApplicationDetailsPage .ServiceDetailsPage}}<script src="/static/service-menu.js" defer></script>{{end}}
+  {{if .ApplicationDetailsPage}}<script src="/static/service-catalog.js" defer></script><script src="/static/application-environment.js" defer></script><script src="/static/application-domains.js" defer></script><script src="/static/application-delete.js" defer></script><script src="/static/application-clone.js" defer></script><script src="/static/application-import.js" defer></script><script src="/static/application-environment-import.js" defer></script><script src="/static/application-name.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ServiceDetailsPage}}<script src="/static/service-action-error.js" defer></script>{{end}}
   {{if .SettingsPage}}<script src="/static/application-domains.js" defer></script><script src="/static/management-access.js" defer></script><script src="/static/ssh-keys.js" defer></script><script src="/static/api-tokens.js" defer></script><script src="/static/users.js" defer></script>{{if .SettingsPage.MCPEnabled}}<script src="/static/mcp-connections.js" defer></script>{{end}}{{end}}
   {{if .ApplicationRoutingPage}}<script src="/static/application-routings.js" defer></script>{{end}}

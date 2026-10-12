@@ -427,6 +427,14 @@ type ServiceDeletionIntent struct {
 	LastError     string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Volumes       []string
+}
+
+// ServiceDeletionVolume describes a named volume eligible for opt-in removal.
+type ServiceDeletionVolume struct {
+	Name     string
+	Selected bool
+	Frozen   bool
 }
 
 // IsDatabaseServiceType reports whether a service type supports database

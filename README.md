@@ -9,6 +9,26 @@ Redlaunch is built with Go, SQLite, server-rendered HTML, HTMX, and a small
 amount of Alpine.js. It runs as a single application and manages Docker through
 the host's Docker socket.
 
+## Deleting a service
+
+Choose **Delete** from the application's service-list context menu, or **Delete
+service** on the service details page. Type the service name exactly to confirm.
+The container is stopped and removed, its Compose definition and metadata are
+deleted, and its routing and scheduled backups are cleaned up.
+
+Volume data is **retained by default**. Check individual named volumes in the
+confirmation dialog to permanently delete their data. Only exclusively used,
+project-owned, non-external volumes are eligible. Shared volumes, external
+volumes, anonymous volumes, bind-mounted directories, and backup files are
+retained. Docker refuses removal of a volume still in use by another container.
+If volume choices cannot be loaded, a new service deletion retains all volume
+data; a retry still uses the original saved selections.
+
+Deletion progress shows failures. Retry deletion from the application service
+list to resume an interrupted operation; the original volume selections are
+saved and cannot be changed on retry. Existing API deletion calls retain volume
+data for new operations.
+
 ## Installation
 
 Download and run the installer as the user that should own the Redlaunch

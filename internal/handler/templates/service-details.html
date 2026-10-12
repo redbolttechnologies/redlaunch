@@ -3,6 +3,7 @@
 {{end}}
 
 {{define "service-details-content.html"}}
+{{template "service-delete-dialog.html" (serviceDeleteDialog .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service .ServiceDetailsPage.CSRFToken)}}
 <section class="service-details-page" aria-labelledby="page-title">
   <nav class="application-details-breadcrumb" aria-label="Breadcrumb">
     <a href="/applications">Applications</a>
@@ -53,6 +54,7 @@
       </div>
     </div>
     <div class="service-details-actions" role="group" aria-label="Service actions">
+      <button class="button button-destructive service-details-action" type="button" data-service-delete-open aria-controls="service-delete-dialog-{{.ServiceDetailsPage.Details.Service.ID}}" aria-haspopup="dialog" aria-expanded="false" hx-get="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/delete/volumes" hx-target="#service-delete-volumes-{{.ServiceDetailsPage.Details.Service.ID}}">Delete service</button>
       <form class="service-details-action-form" method="post" action="{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/start">
         <input type="hidden" name="csrf_token" value="{{.ServiceDetailsPage.CSRFToken}}">
         <input type="hidden" name="return_to" value="service-details">

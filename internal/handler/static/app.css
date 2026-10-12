@@ -6081,6 +6081,7 @@ h1 {
   font-size: 0.75rem;
 }
 
+.form-fieldset,
 .databases-access-fieldset {
   min-width: 0;
   margin: 0;
@@ -6088,10 +6089,16 @@ h1 {
   border: 0;
 }
 
+.form-fieldset legend,
 .databases-access-fieldset legend {
   margin-bottom: var(--space-2);
   font-size: 0.8125rem;
   font-weight: 600;
+}
+
+.form-fieldset {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .databases-access-choices {

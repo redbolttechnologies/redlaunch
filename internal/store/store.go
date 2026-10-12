@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -786,18 +787,24 @@ func (s *Store) BeginServiceDeletion(ctx context.Context, applicationID int64, s
 func (s *Store) GetServiceDeletion(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDeletionIntent, error) {
 	var intent application.ServiceDeletionIntent
 	var createdAt, updatedAt string
+	var volumes sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT application_id, service_name, stage, state,
-			last_error, created_at, updated_at
+			last_error, created_at, updated_at, volumes
 		FROM service_deletion_intents
 		WHERE application_id = ? AND service_name = ?`, applicationID, serviceName).Scan(
 		&intent.ApplicationID, &intent.ServiceName, &intent.Stage,
-		&intent.State, &intent.LastError, &createdAt, &updatedAt)
+		&intent.State, &intent.LastError, &createdAt, &updatedAt, &volumes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.ServiceDeletionIntent{}, application.ErrServiceNotFound
 	}
 	if err != nil {
 		return application.ServiceDeletionIntent{}, fmt.Errorf("get service deletion: %w", err)
+	}
+	if volumes.Valid {
+		if err := json.Unmarshal([]byte(volumes.String), &intent.Volumes); err != nil {
+			return application.ServiceDeletionIntent{}, fmt.Errorf("decode service deletion volumes: %w", err)
+		}
 	}
 	intent.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
@@ -2267,6 +2274,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (26, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("record OAuth migration: %w", err)
+		}
+	}
+	var serviceVolumesApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 27`).Scan(&serviceVolumesApplied); err != nil {
+		return err
+	}
+	if serviceVolumesApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE service_deletion_intents ADD COLUMN volumes TEXT`); err != nil {
+			return fmt.Errorf("migrate service deletion volumes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (27, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {

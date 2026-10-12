@@ -318,6 +318,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"proxyCreatedAtISO":           proxyCreatedAtISO,
 		"proxyCreatedAtTitle":         proxyCreatedAtTitle,
 		"serviceDetailsPath":          serviceDetailsPath,
+		"serviceDeleteDialog":         serviceDeleteDialog,
 		"backupDownloadPath":          backupDownloadPath,
 		"backupTime":                  backupTimeText,
 		"backupTimeISO":               backupTimeISO,
@@ -821,6 +822,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/credentials", h.updatePostgresCredentials)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/volumes", h.serviceDeletionVolumes)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/action/status", h.serviceActionStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/logs/download", h.downloadServiceLogs)
@@ -2839,6 +2841,17 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	volumes := r.PostForm["delete_volumes"]
+	if len(volumes) > 128 {
+		http.Error(w, "Too many selected volumes.", http.StatusBadRequest)
+		return
+	}
+	if len(volumes) > 0 {
+		if _, ok := h.serviceDeletion.(serviceVolumeDeletionService); !ok {
+			http.Error(w, "Volume deletion is unavailable.", http.StatusBadRequest)
+			return
+		}
+	}
 	job, created, err := h.serviceDeleteJobs.createUnique(id, serviceName)
 	if err != nil {
 		h.logger.Error("create service deletion job", "application_id", id, "service", serviceName, "error", err)
@@ -2846,6 +2859,7 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
+		job.volumes = append([]string(nil), volumes...)
 		if err := h.startTrackedJob("service-delete:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
 			h.runServiceDeleteJob(ctx, job)
 		}); err != nil {
@@ -4840,6 +4854,7 @@ type pageData struct {
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData
 	ServiceDetailsPage           *serviceDetailsPageData
+	ServiceDeleteVolumes         *serviceDeleteVolumesData
 	ProxyPage                    *proxyPageData
 	RegistryPage                 *registryPageData
 	PostgreSQLServicePage        *postgresqlServicePageData

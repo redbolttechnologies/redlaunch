@@ -1355,6 +1355,11 @@ func (s *Applications) DeleteService(ctx context.Context, applicationID int64, s
 // as operator-managed artifacts while schedule and history records cascade
 // with the service metadata.
 func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicationID int64, serviceName string, progress func(stage, message string)) error {
+	return s.DeleteServiceWithVolumes(ctx, applicationID, serviceName, nil, progress)
+}
+
+// DeleteServiceWithVolumes retains all data unless named volumes are explicitly selected.
+func (s *Applications) DeleteServiceWithVolumes(ctx context.Context, applicationID int64, serviceName string, volumes []string, progress func(stage, message string)) error {
 	if s.detailsRepository == nil {
 		return errors.New("application details repository is not configured")
 	}
@@ -1407,6 +1412,9 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 		if !registered {
 			return application.ErrServiceNotFound
 		}
+		if len(volumes) > 0 {
+			return errors.New("durable service volume deletion is not configured")
+		}
 		return s.deleteServiceWithoutIntent(ctx, item, serviceName, deleter, controller, remover, progress)
 	}
 
@@ -1417,9 +1425,37 @@ func (s *Applications) DeleteServiceWithProgress(ctx context.Context, applicatio
 			return application.ErrServiceNotFound
 		}
 	} else {
+		// Validate new selections before recording an intent. Existing intents
+		// always retain their original choices, including on legacy API retries.
+		existing, existingErr := s.serviceDeletionIntents.GetServiceDeletion(ctx, applicationID, serviceName)
+		if existingErr != nil && !errors.Is(existingErr, application.ErrServiceNotFound) {
+			return existingErr
+		}
+		if existingErr != nil || existing.State == "complete" || (existing.Volumes == nil && existing.Stage == "schedules") {
+			directory, err := s.managedApplicationDirectory(item)
+			if err != nil {
+				return err
+			}
+			if err := s.validateDeletionVolumes(ctx, directory, serviceName, volumes); err != nil {
+				return err
+			}
+		}
 		intent, err = s.serviceDeletionIntents.BeginServiceDeletion(ctx, applicationID, serviceName, time.Now().UTC())
 		if err != nil {
 			return fmt.Errorf("record service deletion intent: %w", err)
+		}
+		if intent.Volumes == nil && intent.Stage == "schedules" {
+			if saver, ok := s.serviceDeletionIntents.(serviceDeletionVolumeRepository); ok {
+				if err := saver.SetServiceDeletionVolumes(ctx, applicationID, serviceName, volumes); err != nil {
+					return err
+				}
+				intent, err = s.serviceDeletionIntents.GetServiceDeletion(ctx, applicationID, serviceName)
+				if err != nil {
+					return err
+				}
+			} else if len(volumes) > 0 {
+				return errors.New("durable service volume deletion is not configured")
+			}
 		}
 	}
 	if intent.State == "complete" {
@@ -1458,6 +1494,7 @@ const (
 	serviceDeletionStageSchedules = "schedules"
 	serviceDeletionStageStop      = "stop"
 	serviceDeletionStageRemove    = "remove"
+	serviceDeletionStageVolumes   = "volumes"
 	serviceDeletionStageCompose   = "compose"
 	serviceDeletionStageRouting   = "routing"
 	serviceDeletionStageMetadata  = "metadata"
@@ -1614,7 +1651,7 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 		stage = serviceDeletionStageStop
 	}
 
-	if stage == serviceDeletionStageStop || stage == serviceDeletionStageRemove || stage == serviceDeletionStageCompose {
+	if stage == serviceDeletionStageStop || stage == serviceDeletionStageRemove || stage == serviceDeletionStageVolumes || stage == serviceDeletionStageCompose {
 		if err := s.repairDanglingDependsOn(directory); err != nil {
 			return s.failServiceDeletion(applicationID, serviceName, stage, err)
 		}
@@ -1648,6 +1685,9 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 	}
 
 	if stage == serviceDeletionStageStop {
+		if err := s.validateDeletionVolumes(ctx, directory, serviceName, intent.Volumes); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, stage, err)
+		}
 		reportServiceDeletionProgress(progress, serviceDeletionStageStop, "Stopping the service container with Docker Compose")
 		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageStop, serviceDeletionStateRunning, ""); err != nil {
 			return err
@@ -1665,6 +1705,20 @@ func (s *Applications) resumeServiceDeletion(ctx context.Context, item applicati
 		reportServiceDeletionProgress(progress, serviceDeletionStageRemove, "Removing the service container with Docker Compose")
 		if err := remover.Remove(ctx, directory, serviceName); err != nil && !isMissingDockerResourceError(err) {
 			return s.failServiceDeletion(applicationID, serviceName, serviceDeletionStageRemove, fmt.Errorf("remove service container: %w", err))
+		}
+		next := serviceDeletionStageCompose
+		if len(intent.Volumes) > 0 {
+			next = serviceDeletionStageVolumes
+		}
+		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, next, serviceDeletionStateRunning, ""); err != nil {
+			return err
+		}
+		stage = next
+	}
+
+	if stage == serviceDeletionStageVolumes {
+		if err := s.removeDeletionVolumes(ctx, directory, serviceName, intent.Volumes, progress); err != nil {
+			return s.failServiceDeletion(applicationID, serviceName, stage, err)
 		}
 		if err := s.checkpointServiceDeletion(ctx, applicationID, serviceName, serviceDeletionStageCompose, serviceDeletionStateRunning, ""); err != nil {
 			return err

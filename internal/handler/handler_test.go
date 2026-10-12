@@ -3646,13 +3646,20 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 		`Update credentials`,
 		`action="/applications/7/services/db/credentials"`,
 		`id="postgres-credentials-dialog"`,
+		`data-service-delete-open`,
+		`id="service-delete-dialog-1"`,
+		`action="/applications/7/services/db/delete"`,
+		`hx-get="/applications/7/services/db/delete/volumes"`,
+		`/static/htmx.min.js`,
+		`/static/service-menu.js`,
+		`Type <code>db</code> to confirm`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /applications/7/services/db did not render %q: %s", expected, body)
 		}
 	}
-	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 5 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 5", got)
+	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 6 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 6", got)
 	}
 	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 4 {
 		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 4", got)
