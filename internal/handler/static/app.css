@@ -6194,7 +6194,6 @@ h1 {
 .dashboard-gauge-fill { stroke: hsl(var(--info)); }
 .dashboard-cpu .dashboard-gauge-fill { stroke: hsl(var(--success)); }
 .dashboard-memory .dashboard-gauge-fill { stroke: hsl(var(--primary)); }
-.dashboard-core-label { display: inline; margin-left: var(--space-2); color: hsl(var(--muted-foreground)); font-size: 0.75rem; font-weight: 400; }
 .dashboard-container-status { display: inline-flex; align-items: center; gap: var(--space-2); text-transform: capitalize; white-space: nowrap; }
 .dashboard-container-status::before { content: ""; width: var(--space-2); height: var(--space-2); border-radius: 50%; background: hsl(var(--muted-foreground)); }
 .dashboard-running::before { background: hsl(var(--success)); }
@@ -6241,6 +6240,9 @@ h1 {
 
 .dashboard-page .dashboard-volumes-table { min-width: 0; table-layout: fixed; }
 .dashboard-page .dashboard-volumes-table th:first-child { width: 30%; }
-.dashboard-page .dashboard-volumes-table th:last-child { width: 20%; }
+.dashboard-page .dashboard-volumes-table th:nth-child(2) { width: 20%; }
+.dashboard-page .dashboard-volumes-table th:last-child { width: 15%; }
 .dashboard-page .dashboard-volumes-table tbody th code,
 .dashboard-page .dashboard-volumes-table tbody td code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dashboard-page .dashboard-volumes-table tbody td { overflow: hidden; text-overflow: ellipsis; }

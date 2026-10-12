@@ -63,24 +63,26 @@
     </div>
   </article>
 </section>
+{{if $docker.ApplicationsUnavailable}}<p class="dashboard-alert" role="status">Application names are temporarily unavailable.</p>{{end}}
 <div class="dashboard-process-grid">
   <section class="service-widget dashboard-process-widget" aria-labelledby="services-usage-title">
     <header class="service-widget-header"><div class="service-widget-heading"><h2 id="services-usage-title">Services resource usage</h2><p>Individual managed containers. Core services appear first.</p></div></header>
     <div class="dashboard-process-table-wrap"><table class="dashboard-process-table">
-      <thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Network ↓ / ↑</th><th scope="col">Uptime</th></tr></thead>
+      <thead><tr><th scope="col">Service</th><th scope="col">Application</th><th scope="col">Status</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Network ↓ / ↑</th><th scope="col">Uptime</th></tr></thead>
       <tbody>{{range $docker.Containers}}<tr>
-        <th scope="row"><code title="{{.Name}}">{{.Name}}</code>{{if .Core}}<span class="dashboard-core-label">Core</span>{{end}}</th>
+        <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
+        <td title="{{.ApplicationName}}">{{.ApplicationName}}</td>
         <td><span class="dashboard-container-status {{if .Running}}dashboard-running{{end}}">{{.Status}}</span></td>
         {{if .Available}}<td><code>{{dashboardPercent .CPUPercent}}</code></td><td><code>{{dashboardSize .MemoryBytes}}</code></td><td><code>{{dashboardSize .ReceivedBytes}} / {{dashboardSize .SentBytes}}</code></td>{{else}}<td colspan="3" class="dashboard-metric-help">{{if .Running}}Usage unavailable{{else}}Not running{{end}}</td>{{end}}
         <td>{{.Uptime}}</td>
-      </tr>{{else}}<tr><td class="dashboard-process-empty" colspan="6">{{if $docker.ContainersUnavailable}}Container usage is temporarily unavailable.{{else}}No managed containers found.{{end}}</td></tr>{{end}}</tbody>
+      </tr>{{else}}<tr><td class="dashboard-process-empty" colspan="7">{{if $docker.ContainersUnavailable}}Container usage is temporarily unavailable.{{else}}No managed containers found.{{end}}</td></tr>{{end}}</tbody>
     </table></div>
     <p class="dashboard-table-note">CPU can exceed 100% across multiple cores. Network totals are cumulative since container start.</p>
   </section>
   <section class="service-widget dashboard-process-widget" aria-labelledby="storage-volumes-title">
     <header class="service-widget-header"><div class="service-widget-heading"><h2 id="storage-volumes-title">Storage volumes</h2><p>Disk usage of volumes attached to managed containers.</p></div></header>
-    <div class="dashboard-process-table-wrap"><table class="dashboard-process-table dashboard-volumes-table"><thead><tr><th scope="col">Volume</th><th scope="col">Mounted at</th><th scope="col">Used</th></tr></thead><tbody>
-      {{range $docker.Volumes}}<tr><th scope="row"><code title="{{.Name}}">{{.Name}}</code></th><td><code title="{{.MountedAt}}">{{.MountedAt}}</code></td><td>{{if .Available}}<code>{{dashboardSize .Bytes}}</code>{{else}}Unavailable{{end}}</td></tr>{{else}}<tr><td class="dashboard-process-empty" colspan="3">{{if $docker.VolumesUnavailable}}Volume usage is temporarily unavailable.{{else}}No attached managed volumes found.{{end}}</td></tr>{{end}}
+    <div class="dashboard-process-table-wrap"><table class="dashboard-process-table dashboard-volumes-table"><thead><tr><th scope="col">Volume</th><th scope="col">Application</th><th scope="col">Mounted at</th><th scope="col">Used</th></tr></thead><tbody>
+      {{range $docker.Volumes}}<tr><th scope="row"><code title="{{.Name}}">{{.Name}}</code></th><td title="{{range $i,$name:=.ApplicationNames}}{{if $i}}, {{end}}{{$name}}{{end}}">{{range $i,$name:=.ApplicationNames}}{{if $i}}, {{end}}{{$name}}{{end}}</td><td><code title="{{.MountedAt}}">{{.MountedAt}}</code></td><td>{{if .Available}}<code>{{dashboardSize .Bytes}}</code>{{else}}Unavailable{{end}}</td></tr>{{else}}<tr><td class="dashboard-process-empty" colspan="4">{{if $docker.VolumesUnavailable}}Volume usage is temporarily unavailable.{{else}}No attached managed volumes found.{{end}}</td></tr>{{end}}
     </tbody></table></div><p class="dashboard-table-note">Volumes share their host filesystem capacity. Bind mounts are excluded.</p>
   </section>
 </div>

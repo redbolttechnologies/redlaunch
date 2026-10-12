@@ -109,12 +109,15 @@ func dashboardRatio(used, total uint64) float64 {
 	return float64(used) / float64(total) * 100
 }
 
-func (h *Handler) writeDashboardPage(w http.ResponseWriter, r *http.Request, status int, data dashboardPageData) {
+func (h *Handler) writeDashboardPage(w http.ResponseWriter, r *http.Request, status int, data dashboardPageData, progress ...*setupProgressData) {
 	w.Header().Set("Cache-Control", "no-store")
 	h.setCSRFCookie(w, r)
 	page := h.shellPageData(r)
 	page.ActivePage = "dashboard"
 	page.DashboardPage = &data
+	if len(progress) > 0 {
+		page.SetupProgress = progress[0]
+	}
 	h.writeTemplateStatus(w, "dashboard.html", page, status)
 }
 

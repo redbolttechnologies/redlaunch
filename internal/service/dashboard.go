@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"redlaunch/internal/application"
 	"redlaunch/internal/compose"
 )
 
@@ -17,7 +18,12 @@ type DashboardDocker interface {
 	DashboardDiskUsage(context.Context) (compose.DashboardDisk, error)
 	PruneUnusedImages(context.Context) (uint64, error)
 }
+type DashboardApplicationCatalog interface {
+	List(context.Context) ([]application.Application, error)
+}
+
 type ContainerUsage struct {
+	ApplicationName                       string
 	Name, Status                          string
 	Core, Running, Available              bool
 	CPUPercent                            float64
@@ -25,9 +31,10 @@ type ContainerUsage struct {
 	Uptime                                string
 }
 type VolumeUsage struct {
-	Name, MountedAt string
-	Bytes           uint64
-	Available       bool
+	ApplicationNames []string
+	Name, MountedAt  string
+	Bytes            uint64
+	Available        bool
 }
 type UsageSample struct {
 	At     time.Time
@@ -46,21 +53,24 @@ type DockerDashboard struct {
 	ImageBytes                             uint64
 	ContainersUnavailable, DiskUnavailable bool
 	VolumesUnavailable                     bool
+	ApplicationsUnavailable                bool
 }
 type DashboardService struct {
-	docker   DashboardDocker
-	coreRoot string
-	mu       sync.Mutex
-	cached   DockerDashboard
-	at       time.Time
-	history  map[string][]UsageSample
+	docker           DashboardDocker
+	coreRoot         string
+	applicationsRoot string
+	catalog          DashboardApplicationCatalog
+	mu               sync.Mutex
+	cached           DockerDashboard
+	at               time.Time
+	history          map[string][]UsageSample
 }
 
-func NewDashboardService(docker DashboardDocker, projectsRoot string) *DashboardService {
+func NewDashboardService(docker DashboardDocker, projectsRoot string, catalog DashboardApplicationCatalog) *DashboardService {
 	if absolute, err := filepath.Abs(projectsRoot); err == nil {
 		projectsRoot = absolute
 	}
-	return &DashboardService{docker: docker, coreRoot: filepath.Join(projectsRoot, "core"), history: map[string][]UsageSample{}}
+	return &DashboardService{docker: docker, coreRoot: filepath.Join(projectsRoot, "core"), applicationsRoot: filepath.Join(projectsRoot, "applications"), catalog: catalog, history: map[string][]UsageSample{}}
 }
 func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDashboard, error) {
 	s.mu.Lock()
@@ -71,9 +81,27 @@ func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDa
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	var result DockerDashboard
+	projectNames := map[string]string{}
+	directoryNames := map[string]string{}
+	if s.catalog != nil {
+		apps, err := s.catalog.List(ctx)
+		result.ApplicationsUnavailable = err != nil
+		if err == nil {
+			for _, app := range apps {
+				folder, err := application.ValidateFolderName(app.FolderName)
+				if err != nil {
+					continue
+				}
+				directory := filepath.Join(s.applicationsRoot, folder)
+				projectNames[compose.ProjectName(directory)] = app.Name
+				directoryNames[directory] = app.Name
+			}
+		}
+	}
 	containers, err := s.docker.DashboardContainers(ctx)
 	result.ContainersUnavailable = err != nil
 	mounts := map[string]map[string]bool{}
+	volumeOwners := map[string]map[string]bool{}
 	ids := []string{}
 	// Bound concurrent stats requests: Docker samples each running container over ~1s.
 	slots := make(chan struct{}, 4)
@@ -83,20 +111,37 @@ func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDa
 		if c.Labels["redlaunch.managed"] != "true" {
 			continue
 		}
-		for _, m := range c.Mounts {
-			if m.Type == "volume" {
-				if mounts[m.Name] == nil {
-					mounts[m.Name] = map[string]bool{}
-				}
-				mounts[m.Name][m.Destination] = true
-			}
-		}
 		item := ContainerUsage{Status: c.State, Running: c.State == "running", Uptime: c.Status}
 		if len(c.Names) > 0 {
 			item.Name = strings.TrimPrefix(c.Names[0], "/")
 		}
 		directory := filepath.Clean(c.Labels["com.docker.compose.project.working_dir"])
 		item.Core = directory == s.coreRoot || strings.HasPrefix(directory, s.coreRoot+string(filepath.Separator)) || item.Name == "redbolt-redlaunch" || item.Name == compose.ProxyContainerName || item.Name == RegistryContainerName || item.Name == managedDatabaseContainerName || c.Labels["com.docker.compose.service"] == "redlaunch"
+
+		item.ApplicationName = projectNames[c.Labels["com.docker.compose.project"]]
+		if item.ApplicationName == "" {
+			item.ApplicationName = directoryNames[directory]
+		}
+		if item.Core {
+			item.ApplicationName = "Core"
+		} else if item.ApplicationName == "" {
+			item.ApplicationName = "Unassigned"
+			if result.ApplicationsUnavailable {
+				item.ApplicationName = "Unavailable"
+			}
+		}
+		for _, m := range c.Mounts {
+			if m.Type == "volume" {
+				if mounts[m.Name] == nil {
+					mounts[m.Name] = map[string]bool{}
+				}
+				mounts[m.Name][m.Destination] = true
+				if volumeOwners[m.Name] == nil {
+					volumeOwners[m.Name] = map[string]bool{}
+				}
+				volumeOwners[m.Name][item.ApplicationName] = true
+			}
+		}
 		result.Containers = append(result.Containers, item)
 		ids = append(ids, c.ID)
 	}
@@ -156,6 +201,10 @@ func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDa
 			}
 			sort.Strings(paths)
 			item := VolumeUsage{Name: v.Name, MountedAt: strings.Join(paths, ", ")}
+			for owner := range volumeOwners[v.Name] {
+				item.ApplicationNames = append(item.ApplicationNames, owner)
+			}
+			sort.Strings(item.ApplicationNames)
 			if v.UsageData != nil && v.UsageData.Size >= 0 {
 				item.Available = true
 				item.Bytes = uint64(v.UsageData.Size)

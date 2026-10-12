@@ -898,8 +898,8 @@ func (m *fakeSetupManager) SetupWithProgress(ctx context.Context, installProxy, 
 	return m.Setup(ctx, installProxy, installRegistry)
 }
 
-func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
-	web, err := New(nil)
+func TestIndexRendersDashboardWithApplicationsMenuItem(t *testing.T) {
+	web, err := New(nil, &fakeDashboardMetricsService{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -955,8 +955,8 @@ func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
 	if mainHeaderStart < 0 || mainHeaderEnd < 0 || serverInfoStart < mainHeaderStart || serverInfoStart > mainHeaderStart+mainHeaderEnd {
 		t.Fatalf("GET / rendered the server info outside the main header: %s", body)
 	}
-	if strings.Contains(body, "<h1") {
-		t.Fatalf("GET / rendered page content even though the main page should be empty: %s", body)
+	if !strings.Contains(body, `<h1 id="page-title">Dashboard</h1>`) || !strings.Contains(body, `href="/dashboard" aria-current="page"`) {
+		t.Fatalf("GET / did not render the active Dashboard: %s", body)
 	}
 }
 

@@ -274,7 +274,7 @@ func run(ctx context.Context) error {
 		APITokens:        apiTokens,
 		OAuth:            oauthServer,
 		Registry:         registry,
-		DashboardDocker:  service.NewDashboardService(compose.NewDashboardClient(), cfg.ProjectsRoot),
+		DashboardDocker:  service.NewDashboardService(compose.NewDashboardClient(), cfg.ProjectsRoot, database),
 		SelfUpdate:       selfUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,

@@ -906,9 +906,7 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		h.writeSetupPage(w, r, http.StatusOK, setupPageData{}, progress)
 		return
 	}
-	page := h.shellPageData(r)
-	page.SetupProgress = progress
-	h.writeTemplate(w, "index.html", page)
+	h.writeDashboardPage(w, r, http.StatusOK, h.dashboardData(r.Context()), progress)
 }
 
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {

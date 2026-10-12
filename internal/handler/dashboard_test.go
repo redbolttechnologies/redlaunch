@@ -125,3 +125,19 @@ func TestDashboardDockerMetricsSurviveHostMetricsFailure(t *testing.T) {
 		t.Fatal("Docker metrics hidden on procfs failure")
 	}
 }
+
+func TestDashboardDisplaysAndEscapesApplicationNames(t *testing.T) {
+	docker := &fakeDashboardDocker{snapshot: service.DockerDashboard{Containers: []service.ContainerUsage{{Name: "app-web", ApplicationName: "Blog <script>alert(1)</script>", Status: "running"}}, Volumes: []service.VolumeUsage{{Name: "shared", ApplicationNames: []string{"Analytics", "Blog <script>alert(1)</script>"}}}}}
+	web, err := New(nil, &fakeDashboardMetricsService{}, docker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/dashboard/metrics"} {
+		recorder := httptest.NewRecorder()
+		web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		body := recorder.Body.String()
+		if recorder.Code != http.StatusOK || strings.Count(body, `<th scope="col">Application</th>`) != 2 || strings.Contains(body, "<script>alert(1)</script>") || !strings.Contains(body, "Blog &lt;script&gt;alert(1)&lt;/script&gt;") || !strings.Contains(body, "Analytics, Blog &lt;script&gt;") {
+			t.Fatalf("application names unsafe or missing on %s: %s", path, body)
+		}
+	}
+}

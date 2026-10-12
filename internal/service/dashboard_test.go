@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"redlaunch/internal/application"
 	"redlaunch/internal/compose"
 )
 
@@ -55,7 +57,7 @@ func TestDashboardContainersAreIndividualManagedServicesCoreFirst(t *testing.T) 
 	fake.stats.CPUStats.OnlineCPUs = 4
 	fake.stats.MemoryStats.Usage = 1024
 	fake.stats.MemoryStats.Stats = map[string]uint64{"inactive_file": 256}
-	svc := NewDashboardService(fake, "/projects")
+	svc := NewDashboardService(fake, "/projects", nil)
 	got, err := svc.CollectDockerDashboard(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -115,14 +117,14 @@ func TestDashboardVolumesAreDeduplicatedAndDoNotInventQuota(t *testing.T) {
 			RefCount int64
 		}
 	}{"unmanaged", nil})
-	got, err := NewDashboardService(fake, "/projects").CollectDockerDashboard(context.Background())
+	got, err := NewDashboardService(fake, "/projects", nil).CollectDockerDashboard(context.Background())
 	if err != nil || len(got.Volumes) != 1 || got.Volumes[0].Bytes != 1024 || got.Volumes[0].MountedAt != "/data, /other" || !got.Volumes[0].Available || got.ImageBytes != 1234 {
 		t.Fatal(got, err)
 	}
 }
 func TestDashboardUnavailableAndHistoryBounds(t *testing.T) {
 	fake := &dashboardDockerFake{failed: true}
-	svc := NewDashboardService(fake, "/projects")
+	svc := NewDashboardService(fake, "/projects", nil)
 	got, err := svc.CollectDockerDashboard(context.Background())
 	if err != nil || !got.ContainersUnavailable || !got.DiskUnavailable {
 		t.Fatal(got, err)
@@ -134,6 +136,56 @@ func TestDashboardUnavailableAndHistoryBounds(t *testing.T) {
 	svc.history["removed"] = []UsageSample{{At: time.Now()}}
 	got, err = svc.CollectDockerDashboard(context.Background())
 	if err != nil || len(got.Trends) != 1 || len(got.Trends[0].Samples) != 2 || len(svc.history) != 1 {
+		t.Fatal(got, err)
+	}
+}
+
+type dashboardCatalogFake struct {
+	apps []application.Application
+	err  error
+}
+
+func (f dashboardCatalogFake) List(context.Context) ([]application.Application, error) {
+	return f.apps, f.err
+}
+func TestDashboardResolvesApplicationNamesAndSharedVolumeOwners(t *testing.T) {
+	catalog := dashboardCatalogFake{apps: []application.Application{{Name: "Blog", FolderName: "blog"}, {Name: "Analytics", FolderName: "analytics"}, {Name: "Invalid", FolderName: "../outside"}}}
+	fake := &dashboardDockerFake{}
+	if err := json.Unmarshal([]byte(`[
+ {"Names":["/blog-web"],"Labels":{"redlaunch.managed":"true"},"Mounts":[{"Type":"volume","Name":"shared","Destination":"/data"}]},
+ {"Names":["/analytics-db"],"Labels":{"redlaunch.managed":"true","com.docker.compose.project.working_dir":"/projects/applications/analytics"},"Mounts":[{"Type":"volume","Name":"shared","Destination":"/db"}]},
+ {"Names":["/redbolt-proxy"],"Labels":{"redlaunch.managed":"true"},"Mounts":[{"Type":"volume","Name":"proxy-data","Destination":"/data"}]},
+ {"Names":["/unknown"],"Labels":{"redlaunch.managed":"true","com.docker.compose.project.working_dir":"/another/applications/blog"}},
+ {"Names":["/invalid"],"Labels":{"redlaunch.managed":"true","com.docker.compose.project.working_dir":"/projects/outside"}}
+ ]`), &fake.containers); err != nil {
+		t.Fatal(err)
+	}
+	fake.containers[0].Labels["com.docker.compose.project"] = compose.ProjectName("/projects/applications/blog")
+	if err := json.Unmarshal([]byte(`{"Volumes":[{"Name":"shared"},{"Name":"proxy-data"}]}`), &fake.disk); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewDashboardService(fake, "/projects", catalog).CollectDockerDashboard(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{}
+	for _, c := range got.Containers {
+		owners[c.Name] = c.ApplicationName
+	}
+	for container, want := range map[string]string{"blog-web": "Blog", "analytics-db": "Analytics", "redbolt-proxy": "Core", "unknown": "Unassigned", "invalid": "Unassigned"} {
+		if owners[container] != want {
+			t.Fatalf("%s application=%q, want %q", container, owners[container], want)
+		}
+	}
+	if len(got.Volumes) != 2 || strings.Join(got.Volumes[1].ApplicationNames, ", ") != "Analytics, Blog" || strings.Join(got.Volumes[0].ApplicationNames, ", ") != "Core" {
+		t.Fatal(got.Volumes)
+	}
+}
+func TestDashboardCatalogFailurePreservesDockerMetrics(t *testing.T) {
+	fake := &dashboardDockerFake{containers: []compose.DashboardContainer{{Names: []string{"/app"}, Labels: map[string]string{"redlaunch.managed": "true"}}}}
+	fake.disk.LayersSize = 4096
+	got, err := NewDashboardService(fake, "/projects", dashboardCatalogFake{err: errors.New("catalog unavailable")}).CollectDockerDashboard(context.Background())
+	if err != nil || !got.ApplicationsUnavailable || got.ContainersUnavailable || got.DiskUnavailable || got.ImageBytes != 4096 || got.Containers[0].ApplicationName != "Unavailable" {
 		t.Fatal(got, err)
 	}
 }
