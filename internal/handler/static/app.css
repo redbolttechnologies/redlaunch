@@ -65,7 +65,7 @@
 
 .database-editor-panel .database-panel-title svg,
 .database-results-panel .database-panel-title {
-  color: hsl(var(--info));
+  color: hsl(var(--brand));
 }
 
 .database-console-page .service-widget-header {
@@ -128,11 +128,11 @@
 
 .database-table-row.database-table-selected .database-table-menu > summary,
 .database-table-row.database-table-selected .database-table-menu > summary svg {
-  color: hsl(var(--info));
+  color: hsl(var(--brand));
 }
 
 .database-table-row.database-table-selected .database-table-menu > summary {
-  background: hsl(var(--info) / 0.08);
+  background: hsl(var(--brand) / 0.08);
 }
 
 .database-run-actions {
@@ -140,13 +140,13 @@
 }
 
 .database-console-page .database-run-button {
-  color: hsl(var(--info-foreground));
-  background: hsl(var(--info));
-  border-color: hsl(var(--info));
+  color: hsl(var(--brand-foreground));
+  background: hsl(var(--brand));
+  border-color: hsl(var(--brand));
 }
 
 .database-console-page .database-run-button:hover {
-  background: hsl(var(--info) / 0.9);
+  background: hsl(var(--brand) / 0.9);
 }
 
 .database-run-actions > button {
@@ -162,7 +162,7 @@
 .database-run-menu > summary {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-  border-left-color: hsl(var(--info-foreground) / 0.3);
+  border-left-color: hsl(var(--brand-foreground) / 0.3);
 }
 
 .database-run-menu > summary,
@@ -246,7 +246,7 @@
   color: hsl(var(--muted-foreground));
 }
 
-.database-sql-token-keyword { color: hsl(var(--info)); }
+.database-sql-token-keyword { color: hsl(var(--brand)); }
 .database-sql-token-string { color: hsl(var(--code-string)); }
 .database-sql-token-number { color: hsl(var(--success)); }
 .database-sql-token-comment { color: hsl(var(--muted-foreground)); }
@@ -306,8 +306,8 @@
 }
 
 .database-result-pagination [aria-current="page"] {
-  color: hsl(var(--info));
-  background: hsl(var(--info) / 0.08);
+  color: hsl(var(--brand));
+  background: hsl(var(--brand) / 0.08);
 }
 
 .database-results-empty {
