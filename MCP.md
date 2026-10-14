@@ -178,6 +178,13 @@ Generating the workflow does not start a task or deploy anything. For image
 publishing and SSH deployment workflows, ask the assistant to read
 [Deployment recipes](RECIPES.md).
 
+For SSH workflows, managed application paths refer to the manager container.
+Even when the host mount uses the same path, the SSH user may not traverse
+managed directories. All file checks and diagnostics must use
+`docker exec redbolt-redlaunch` (or the installation's manager container name),
+just like Compose itself. Avoid host-side `test -f`, `ls`, or `stat` on these
+paths; do not loosen permissions to make them work.
+
 ## Step 4: Connect to your VPS when needed
 
 Skip this step if you only want guides and generated workflows.

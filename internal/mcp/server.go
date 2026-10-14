@@ -18,6 +18,8 @@ import (
 const protocolVersion = "2025-11-25"
 const maxMessageBytes = 1 << 20
 
+const sshWorkflowGuidance = "For SSH workflows, managed application paths are inside the manager container (default redbolt-redlaunch). The SSH user may not traverse those directories on the host. Run all managed-file checks and diagnostics with docker exec, as well as Compose; never use host-side test -f, ls, or stat or loosen permissions."
+
 var integerID = regexp.MustCompile(`^-?[0-9]+$`)
 
 // Server serves one MCP session. Each subprocess owns its own session.
@@ -122,7 +124,7 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 					"protocolVersion": version,
 					"capabilities":    map[string]any{"tools": map[string]any{}, "resources": map[string]any{}},
 					"serverInfo":      map[string]string{"name": "redlaunch", "version": "1.0.0"},
-					"instructions":    "Read the integration guides before creating workflows. Application-scoped run tokens run registered services and poll jobs. Management tools use a separate server-wide token; mutations require --allow-manage. Never echo secret values or embed credentials in workflows. Poll get_management_job after a management mutation; inspect failed or lost jobs before retrying.",
+					"instructions":    "Read the integration guides before creating workflows. Application-scoped run tokens run registered services and poll jobs. Management tools use a separate server-wide token; mutations require --allow-manage. Never echo secret values or embed credentials in workflows. Poll get_management_job after a management mutation; inspect failed or lost jobs before retrying. " + sshWorkflowGuidance,
 				}
 				initialized = true
 			case "ping":
@@ -169,7 +171,7 @@ type guide struct {
 
 var guides = []guide{
 	{"redlaunch://guides/api-tokens", "api-tokens", "API scope, authentication, async runs, status codes, and rotation.", "text/markdown", "API_TOKENS.md"},
-	{"redlaunch://guides/recipes", "recipes", "GitHub Actions workflows: publish images, migrate, deploy via registry or direct image copy; managed Compose identity.", "text/markdown", "RECIPES.md"},
+	{"redlaunch://guides/recipes", "recipes", "GitHub Actions workflows: publish images, migrate, deploy via registry or direct image copy; managed Compose identity and container-side file checks.", "text/markdown", "RECIPES.md"},
 	{"redlaunch://guides/ssh-keys", "ssh-keys", "SSH transport, permissions, known hosts, and key rotation.", "text/markdown", "SSH_KEYS.md"},
 	{"redlaunch://guides/installation", "installation", "VPS installation and management endpoint reachability.", "text/markdown", "INSTALL.md"},
 	{"redlaunch://guides/reference", "reference", "Configuration and managed resource layout.", "text/markdown", "README.md"},

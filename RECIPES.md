@@ -38,6 +38,15 @@ do not paste them literally.
 
 All automation below uses Redlaunch SSH keys from **Settings → SSH keys**.
 
+`DEPLOY_DIR` / `REDLAUNCH_APP_DIR` denotes the absolute managed application
+path inside the manager container (default name `redbolt-redlaunch`). The
+projects root is mounted at the same host path, but the SSH user may not
+traverse managed directories (`0750`). Run every managed-file check and
+filesystem diagnostic through `docker exec redbolt-redlaunch` before running
+Compose there. A host-side `test -f` may report a missing Compose file when
+access is denied; changing the path or loosening permissions does not fix
+this workflow error.
+
 | Identity | User and port | Purpose | Capabilities |
 | --- | --- | --- | --- |
 | Server shell | `redlaunch@<host>:22` | Push images through a loopback tunnel, run managed Compose commands, copy images | Shell as the dedicated `redlaunch` user (in the `docker` group, which is root-equivalent) |
@@ -561,12 +570,12 @@ jobs:
           DEPLOY_DIR=${1:?}
           MIGRATE_SERVICE=${2:-migrate}
           # DEPLOY_DIR must be the absolute managed application directory.
-          if [ -f "$DEPLOY_DIR/compose.yml" ]; then
+          if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yml"; then
             compose_file="compose.yml"
-          elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
+          elif docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yaml"; then
             compose_file="compose.yaml"
           else
-            echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+            echo "no compose.yml or compose.yaml accessible in $DEPLOY_DIR inside redbolt-redlaunch" >&2
             exit 1
           fi
           project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
@@ -665,10 +674,11 @@ GitHub variables/secrets:
 | `SSH_KNOWN_HOSTS` | System host-key line for `SERVER_HOST` | Verifies the VPS host key with `StrictHostKeyChecking=yes` |
 | `REDLAUNCH_RUN_TOKEN` | API token value (optional, only for API migration) | Bearer token authorizing the optional migration dispatch and status polls |
 
-`REDLAUNCH_APP_DIR` must be the absolute managed application directory. It
-resolves both on the host and inside the manager container because the
-projects root is mounted at the identical path. Adjust `/opt/redlaunch` when
-the installation lives elsewhere.
+`REDLAUNCH_APP_DIR` must be the absolute managed application directory inside
+the manager container. The projects root is mounted at the identical host
+path, but that does not grant the SSH user filesystem access. Inspect files
+through `docker exec redbolt-redlaunch`. Adjust `/opt/redlaunch` when the
+installation lives elsewhere.
 
 ### 3.3 Reusable deploy-via-registry workflow
 
@@ -822,12 +832,12 @@ jobs:
           set -euo pipefail
           DEPLOY_DIR=${1:?}
           DEPLOY_SERVICE=${2:?}
-          if [ -f "$DEPLOY_DIR/compose.yml" ]; then
+          if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yml"; then
             compose_file="compose.yml"
-          elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
+          elif docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yaml"; then
             compose_file="compose.yaml"
           else
-            echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+            echo "no compose.yml or compose.yaml accessible in $DEPLOY_DIR inside redbolt-redlaunch" >&2
             exit 1
           fi
           project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
@@ -1017,12 +1027,12 @@ jobs:
           set -euo pipefail
           DEPLOY_DIR=${1:?}
           DEPLOY_SERVICE=${2:?}
-          if [ -f "$DEPLOY_DIR/compose.yml" ]; then
+          if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yml"; then
             compose_file="compose.yml"
-          elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
+          elif docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yaml"; then
             compose_file="compose.yaml"
           else
-            echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+            echo "no compose.yml or compose.yaml accessible in $DEPLOY_DIR inside redbolt-redlaunch" >&2
             exit 1
           fi
           project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
@@ -1094,12 +1104,12 @@ container, where the `0600` environment files are readable as root:
 ```sh
 set -euo pipefail
 DEPLOY_DIR=/opt/redlaunch/projects/applications/myapp
-if [ -f "$DEPLOY_DIR/compose.yml" ]; then
+if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yml"; then
   compose_file="compose.yml"
-elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
+elif docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yaml"; then
   compose_file="compose.yaml"
 else
-  echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+  echo "no compose.yml or compose.yaml accessible in $DEPLOY_DIR inside redbolt-redlaunch" >&2
   exit 1
 fi
 project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
@@ -1168,6 +1178,7 @@ For the registry tunnel, add `ExitOnForwardFailure=yes` and
 | Registry readiness failure | Registry stopped | Start Registry component; check `docker ps` |
 | `volume ... already exists but was created for project ...` | Bare `docker compose` without managed identity | Use the managed Compose identity snippet with `--project-name` and `--env-file` files |
 | `Conflict. The container name ... is already in use` | Same as above (duplicate project) | Same fix; never omit `--project-name` in managed directories |
+| `no compose.yml or compose.yaml found` with host-side `Permission denied` | Host-side checks cannot traverse managed directories | Run file checks and diagnostics inside `redbolt-redlaunch`; use the SSH snippets above |
 | `permission denied` reading `secrets.env` as `redlaunch` user | Expected (`0600` root) | Run Compose via `docker exec redbolt-redlaunch ...`, not host-side `--env-file secrets.env` |
 | API `401` expired/unknown | Expired or revoked token | Rotate token; CI failure explicitly says expired |
 | API `403` | Token scoped to another application | Create a token for the target application ID |
