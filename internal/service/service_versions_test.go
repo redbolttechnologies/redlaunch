@@ -67,7 +67,7 @@ type versionRegistryStub struct {
 	removeErr   error
 }
 
-func (s *versionRegistryStub) ListRegistryImages(context.Context) ([]application.RegistryImage, error) {
+func (s *versionRegistryStub) ListRegistryVersionImages(context.Context) ([]application.RegistryImage, error) {
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
@@ -380,5 +380,39 @@ func TestApplicationsDeployApplicationVersionRequiresTag(t *testing.T) {
 	}
 	if _, err := applications.DeployApplicationVersion(t.Context(), 1, "bad tag", nil); !errors.Is(err, application.ErrRegistryRepositoryInvalid) {
 		t.Fatalf("DeployApplicationVersion() error = %v, want tag validation error", err)
+	}
+}
+
+func TestApplicationsListServiceVersionsIncludesUntaggedImages(t *testing.T) {
+	applications, _, runner, _ := versionTestService(t, "localhost:5000/acme-app:development")
+	oldDigest := "sha256:" + strings.Repeat("a", 64)
+	newDigest := "sha256:" + strings.Repeat("b", 64)
+	runner.runningDigest = oldDigest
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{contents: []compose.RegistryContent{
+		{Repository: "acme-app", Digest: oldDigest},
+		{Repository: "acme-app", Tag: "development", Digest: newDigest},
+		{Repository: "other-app", Digest: "sha256:" + strings.Repeat("c", 64)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applications.SetVersionRegistryOperations(registry, registry, registry)
+	versions, err := applications.ListServiceVersions(t.Context(), 1, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions.Versions) != 2 || versions.Versions[0].Digest != oldDigest || len(versions.Versions[0].Tags) != 0 {
+		t.Fatalf("versions = %#v, want untagged previous image and tagged new image", versions.Versions)
+	}
+	if versions.TaggedDigest != newDigest || versions.DeployedDigest() != oldDigest || !versions.RestartPending() {
+		t.Fatalf("deployment state = %#v, want untagged running image and pending new tag", versions)
+	}
+	images, err := registry.ListRegistryImages(t.Context())
+	if err != nil || len(images) != 1 || images[0].Tag != "development" {
+		t.Fatalf("Registry page images = %#v, %v, want only tagged image", images, err)
+	}
+	kept, purge, err := registry.PlanRepositoryPurge(t.Context(), "acme-app", 1, nil)
+	if err != nil || len(kept) != 1 || len(purge) != 0 {
+		t.Fatalf("tag retention = %#v, %#v, %v, want only tagged image kept", kept, purge, err)
 	}
 }

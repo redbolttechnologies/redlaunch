@@ -30,10 +30,10 @@ const registryRepositoriesPath = "/var/lib/registry/docker/registry/v2/repositor
 // rendering.
 const maxRegistryImages = 1000
 
-// RegistryContent is one tag previously pushed to the managed local image
-// registry. Digest is the manifest digest the tag currently points at.
-// PushedAt is the tag link modification time and orders retention; it may be
-// zero when the time could not be read.
+// RegistryContent is one tagged image or retained untagged manifest revision
+// in the managed local registry. Tag is empty for an untagged revision.
+// Digest identifies the manifest. PushedAt is the tag or revision link
+// modification time; it may be zero when the time could not be read.
 type RegistryContent struct {
 	Repository string
 	Tag        string
@@ -41,8 +41,8 @@ type RegistryContent struct {
 	PushedAt   time.Time
 }
 
-// ListRegistryContents returns the tags previously pushed to the managed
-// local image registry container. It reads through the Docker daemon, so it
+// ListRegistryContents returns tagged images and retained untagged manifest
+// revisions previously pushed to the managed local image registry container. It reads through the Docker daemon, so it
 // works whether Redlaunch runs directly on the host or inside its own
 // container, where the registry's loopback-bound port is unreachable.
 //
@@ -248,7 +248,7 @@ func (r CommandRunner) MoveRegistryTag(ctx context.Context, containerName, repos
 var errRegistryImageLimit = errors.New("registry image limit reached")
 
 // readRegistryContents walks a copied repositories tree and returns one
-// entry per _manifests/tags/<tag>/current/link file. Entries with invalid
+// entry per tag link, plus retained revisions without tags. Entries with invalid
 // repository, tag, or digest values are skipped so one unexpected file
 // cannot break the whole listing.
 func readRegistryContents(root string) ([]RegistryContent, error) {
@@ -264,6 +264,8 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 	}
 
 	contents := make([]RegistryContent, 0)
+	revisions := make([]RegistryContent, 0)
+	tagged := make(map[string]bool)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -279,8 +281,12 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 			return nil
 		}
 		repository, tag, ok := splitRegistryLinkPath(root, path)
+		revisionDigest := ""
 		if !ok {
-			return nil
+			repository, revisionDigest, ok = splitRegistryRevisionPath(root, path)
+			if !ok || len(revisions) >= maxRegistryImages {
+				return nil
+			}
 		}
 		digest, err := readRegistryDigest(path)
 		if err != nil {
@@ -289,21 +295,65 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 		if digest == "" {
 			return nil
 		}
-		contents = append(contents, RegistryContent{
+		content := RegistryContent{
 			Repository: repository,
 			Tag:        tag,
 			Digest:     digest,
 			PushedAt:   fileInfo.ModTime(),
-		})
+		}
+		if revisionDigest != "" {
+			if digest == revisionDigest {
+				revisions = append(revisions, content)
+			}
+		} else {
+			tagged[repository+"\x00"+digest] = true
+			contents = append(contents, content)
+		}
 		return nil
 	})
-	if errors.Is(err, errRegistryImageLimit) {
-		return contents, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, errRegistryImageLimit) {
 		return nil, fmt.Errorf("read copied registry repositories: %w", err)
 	}
+	for _, revision := range revisions {
+		if len(contents) >= maxRegistryImages {
+			break
+		}
+		if !tagged[revision.Repository+"\x00"+revision.Digest] {
+			contents = append(contents, revision)
+		}
+	}
 	return contents, nil
+}
+
+// splitRegistryRevisionPath accepts only repository manifest revision links.
+func splitRegistryRevisionPath(root, path string) (string, string, bool) {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) < 6 {
+		return "", "", false
+	}
+	tail := parts[len(parts)-5:]
+	if tail[0] != "_manifests" || tail[1] != "revisions" || tail[2] != "sha256" || tail[4] != "link" {
+		return "", "", false
+	}
+	digest := "sha256:" + tail[3]
+	if !validRegistryDigest(digest) {
+		return "", "", false
+	}
+	repositoryParts := parts[:len(parts)-5]
+	for _, part := range repositoryParts {
+		if !validRegistryPathComponent(part) {
+			return "", "", false
+		}
+	}
+	repository := strings.Join(repositoryParts, "/")
+	if len(repository) > 255 {
+		return "", "", false
+	}
+	return repository, digest, true
 }
 
 // splitRegistryLinkPath extracts the repository and tag from a

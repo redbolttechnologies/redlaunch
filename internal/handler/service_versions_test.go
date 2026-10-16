@@ -421,3 +421,24 @@ func TestVersionDeployUserMessageAvoidsDockerDiagnostics(t *testing.T) {
 		t.Fatalf("versionDeployUserMessage() = %q, must not forward diagnostics", message)
 	}
 }
+
+func TestServiceDetailsPageListsUntaggedVersionWithSwitchAction(t *testing.T) {
+	versions := &fakeVersionService{versions: versionTestVersions()}
+	versions.versions.Versions[1].Tags = nil
+	web, _ := newVersionTestHandler(t, versions)
+	recorder := httptest.NewRecorder()
+	web.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/web", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`title="` + versions.versions.Versions[1].Digest + `"`,
+		`name="digest" value="` + versions.versions.Versions[1].Digest + `"`,
+		`aria-controls="version-switch-dialog-1"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("untagged version is missing %q", expected)
+		}
+	}
+}

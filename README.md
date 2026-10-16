@@ -144,7 +144,8 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
 - Manually purge older tags per repository with a keep count (keep the N most
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
 - Manage service versions on the service's Versions list: the pushed images of
-  its repository are grouped by digest with their tags, the deployed image is
+  its repository are grouped by digest with their tags (including untagged
+  images retained in the registry), the deployed image is
   flagged, and switching moves the service's deployment tag (for example
   `development` or `production`) to the selected image and recreates the
   service. An application-wide **Deploy version** action moves every service's

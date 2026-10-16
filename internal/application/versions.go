@@ -11,9 +11,9 @@ import (
 type RegistryVersion struct {
 	Digest string
 	Tags   []string
-	// PushedAt is the newest assignment time among the version's tags and
-	// orders the versions listing. It may be zero when the time could not be
-	// read.
+	// PushedAt is the newest tag assignment time, or the revision time for
+	// an untagged image. It orders the versions listing and may be zero
+	// when the time could not be read.
 	PushedAt time.Time
 }
 
@@ -102,7 +102,7 @@ type VersionDeployOutcome struct {
 	Detail      string
 }
 
-// GroupRegistryVersions groups one repository's pushed tags into versions by
+// GroupRegistryVersions groups one repository's tags and retained revisions by
 // manifest digest. Tags on the same digest form one version, mirroring how
 // the registry stores images independently of their movable tags. Versions
 // are ordered newest first, with the digest as a stable tie-break.
@@ -117,7 +117,9 @@ func GroupRegistryVersions(images []RegistryImage, repository string) []Registry
 			version = &RegistryVersion{Digest: image.Digest}
 			byDigest[image.Digest] = version
 		}
-		version.Tags = append(version.Tags, image.Tag)
+		if image.Tag != "" {
+			version.Tags = append(version.Tags, image.Tag)
+		}
 		if image.PushedAt.After(version.PushedAt) {
 			version.PushedAt = image.PushedAt
 		}

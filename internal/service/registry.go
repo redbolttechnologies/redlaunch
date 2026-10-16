@@ -85,6 +85,16 @@ func (s *RegistryService) SetTagMover(mover RegistryTagMover) {
 // be reached reports application.ErrRegistryUnavailable so the Registry
 // page can distinguish a stopped registry from a failed inspection.
 func (s *RegistryService) ListRegistryImages(ctx context.Context) ([]application.RegistryImage, error) {
+	return s.listRegistryImages(ctx, false)
+}
+
+// ListRegistryVersionImages includes retained manifests whose last tag moved away.
+// The Registry page and tag retention continue to use ListRegistryImages.
+func (s *RegistryService) ListRegistryVersionImages(ctx context.Context) ([]application.RegistryImage, error) {
+	return s.listRegistryImages(ctx, true)
+}
+
+func (s *RegistryService) listRegistryImages(ctx context.Context, includeUntagged bool) ([]application.RegistryImage, error) {
 	contents, err := s.runner.ListRegistryContents(ctx, s.container)
 	if err != nil {
 		if errors.Is(err, compose.ErrRegistryUnavailable) {
@@ -94,6 +104,9 @@ func (s *RegistryService) ListRegistryImages(ctx context.Context) ([]application
 	}
 	images := make([]application.RegistryImage, 0, len(contents))
 	for _, content := range contents {
+		if content.Tag == "" && !includeUntagged {
+			continue
+		}
 		images = append(images, application.RegistryImage{
 			Repository: content.Repository,
 			Tag:        content.Tag,

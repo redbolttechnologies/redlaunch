@@ -390,3 +390,45 @@ func TestMoveRegistryTagRejectsTraversal(t *testing.T) {
 		t.Fatal("MoveRegistryTag(empty container) error = nil, want container name error")
 	}
 }
+
+func TestReadRegistryContentsIncludesUntaggedRevisions(t *testing.T) {
+	root := t.TempDir()
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+	revision := func(repository, encoded, digest string) {
+		writeRegistryFixture(t, root, repository+"/_manifests/revisions/sha256/"+encoded+"/link", digest)
+	}
+	revision("nested/web", strings.Repeat("a", 64), digestA)
+	revision("nested/web", strings.Repeat("b", 64), digestB)
+	writeRegistryFixture(t, root, "nested/web/_manifests/tags/latest/current/link", digestB)
+	// Revisions must match their path and belong to a valid repository.
+	revision("nested/web", strings.Repeat("c", 64), digestA)
+	revision("BAD", strings.Repeat("a", 64), digestA)
+	revision("nested/web", "invalid", digestA)
+	writeRegistryFixture(t, root, "nested/web/_layers/sha256/"+strings.Repeat("a", 64)+"/link", digestA)
+	outside := filepath.Join(t.TempDir(), "link")
+	if err := os.WriteFile(outside, []byte(digestA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "symlink/_manifests/revisions/sha256", strings.Repeat("a", 64), "link")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readRegistryContents(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("contents = %#v, want one tagged and one untagged image", got)
+	}
+	if got[0].Repository != "nested/web" || got[0].Digest != digestB || got[0].Tag != "latest" {
+		t.Fatalf("tagged image = %#v", got[0])
+	}
+	if got[1].Repository != "nested/web" || got[1].Digest != digestA || got[1].Tag != "" || got[1].PushedAt.IsZero() {
+		t.Fatalf("untagged image = %#v", got[1])
+	}
+}

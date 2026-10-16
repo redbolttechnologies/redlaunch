@@ -31,7 +31,7 @@ type composeContainerDigestReader interface {
 // registryVersionSource lists the images previously pushed to the managed
 // local image registry.
 type registryVersionSource interface {
-	ListRegistryImages(context.Context) ([]application.RegistryImage, error)
+	ListRegistryVersionImages(context.Context) ([]application.RegistryImage, error)
 }
 
 // registryVersionTagMover assigns one registry tag to another image digest
@@ -167,7 +167,7 @@ func (s *Applications) ListServiceVersions(ctx context.Context, applicationID in
 	if operations.images == nil {
 		return versions, nil
 	}
-	images, err := operations.images.ListRegistryImages(ctx)
+	images, err := operations.images.ListRegistryVersionImages(ctx)
 	if err != nil {
 		return versions, nil
 	}
@@ -292,7 +292,7 @@ func (s *Applications) ListApplicationVersions(ctx context.Context, applicationI
 	if operations.images == nil || len(result.Services) == 0 {
 		return result, nil
 	}
-	images, err := operations.images.ListRegistryImages(ctx)
+	images, err := operations.images.ListRegistryVersionImages(ctx)
 	if err != nil {
 		return result, nil
 	}
@@ -331,7 +331,7 @@ func (s *Applications) DeployApplicationVersion(ctx context.Context, application
 	if len(versions.Services) == 0 {
 		return nil, application.ErrServiceVersionUnavailable
 	}
-	images, err := operations.images.ListRegistryImages(ctx)
+	images, err := operations.images.ListRegistryVersionImages(ctx)
 	if err != nil {
 		return nil, err
 	}
