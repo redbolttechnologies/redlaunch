@@ -40,6 +40,15 @@
             <p>Services defined for this Compose application.</p>
           </div>
           <div class="services-section-actions">
+            {{if .ApplicationDetailsPage.Versions.Tags}}
+            <button class="button button-secondary" type="button" data-versions-open aria-controls="application-versions-dialog" aria-haspopup="dialog" aria-expanded="false">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"></path>
+                <path d="m4.5 7.5 7.5 4 7.5-4M12 12v9"></path>
+              </svg>
+              <span>Deploy version</span>
+            </button>
+            {{end}}
             <button class="button button-secondary compose-import-button" type="button" data-compose-import-trigger aria-controls="compose-import-dialog" aria-haspopup="dialog" aria-expanded="false">
               <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 16V4"></path>
@@ -676,6 +685,8 @@
     </form>
   </div>
 </dialog>
+
+{{template "application-versions-dialog.html" .}}
 
 {{range .ApplicationDetailsPage.Services}}
 <dialog class="application-dialog service-delete-dialog" id="service-delete-dialog-{{.ID}}" data-service-delete-dialog data-service-name="{{.Name}}" aria-modal="true" aria-labelledby="service-delete-dialog-title-{{.ID}}" aria-describedby="service-delete-dialog-description-{{.ID}}">

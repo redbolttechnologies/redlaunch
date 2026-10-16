@@ -506,6 +506,7 @@ type Applications struct {
 	serviceDeletionIntents serviceDeletionIntentRepository
 	backupLeases           applicationBackupLeaseRepository
 	scheduleDisabler       applicationDeletionScheduleDisabler
+	versionRegistry        versionRegistryOperations
 	applicationsDir        string
 	proxyDirectory         string
 	managementPort         int

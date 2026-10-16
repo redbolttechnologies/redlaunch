@@ -220,6 +220,7 @@
       </dl>
     </div>
   </section>
+  {{template "service-details-versions.html" .}}
   {{$sshTunnels := serviceSSHTunnelCommands .ServiceDetailsPage.Details.Service.Ports .Server.IPAddress}}
   {{if $sshTunnels}}
   <section class="service-widget service-ssh-widget" aria-labelledby="ssh-tunnel-title">

@@ -1,0 +1,126 @@
+{{define "service-details-versions.html"}}
+{{if .ServiceDetailsPage.Versions.Eligible}}
+<section class="service-widget service-versions-widget" aria-labelledby="service-versions-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading-with-icon">
+      <span class="service-widget-section-icon" aria-hidden="true">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"></path>
+          <path d="m4.5 7.5 7.5 4 7.5-4M12 12v9"></path>
+        </svg>
+      </span>
+      <div class="service-widget-heading">
+        <h2 id="service-versions-title">Versions</h2>
+        <p>The deployment tag <code>{{.ServiceDetailsPage.Versions.Repository}}:{{.ServiceDetailsPage.Versions.DeploymentTag}}</code> selects the deployed image. Switching moves the tag and recreates the service.</p>
+      </div>
+    </div>
+  </header>
+  <div class="service-widget-body">
+    {{if not .ServiceDetailsPage.Versions.RegistryAvailable}}
+    <div class="application-alert" role="alert">The local image registry is unavailable, so the pushed versions cannot be listed.</div>
+    {{else if not .ServiceDetailsPage.Versions.Versions}}
+    <div class="service-widget-empty" role="status">
+      <p>No images have been pushed to <code>{{.ServiceDetailsPage.Versions.Repository}}</code> yet.</p>
+    </div>
+    {{else}}
+    {{if not .ServiceDetailsPage.Versions.TaggedDigest}}
+    <div class="application-notice" role="status">
+      <span>The tag <code>{{.ServiceDetailsPage.Versions.DeploymentTag}}</code> has never been pushed. Switching to a version assigns it.</span>
+    </div>
+    {{end}}
+    {{if .ServiceDetailsPage.Versions.RestartPending}}
+    <div class="application-notice" role="status">
+      <span>The running container uses a different image than <code>{{.ServiceDetailsPage.Versions.DeploymentTag}}</code> points at. Switch to the tagged version to apply it.</span>
+    </div>
+    {{end}}
+    <div class="service-environment-table-wrap">
+      <table class="service-environment-table service-versions-table">
+        <thead>
+          <tr>
+            <th scope="col">Version</th>
+            <th scope="col">Tags</th>
+            <th scope="col">Pushed</th>
+            <th scope="col">Status</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range $index, $version := .ServiceDetailsPage.Versions.Versions}}
+          <tr>
+            <td class="service-versions-digest"><code title="{{$version.Digest}}">{{versionDigestShort $version.Digest}}</code></td>
+            <td>
+              <span class="service-versions-tags">
+                {{range $version.Tags}}
+                <code class="registry-meta-badge{{if eq . $.ServiceDetailsPage.Versions.DeploymentTag}} registry-meta-badge-deployment{{end}}" title="{{$.ServiceDetailsPage.Versions.Repository}}:{{.}}">{{.}}</code>
+                {{end}}
+              </span>
+            </td>
+            <td class="service-versions-pushed"><time datetime="{{registryTimeISO $version.PushedAt}}" title="{{registryTimeTitle $version.PushedAt}}">{{registryTime $version.PushedAt}}</time></td>
+            <td>
+              {{if eq $version.Digest $.ServiceDetailsPage.Versions.DeployedDigest}}
+              <span class="service-status-badge service-status-running"><span class="status-dot" aria-hidden="true"></span>Deployed</span>
+              {{else}}
+              <span class="service-status-badge service-status-neutral"><span class="status-dot" aria-hidden="true"></span>Available</span>
+              {{end}}
+            </td>
+            <td class="service-versions-actions">
+              {{if eq $version.Digest $.ServiceDetailsPage.Versions.DeployedDigest}}
+              <span class="service-versions-current">Current</span>
+              {{else}}
+              <button class="button button-secondary" type="button" data-versions-open aria-controls="version-switch-dialog-{{$index}}" aria-haspopup="dialog" aria-expanded="false">Switch</button>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{end}}
+  </div>
+</section>
+{{range $index, $version := .ServiceDetailsPage.Versions.Versions}}
+{{if ne $version.Digest $.ServiceDetailsPage.Versions.DeployedDigest}}
+<dialog class="application-dialog service-versions-dialog" id="version-switch-dialog-{{$index}}" data-versions-dialog aria-modal="true" aria-labelledby="version-switch-title-{{$index}}">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="version-switch-title-{{$index}}">Switch version</h2>
+        <p>Move <code>{{$.ServiceDetailsPage.Versions.DeploymentTag}}</code> to this image and recreate the <code>{{$.ServiceDetailsPage.Details.Service.Name}}</code> container.</p>
+      </div>
+      <button class="icon-button" type="button" data-versions-close aria-label="Close switch version dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+    <form class="application-form" method="post" action="{{serviceDetailsPath $.ServiceDetailsPage.Application.ID $.ServiceDetailsPage.Details.Service.Name}}/versions/deploy">
+      <input type="hidden" name="csrf_token" value="{{$.ServiceDetailsPage.CSRFToken}}">
+      <input type="hidden" name="digest" value="{{$version.Digest}}">
+      <dl class="service-versions-switch">
+        <div>
+          <dt>Currently deployed</dt>
+          <dd><code title="{{$.ServiceDetailsPage.Versions.DeployedDigest}}">{{if $.ServiceDetailsPage.Versions.DeployedDigest}}{{versionDigestShort $.ServiceDetailsPage.Versions.DeployedDigest}}{{else}}Unknown{{end}}</code></dd>
+        </div>
+        <div>
+          <dt>Switch to</dt>
+          <dd>
+            <code title="{{$version.Digest}}">{{versionDigestShort $version.Digest}}</code>
+            <span class="service-versions-tags">{{range $version.Tags}}<code class="registry-meta-badge">{{.}}</code>{{end}}</span>
+          </dd>
+        </div>
+      </dl>
+      <div class="application-form-note service-versions-impact">
+        <span class="application-form-note-mark" aria-hidden="true">!</span>
+        <span>The service container is recreated from the selected image. Its data volumes are kept.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-versions-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-versions-submit>Switch and restart</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}
+{{end}}
+{{end}}
+{{end}}

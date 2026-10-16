@@ -1,0 +1,45 @@
+{{define "application-version-progress.html"}}
+<div class="setup-progress-backdrop" data-progress-dialog data-application-version-progress data-progress-content-selector=".application-details-page" data-close-url="{{.ApplicationVersionProgress.CloseURL}}" data-state="{{.ApplicationVersionProgress.State}}" data-status-url="{{.ApplicationVersionProgress.StatusURL}}">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="application-version-progress-title" aria-busy="{{if eq .ApplicationVersionProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+    <div class="setup-progress-header">
+      <div class="setup-progress-icon setup-progress-icon-{{.ApplicationVersionProgress.State}}" aria-hidden="true">
+        {{if eq .ApplicationVersionProgress.State "complete"}}✓{{else if eq .ApplicationVersionProgress.State "failed"}}!{{else}}…{{end}}
+      </div>
+      <div class="setup-progress-heading">
+        <h2 id="application-version-progress-title" data-progress-title>{{if eq .ApplicationVersionProgress.State "complete"}}Version deployment finished{{else if eq .ApplicationVersionProgress.State "failed"}}Version deployment stopped{{else}}Deploying version <code>{{.ApplicationVersionProgress.SourceTag}}</code>{{end}}</h2>
+      </div>
+    </div>
+
+    <ol class="setup-progress-steps" aria-live="polite">
+      {{range .ApplicationVersionProgress.Steps}}
+      <li class="setup-progress-step setup-progress-step-{{.State}}">
+        <span class="setup-progress-step-icon" role="img" aria-label="{{if eq .State "remaining"}}Remaining{{else if eq .State "active"}}In progress{{else if eq .State "complete"}}Deployed{{else if eq .State "skipped"}}Skipped{{else}}Failed{{end}}">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else if eq .State "skipped"}}–{{else if eq .State "active"}}…{{else}}○{{end}}</span>
+        <span class="setup-progress-step-copy">
+          <span class="setup-progress-step-label"><code>{{.ServiceName}}</code></span>
+          {{if .Detail}}<span class="setup-progress-step-detail">{{.Detail}}</span>{{end}}
+        </span>
+      </li>
+      {{end}}
+    </ol>
+
+    {{if eq .ApplicationVersionProgress.State "complete"}}
+    <p class="setup-progress-summary">{{.ApplicationVersionProgress.DeployedCount}} deployed · {{.ApplicationVersionProgress.SkippedCount}} skipped · {{.ApplicationVersionProgress.FailedCount}} failed</p>
+    {{end}}
+
+    {{if eq .ApplicationVersionProgress.State "failed"}}
+    <div class="setup-progress-error" role="alert">
+      <p class="setup-progress-error-title">The version deployment stopped.</p>
+      <p>{{.ApplicationVersionProgress.ErrorDetail}}</p>
+    </div>
+    {{end}}
+
+    <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the version deployment progress.</p>
+    </div>
+
+    <div class="setup-progress-actions">
+      <button class="button button-secondary" type="button" data-progress-close>Close</button>
+    </div>
+  </section>
+</div>
+{{end}}

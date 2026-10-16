@@ -48,6 +48,7 @@ type Handler struct {
 	applicationEditor              applicationEnvironmentEditor
 	serviceDetails                 serviceDetailsService
 	serviceActions                 serviceActionService
+	versionDeploys                 versionDeploymentService
 	serviceDeletion                serviceDeletionService
 	applicationDeletion            applicationDeletionService
 	backupManager                  serviceBackupService
@@ -76,6 +77,7 @@ type Handler struct {
 	managedDatabasesJobs           *managedDatabasesJobStore
 	selfUpdateJobs                 *selfUpdateJobStore
 	serviceActionJobs              *serviceActionJobStore
+	applicationVersionJobs         *applicationVersionJobStore
 	proxyActionJobs                *proxyActionJobStore
 	jobs                           *trackedJobRuntime
 	logDownloads                   chan struct{}
@@ -342,6 +344,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryTime":                registryTimeText,
 		"registryTimeISO":             registryTimeISO,
 		"registryTimeTitle":           registryTimeTitle,
+		"versionDigestShort":          versionDigestShort,
 		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
@@ -365,6 +368,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	editor := applicationEnvironmentEditor(noApplicationService{})
 	var serviceDetails serviceDetailsService
 	serviceActions := serviceActionService(noApplicationService{})
+	var versionDeploys versionDeploymentService
 	serviceDeletion := serviceDeletionService(noApplicationService{})
 	applicationDeletion := applicationDeletionService(noApplicationService{})
 	var backupManager serviceBackupService
@@ -434,6 +438,9 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 				}
 				if serviceActionsDependency, ok := dependency.(serviceActionService); ok {
 					serviceActions = serviceActionsDependency
+				}
+				if versionDeployDependency, ok := dependency.(versionDeploymentService); ok {
+					versionDeploys = versionDeployDependency
 				}
 				if serviceDeletionDependency, ok := dependency.(serviceDeletionService); ok {
 					serviceDeletion = serviceDeletionDependency
@@ -536,6 +543,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 				if serviceDeletionDependency, ok := dependency.(serviceDeletionService); ok {
 					serviceDeletion = serviceDeletionDependency
 				}
+			}
+		case versionDeploymentService:
+			if dependency != nil {
+				versionDeploys = dependency
 			}
 		case serviceDeletionService:
 			if dependency != nil {
@@ -646,6 +657,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	apiRunJobs := newAPIRunJobStore()
 	managementJobs := &managementJobStore{jobs: make(map[string]*managementJob)}
 	serviceActionJobs := newServiceActionJobStore()
+	applicationVersionJobs := newApplicationVersionJobStore()
 	proxyActionJobs := newProxyActionJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
 	jobs.registerCleanup(setupJobs.expire)
@@ -660,6 +672,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(apiRunJobs.expire)
 	jobs.registerCleanup(managementJobs.expire)
 	jobs.registerCleanup(serviceActionJobs.expire)
+	jobs.registerCleanup(applicationVersionJobs.expire)
 	jobs.registerCleanup(proxyActionJobs.expire)
 	return &Handler{
 		templates:                      templates,
@@ -679,6 +692,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		applicationEditor:              editor,
 		serviceDetails:                 serviceDetails,
 		serviceActions:                 serviceActions,
+		versionDeploys:                 versionDeploys,
 		serviceDeletion:                serviceDeletion,
 		applicationDeletion:            applicationDeletion,
 		backupManager:                  backupManager,
@@ -707,6 +721,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		managedDatabasesJobs:           managedDatabasesJobs,
 		selfUpdateJobs:                 selfUpdateJobs,
 		serviceActionJobs:              serviceActionJobs,
+		applicationVersionJobs:         applicationVersionJobs,
 		proxyActionJobs:                proxyActionJobs,
 		jobs:                           jobs,
 		logDownloads:                   make(chan struct{}, maxConcurrentLogDownloads),
@@ -806,6 +821,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/action/status", h.serviceActionStatus)
+	mux.HandleFunc("POST /applications/{id}/services/{service}/versions/deploy", h.deployServiceVersion)
+	mux.HandleFunc("POST /applications/{id}/versions/deploy", h.deployApplicationVersion)
+	mux.HandleFunc("GET /applications/{id}/versions/deploy/status", h.applicationVersionStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/logs/download", h.downloadServiceLogs)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/schedule", h.updateBackupSchedule)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/backups/run", h.runBackupNow)
@@ -990,6 +1008,11 @@ func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 		return
 	}
+	versionDeployProgress, ok := h.applicationVersionProgress(id, r.URL.Query().Get("version_deploy_job"))
+	if !ok {
+		http.Redirect(w, r, "/applications/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+		return
+	}
 
 	data, err := h.loadApplicationDetailsPageData(r.Context(), id)
 	if errors.Is(err, application.ErrNotFound) {
@@ -1007,6 +1030,7 @@ func (h *Handler) applicationDetailsPage(w http.ResponseWriter, r *http.Request)
 	}
 	data.ServiceDeleteProgress = serviceDeleteProgress
 	data.ApplicationDeleteProgress = applicationDeleteProgress
+	data.VersionDeployProgress = versionDeployProgress
 	data.ClonedFrom = clonedFromSourceID(r)
 	h.writeApplicationDetailsPage(w, r, http.StatusOK, data, postgresProgress, redisProgress, applicationProgress)
 }
@@ -1415,6 +1439,7 @@ func (h *Handler) loadApplicationDetailsPageData(ctx context.Context, id int64) 
 		Services:                services,
 		ServicePresets:          application.AllServicePresets(),
 		ServicePresetCategories: application.ServicePresetCategories(),
+		Versions:                h.applicationVersions(ctx, id),
 		Domains:                 domains,
 		Variables: environmentFilePageData{
 			ID:              "variables",
@@ -2324,6 +2349,7 @@ func (h *Handler) serviceDetailsPage(w http.ResponseWriter, r *http.Request) {
 	h.writeServiceDetailsPage(w, r, http.StatusOK, serviceDetailsPageData{
 		Application:    item,
 		Details:        details,
+		Versions:       h.serviceVersions(r.Context(), id, serviceName),
 		BackupProgress: backupProgress,
 	})
 }
@@ -3000,6 +3026,8 @@ func serviceActionPastTense(action string) string {
 		return "restarted"
 	case "run":
 		return "run"
+	case "deploy":
+		return "deployed"
 	case "credentials":
 		return "updated"
 	default:
@@ -3017,6 +3045,8 @@ func serviceActionPresentTense(action string) string {
 		return "Restarting"
 	case "run":
 		return "Running"
+	case "deploy":
+		return "Deploying version to"
 	case "credentials":
 		return "Updating credentials"
 	default:
@@ -4809,6 +4839,7 @@ type pageData struct {
 	SelfUpdateProgress           *selfUpdateProgressData
 	ServiceActionProgress        *serviceActionProgressData
 	ServiceActionToasts          []*serviceActionProgressData
+	ApplicationVersionProgress   *applicationVersionProgressData
 	ProxyActionProgress          *proxyActionProgressData
 	ProxyActionToasts            []*proxyActionProgressData
 	ApplicationsPage             *applicationPageData
@@ -4949,6 +4980,8 @@ type applicationDetailsPageData struct {
 	SecretDelete                      *secretDeletePageData
 	ServiceDeleteProgress             *serviceDeleteProgressData
 	ApplicationDeleteProgress         *applicationDeleteProgressData
+	VersionDeployProgress             *applicationVersionProgressData
+	Versions                          application.ApplicationVersions
 	ServiceActionError                *serviceActionErrorData
 	Clone                             *cloneApplicationPageData
 	// ClonedFrom holds the source application ID when the page was reached
@@ -5066,6 +5099,7 @@ type secretDeletePageData struct {
 type serviceDetailsPageData struct {
 	Application        application.Application
 	Details            application.ServiceDetails
+	Versions           application.ServiceVersions
 	CSRFToken          string
 	BackupProgress     *backupProgressData
 	ServiceActionError *serviceActionErrorData
@@ -5472,6 +5506,7 @@ func (h *Handler) writeApplicationDetailsPage(w http.ResponseWriter, r *http.Req
 	page.ProxyActionToasts = h.proxyActionToastsForPage(r.URL.Query().Get("proxy_action_job"))
 	page.ServiceDeleteProgress = data.ServiceDeleteProgress
 	page.ApplicationDeleteProgress = data.ApplicationDeleteProgress
+	page.ApplicationVersionProgress = data.VersionDeployProgress
 	if h.serviceActionJobs != nil {
 		closeURL := "/applications/" + strconv.FormatInt(data.Application.ID, 10)
 		page.ServiceActionToasts = h.serviceActionToastsForPage(data.Application.ID, r.URL.Query().Get("service_action_job"), closeURL)

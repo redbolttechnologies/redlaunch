@@ -622,6 +622,123 @@ func (r CommandRunner) runComposeUpWithOptions(ctx context.Context, projectDir, 
 	return nil
 }
 
+// PullService pulls one service's configured image so a moved registry tag is
+// re-resolved to its new manifest before the container is recreated. The
+// service name is passed as a single exec argument, never through a shell.
+func (r CommandRunner) PullService(ctx context.Context, projectDir, serviceName string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return errors.New("Compose service name is required")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return fmt.Errorf("find Compose file: %w", err)
+	}
+	command := composeCommand(ctx, binary, projectDir, composeFile, "pull", serviceName)
+	if err := runDiagnosticCommand(command, fmt.Sprintf("pull compose service %q image", serviceName), projectDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ResolveServiceImage returns the effective image reference of one Compose
+// service with environment interpolation applied, exactly as Compose resolves
+// it when running the project. An unresolved service reports an error.
+func (r CommandRunner) ResolveServiceImage(ctx context.Context, projectDir, serviceName string) (string, error) {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return "", errors.New("Compose service name is required")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	composeFile, err := findComposeFile(projectDir)
+	if err != nil {
+		return "", fmt.Errorf("find Compose file: %w", err)
+	}
+	command := composeCommand(ctx, binary, projectDir, composeFile, "config", "--format", "json", serviceName)
+	output, err := runStructuredCommand(command, "resolve Compose service image", projectDir)
+	if err != nil {
+		return "", err
+	}
+
+	var config struct {
+		Services map[string]struct {
+			Image string `json:"image"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output), &config); err != nil {
+		return "", fmt.Errorf("decode Compose configuration: %w", err)
+	}
+	image := strings.TrimSpace(config.Services[serviceName].Image)
+	if image == "" {
+		return "", fmt.Errorf("service %q has no configured image", serviceName)
+	}
+	return image, nil
+}
+
+// ContainerImageDigest returns the manifest digest behind one container's
+// local image for the given repository reference (the image name without a
+// tag, for example localhost:5000/acme-app), as recorded in the image's
+// RepoDigests when it was pulled. It reports an empty digest when the running
+// image cannot be attributed to the repository, for example for locally built
+// images.
+func (r CommandRunner) ContainerImageDigest(ctx context.Context, containerName, imageReference string) (string, error) {
+	ctx = normalizeContext(ctx)
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return "", errors.New("container name is required")
+	}
+	imageReference = strings.TrimSpace(imageReference)
+	if imageReference == "" {
+		return "", errors.New("image repository reference is required")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	inspect := exec.CommandContext(ctx, binary, "inspect", "--format", "{{.Image}}", containerName)
+	inspect.Env = composeProcessEnvironment(os.Environ(), nil)
+	inspectOutput, err := runStructuredCommand(inspect, "inspect container image", "")
+	if err != nil {
+		return "", err
+	}
+	imageID := strings.TrimSpace(string(inspectOutput))
+	if !strings.HasPrefix(imageID, "sha256:") {
+		return "", fmt.Errorf("inspect container image: unexpected image identifier")
+	}
+
+	image := exec.CommandContext(ctx, binary, "image", "inspect", "--format", "{{json .RepoDigests}}", imageID)
+	image.Env = composeProcessEnvironment(os.Environ(), nil)
+	imageOutput, err := runStructuredCommand(image, "inspect container image digests", "")
+	if err != nil {
+		return "", err
+	}
+	var repoDigests []string
+	if err := json.Unmarshal(bytes.TrimSpace(imageOutput), &repoDigests); err != nil {
+		return "", fmt.Errorf("decode image repository digests: %w", err)
+	}
+	prefix := imageReference + "@"
+	for _, repoDigest := range repoDigests {
+		if !strings.HasPrefix(repoDigest, prefix) {
+			continue
+		}
+		digest := strings.TrimSpace(strings.TrimPrefix(repoDigest, prefix))
+		if validRegistryDigest(digest) {
+			return digest, nil
+		}
+	}
+	return "", nil
+}
+
 // ProxyContainerName is the fixed container name of the managed Caddy
 // reverse proxy. The reload targets this container directly.
 const ProxyContainerName = "redbolt-proxy"

@@ -241,3 +241,90 @@ func TestManagementJobsEnforceAuthenticationExpiryAndCapacity(t *testing.T) {
 		t.Fatal("unbounded job retention")
 	}
 }
+
+func managementVersionHandler(t *testing.T, versions *fakeVersionService) (*Handler, *fakeAPITokenService) {
+	t.Helper()
+	apps := &fakeApplicationService{
+		applications: []application.Application{{ID: 7, Name: "Acme", FolderName: "acme"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "web"}},
+	}
+	tokens := newFakeAPITokenService()
+	tokens.authToken = application.APIToken{ID: 5, Scope: application.APITokenScopeManage}
+	web, err := New(nil, apps, versions, tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := web.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return web, tokens
+}
+
+func TestManagementListServiceVersions(t *testing.T) {
+	versions := &fakeVersionService{versions: versionTestVersions()}
+	web, _ := managementVersionHandler(t, versions)
+
+	response := managementRequest(web, "list_service_versions", `{"application_id":7,"service_name":"web"}`, "valid-token")
+	if response.Code != http.StatusOK {
+		t.Fatalf("list_service_versions: %d %s", response.Code, response.Body)
+	}
+	body := response.Body.String()
+	for _, expected := range []string{"acme-app", "development", "RegistryAvailable"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("list_service_versions result is missing %q: %s", expected, body)
+		}
+	}
+}
+
+func TestManagementSwitchVersionByDigest(t *testing.T) {
+	versions := &fakeVersionService{versions: versionTestVersions()}
+	web, _ := managementVersionHandler(t, versions)
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	result := dispatchManagement(t, web, "switch_version", `{"application_id":7,"service_name":"web","digest":"`+digest+`"}`)
+	if !strings.Contains(result, "updated") {
+		t.Fatalf("switch_version result = %s, want an update confirmation", result)
+	}
+	waitForVersionDeploy(t, versions, digest, versions.deployed)
+}
+
+func TestManagementSwitchVersionByTag(t *testing.T) {
+	versions := &fakeVersionService{versions: versionTestVersions()}
+	web, _ := managementVersionHandler(t, versions)
+
+	dispatchManagement(t, web, "switch_version", `{"application_id":7,"service_name":"web","tag":"build-1"}`)
+	waitForVersionDeploy(t, versions, "sha256:"+strings.Repeat("a", 64), versions.deployed)
+}
+
+func TestManagementSwitchVersionRejectsUnknownTarget(t *testing.T) {
+	versions := &fakeVersionService{versions: versionTestVersions()}
+	web, _ := managementVersionHandler(t, versions)
+
+	body := dispatchManagement(t, web, "switch_version", `{"application_id":7,"service_name":"web","tag":"missing"}`)
+	if !strings.Contains(body, "failed") {
+		t.Fatalf("switch_version result = %s, want a failed job for an unknown tag", body)
+	}
+	body = dispatchManagement(t, web, "switch_version", `{"application_id":7,"service_name":"web"}`)
+	if !strings.Contains(body, "failed") {
+		t.Fatalf("switch_version result = %s, want a failed job without a target", body)
+	}
+	if versions.deployed() != "" {
+		t.Fatal("rejected switch_version calls must not deploy a version")
+	}
+}
+
+func TestManagementSwitchApplicationVersion(t *testing.T) {
+	versions := &fakeVersionService{bulkOutcomes: []application.VersionDeployOutcome{
+		{ServiceName: "web", State: application.VersionDeployStateDeployed, Detail: "The deployment tag now points at build-1."},
+		{ServiceName: "worker", State: application.VersionDeployStateSkipped, Detail: "The repository acme-worker has no tag build-1."},
+	}}
+	web, _ := managementVersionHandler(t, versions)
+
+	body := dispatchManagement(t, web, "switch_application_version", `{"application_id":7,"tag":"build-1"}`)
+	if !strings.Contains(body, "deployed") || !strings.Contains(body, "skipped") {
+		t.Fatalf("switch_application_version result = %s, want per-service outcomes", body)
+	}
+	waitForVersionDeploy(t, versions, "build-1", versions.bulkDeployed)
+}

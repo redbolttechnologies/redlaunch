@@ -135,6 +135,116 @@ func (r CommandRunner) DeleteRegistryTag(ctx context.Context, containerName, rep
 	return nil
 }
 
+// ErrRegistryImageAbsent reports that a registry repository does not contain
+// the requested manifest, so a tag cannot be assigned to it.
+var ErrRegistryImageAbsent = errors.New("registry repository does not contain the requested image")
+
+// registryRevisionPath returns the manifest revision link for one digest
+// inside a repository. The digest must already be validated.
+func registryRevisionPath(repository, digest string) string {
+	_, encoded, _ := strings.Cut(digest, ":")
+	return registryRepositoriesPath + "/" + repository + "/_manifests/revisions/sha256/" + encoded + "/link"
+}
+
+// registryTagLinkPath returns the tag link file inside a repository. The
+// repository and tag must already be validated.
+func registryTagLinkPath(repository, tag string) string {
+	return registryRepositoriesPath + "/" + repository + "/_manifests/tags/" + tag + "/current/link"
+}
+
+// MoveRegistryTag assigns one registry tag to a manifest digest, the storage
+// operation behind a version switch. It returns the digest the tag was
+// assigned to before the move, or an empty string when the tag did not exist
+// yet. The target digest must be a manifest previously pushed to the same
+// repository; the new link is written through a temporary file and an atomic
+// rename so a failed write cannot leave the tag half-moved. Repository, tag,
+// and digest are strictly validated and arguments are passed exec-style
+// without a shell.
+func (r CommandRunner) MoveRegistryTag(ctx context.Context, containerName, repository, tag, digest string) (string, error) {
+	ctx = normalizeContext(ctx)
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return "", errors.New("registry container name is required")
+	}
+	repository = strings.TrimSpace(repository)
+	if repository == "" || len(repository) > 255 {
+		return "", errors.New("registry repository is invalid")
+	}
+	for _, part := range strings.Split(repository, "/") {
+		if !validRegistryPathComponent(part) {
+			return "", errors.New("registry repository is invalid")
+		}
+	}
+	tag = strings.TrimSpace(tag)
+	if !validRegistryTag(tag) {
+		return "", errors.New("registry tag is invalid")
+	}
+	digest = strings.TrimSpace(digest)
+	if !validRegistryDigest(digest) {
+		return "", errors.New("registry digest is invalid")
+	}
+	binary := r.Binary
+	if binary == "" {
+		binary = "docker"
+	}
+
+	revisionPath := registryRevisionPath(repository, digest)
+	revision := exec.CommandContext(ctx, binary, "exec", containerName, "cat", "--", revisionPath)
+	revision.Env = composeProcessEnvironment(os.Environ(), nil)
+	revisionOutput, revisionErr := runStructuredCommand(revision, "read registry manifest revision", "")
+	if revisionErr != nil || strings.TrimSpace(string(revisionOutput)) != digest {
+		return "", errors.Join(ErrRegistryImageAbsent, revisionErr)
+	}
+
+	linkPath := registryTagLinkPath(repository, tag)
+	previous := ""
+	previousCommand := exec.CommandContext(ctx, binary, "exec", containerName, "cat", "--", linkPath)
+	previousCommand.Env = composeProcessEnvironment(os.Environ(), nil)
+	if previousOutput, previousErr := runStructuredCommand(previousCommand, "read registry tag link", ""); previousErr == nil {
+		previous = strings.TrimSpace(string(previousOutput))
+		if !validRegistryDigest(previous) {
+			previous = ""
+		}
+	}
+
+	tagDirectory := registryRepositoriesPath + "/" + repository + "/_manifests/tags/" + tag + "/current"
+	makeDirectory := exec.CommandContext(ctx, binary, "exec", containerName, "mkdir", "-p", "--", tagDirectory)
+	makeDirectory.Env = composeProcessEnvironment(os.Environ(), nil)
+	if err := runDiagnosticCommand(makeDirectory, "create registry tag directory", ""); err != nil {
+		return previous, err
+	}
+
+	staging, err := os.CreateTemp("", "redlaunch-registry-link-")
+	if err != nil {
+		return previous, fmt.Errorf("create registry link staging file: %w", err)
+	}
+	stagingPath := staging.Name()
+	defer os.Remove(stagingPath)
+	if _, err := staging.WriteString(digest); err != nil {
+		staging.Close()
+		return previous, fmt.Errorf("write registry link staging file: %w", err)
+	}
+	if err := staging.Close(); err != nil {
+		return previous, fmt.Errorf("close registry link staging file: %w", err)
+	}
+
+	stagedLink := linkPath + ".new"
+	copyCommand := exec.CommandContext(ctx, binary, "cp", stagingPath, containerName+":"+stagedLink)
+	copyCommand.Env = composeProcessEnvironment(os.Environ(), nil)
+	if err := runDiagnosticCommand(copyCommand, "stage registry tag link", ""); err != nil {
+		return previous, err
+	}
+	rename := exec.CommandContext(ctx, binary, "exec", containerName, "mv", "-f", "--", stagedLink, linkPath)
+	rename.Env = composeProcessEnvironment(os.Environ(), nil)
+	if err := runDiagnosticCommand(rename, "assign registry tag", ""); err != nil {
+		cleanup := exec.CommandContext(ctx, binary, "exec", containerName, "rm", "-f", "--", stagedLink)
+		cleanup.Env = composeProcessEnvironment(os.Environ(), nil)
+		_ = runDiagnosticCommand(cleanup, "remove staged registry tag link", "")
+		return previous, err
+	}
+	return previous, nil
+}
+
 var errRegistryImageLimit = errors.New("registry image limit reached")
 
 // readRegistryContents walks a copied repositories tree and returns one

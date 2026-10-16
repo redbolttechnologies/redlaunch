@@ -122,6 +122,12 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
 - List the images previously pushed to the local registry from the Registry page.
 - Manually purge older tags per repository with a keep count (keep the N most
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
+- Manage service versions on the service's Versions list: the pushed images of
+  its repository are grouped by digest with their tags, the deployed image is
+  flagged, and switching moves the service's deployment tag (for example
+  `development` or `production`) to the selected image and recreates the
+  service. An application-wide **Deploy version** action moves every service's
+  deployment tag to the image carrying one chosen tag.
 - Route domains and paths through an optional managed Caddy proxy, including
   an HTTPS hostname for Redlaunch itself.
 - Configure global proxy defaults and application overrides for compression,

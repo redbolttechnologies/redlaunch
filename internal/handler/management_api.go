@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,6 +206,33 @@ func (h *Handler) executeManagement(ctx context.Context, op string, a applicatio
 			case "run":
 				return success, h.serviceActions.RunServiceOnce(ctx, a.ApplicationID, a.ServiceName)
 			}
+		}
+	case "list_service_versions":
+		if h.versionDeploys != nil {
+			return h.versionDeploys.ListServiceVersions(ctx, a.ApplicationID, a.ServiceName)
+		}
+	case "switch_version":
+		if h.versionDeploys != nil {
+			digest := strings.TrimSpace(a.Digest)
+			if digest == "" {
+				tag := strings.TrimSpace(a.Tag)
+				if tag == "" {
+					return nil, application.ErrVersionTagRequired
+				}
+				versions, err := h.versionDeploys.ListServiceVersions(ctx, a.ApplicationID, a.ServiceName)
+				if err != nil {
+					return nil, err
+				}
+				digest = application.DigestForTag(versions.Versions, tag)
+				if digest == "" {
+					return nil, application.ErrVersionImageAbsent
+				}
+			}
+			return success, h.versionDeploys.DeployServiceVersion(ctx, a.ApplicationID, a.ServiceName, digest, nil)
+		}
+	case "switch_application_version":
+		if deployer, ok := h.versionDeploys.(applicationVersionDeployService); ok {
+			return deployer.DeployApplicationVersion(ctx, a.ApplicationID, a.Tag, nil)
 		}
 	case "list_environment":
 		if h.applicationEnvironment != nil {

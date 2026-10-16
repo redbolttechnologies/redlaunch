@@ -912,3 +912,147 @@ func TestComposeEnvFileArgsLoadsManagedFilesForInterpolation(t *testing.T) {
 		t.Fatalf("composeEnvFileArgs(managed) = %#v, want [.env vars.env secrets.env]", got)
 	}
 }
+
+func TestCommandRunnerPullServiceUsesExplicitComposeArguments(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (CommandRunner{Binary: binary}).PullService(context.Background(), projectDir, "web"); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	want := expectedComposeArguments(projectDir, "pull", "web")
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandRunnerPullServiceRequiresServiceName(t *testing.T) {
+	if err := (CommandRunner{Binary: "docker"}).PullService(context.Background(), t.TempDir(), " "); err == nil {
+		t.Fatal("PullService() error = nil, want service name required")
+	}
+}
+
+func TestCommandRunnerResolveServiceImageReadsInterpolatedImage(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\nprintf '{\"services\":{\"web\":{\"image\":\"localhost:5000/acme-app:development\"}}}\\n'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (CommandRunner{Binary: binary}).ResolveServiceImage(context.Background(), projectDir, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "localhost:5000/acme-app:development" {
+		t.Fatalf("ResolveServiceImage() = %q, want the configured image", got)
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(strings.Split(strings.TrimSpace(string(contents)), "\n"), "\x00")
+	if !strings.Contains(joined, "config\x00--format\x00json\x00web") {
+		t.Fatalf("Compose arguments = %q, want interpolated service configuration", joined)
+	}
+}
+
+func TestCommandRunnerResolveServiceImageRejectsMissingService(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nprintf '{}\\n'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (CommandRunner{Binary: binary}).ResolveServiceImage(context.Background(), projectDir, "web"); err == nil {
+		t.Fatal("ResolveServiceImage() error = nil, want missing service error")
+	}
+}
+
+func TestCommandRunnerContainerImageDigestReadsRepositoryDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+printf '%s
+' "$@" >> "${0%/*}/args"
+if [ "$1" = "inspect" ]; then printf 'sha256:%s
+' "1111111111111111111111111111111111111111111111111111111111111111"; exit 0; fi
+if [ "$1" = "image" ]; then printf '["localhost:5000/other-app@sha256:%s","localhost:5000/acme-app@${DIGEST}"]\n' "2222222222222222222222222222222222222222222222222222222222222222"; exit 0; fi
+exit 1
+`
+	script = strings.ReplaceAll(script, "${DIGEST}", digest)
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (CommandRunner{Binary: binary}).ContainerImageDigest(context.Background(), "redbolt-acme-1-web", "localhost:5000/acme-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != digest {
+		t.Fatalf("ContainerImageDigest() = %q, want %q", got, digest)
+	}
+	joined := strings.Join(strings.Split(strings.TrimSpace(string(readTestArguments(t, binary))), "\n"), "\x00")
+	if !strings.Contains(joined, "inspect\x00--format\x00{{.Image}}\x00redbolt-acme-1-web") {
+		t.Fatalf("inspect arguments = %q, want container image lookup", joined)
+	}
+	if !strings.Contains(joined, "image\x00inspect\x00--format\x00{{json .RepoDigests}}\x00sha256:1111111111111111111111111111111111111111111111111111111111111111") {
+		t.Fatalf("inspect arguments = %q, want repository digest lookup", joined)
+	}
+}
+
+func TestCommandRunnerContainerImageDigestReturnsEmptyForUnknownRepository(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = \"inspect\" ]; then printf 'sha256:%s\\n' \"1111111111111111111111111111111111111111111111111111111111111111\"; exit 0; fi\nprintf '[]\\n'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := (CommandRunner{Binary: binary}).ContainerImageDigest(context.Background(), "redbolt-acme-1-web", "localhost:5000/acme-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("ContainerImageDigest() = %q, want empty for an unknown repository", got)
+	}
+}
+
+func TestCommandRunnerContainerImageDigestRejectsEmptyNames(t *testing.T) {
+	runner := CommandRunner{Binary: "docker"}
+	if _, err := runner.ContainerImageDigest(context.Background(), " ", "localhost:5000/acme-app"); err == nil {
+		t.Fatal("ContainerImageDigest(empty container) error = nil, want container name error")
+	}
+	if _, err := runner.ContainerImageDigest(context.Background(), "redbolt-acme-1-web", " "); err == nil {
+		t.Fatal("ContainerImageDigest(empty reference) error = nil, want reference error")
+	}
+}
+
+func readTestArguments(t *testing.T, binary string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
+}

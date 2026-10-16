@@ -1,0 +1,40 @@
+{{define "application-versions-dialog.html"}}
+{{if .ApplicationDetailsPage.Versions.Tags}}
+<dialog class="application-dialog application-versions-dialog" id="application-versions-dialog" data-versions-dialog aria-modal="true" aria-labelledby="application-versions-dialog-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="application-versions-dialog-title">Deploy version</h2>
+        <p>Move each service's deployment tag to the image tagged with the selected version in its own repository, and recreate those services.</p>
+      </div>
+      <button class="icon-button" type="button" data-versions-close aria-label="Close deploy version dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+    <form class="application-form" method="post" action="/applications/{{.ApplicationDetailsPage.Application.ID}}/versions/deploy">
+      <input type="hidden" name="csrf_token" value="{{.ApplicationDetailsPage.CSRFToken}}">
+      <div class="field">
+        <label for="application-version-tag">Version tag</label>
+        <select id="application-version-tag" name="tag" data-versions-source required>
+          {{range .ApplicationDetailsPage.Versions.Tags}}
+          <option value="{{.Name}}" data-versions-services="{{range $index, $name := .Services}}{{if $index}}, {{end}}{{$name}}{{end}}" data-versions-missing="{{range $index, $name := .Missing}}{{if $index}}, {{end}}{{$name}}{{end}}">{{.Name}} — {{len .Services}} of {{len $.ApplicationDetailsPage.Versions.Services}} services</option>
+          {{end}}
+        </select>
+        <span class="field-help">Version tags are the pushed image tags shared across this application's repositories. Selecting <code>build-42</code> deploys that build everywhere; selecting <code>development</code> deploys whatever <code>development</code> currently points at, for example to promote development to production.</span>
+      </div>
+      <p class="application-versions-preview" data-versions-preview aria-live="polite"></p>
+      <div class="application-form-note application-versions-impact">
+        <span class="application-form-note-mark" aria-hidden="true">!</span>
+        <span>Each service's deployment tag is reassigned in the local registry and its container is recreated. Services whose repository does not contain the selected tag are skipped.</span>
+      </div>
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-versions-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-versions-submit>Deploy version</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}
+{{end}}

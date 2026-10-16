@@ -5751,3 +5751,115 @@ h1 {
 .databases-page .application-danger-zone-header h3 {
   color: hsl(var(--foreground));
 }
+
+/* Service versions */
+
+.service-versions-table {
+  min-width: 36rem;
+}
+
+.service-versions-table tbody td {
+  vertical-align: middle;
+}
+
+.service-versions-digest code,
+.service-versions-switch dd code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.service-versions-pushed {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.service-versions-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.service-versions-tags .registry-meta-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.registry-meta-badge.registry-meta-badge-deployment {
+  border-color: hsl(var(--primary) / 0.4);
+  color: hsl(var(--foreground));
+  background: hsl(var(--primary) / 0.08);
+  font-weight: 600;
+}
+
+.service-versions-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.service-versions-current {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.service-versions-switch {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.service-versions-switch div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.service-versions-switch dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.service-versions-switch dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+}
+
+.application-versions-preview {
+  min-height: 1.25rem;
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}
+
+.application-versions-preview:empty {
+  display: none;
+}
+
+/* Application-wide version deployment progress */
+
+.setup-progress-step-detail {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.setup-progress-step-skipped {
+  border-style: dashed;
+  background: hsl(var(--muted) / 0.45);
+}
+
+.setup-progress-step-skipped .setup-progress-step-icon {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+}
+
+.setup-progress-summary {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+}

@@ -234,3 +234,159 @@ func TestValidRegistryNames(t *testing.T) {
 		}
 	}
 }
+
+func writeRegistryMoveBinary(t *testing.T, script string) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binary
+}
+
+func registryMoveArguments(t *testing.T, binary string) string {
+	t.Helper()
+	args, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(strings.Split(strings.TrimSpace(string(args)), "\n"), "\x00")
+}
+
+func TestMoveRegistryTagAssignsTagToPushedDigest(t *testing.T) {
+	target := "sha256:" + strings.Repeat("a", 64)
+	previous := "sha256:" + strings.Repeat("b", 64)
+	script := `#!/bin/sh
+printf '%s
+' "$@" >> "${0%/*}/args"
+if [ "$1" = "exec" ]; then
+  case "$3" in
+    cat)
+      case "$5" in
+        */revisions/*) printf '%s
+' "${TARGET}" ;;
+        *) printf '%s
+' "${PREVIOUS}" ;;
+      esac
+      exit 0 ;;
+    mkdir|mv|rm) exit 0 ;;
+  esac
+fi
+exit 0
+`
+	script = strings.ReplaceAll(script, "${TARGET}", target)
+	script = strings.ReplaceAll(script, "${PREVIOUS}", previous)
+	binary := writeRegistryMoveBinary(t, script)
+
+	got, err := (CommandRunner{Binary: binary}).MoveRegistryTag(context.Background(), "redbolt-registry", "acme-app", "development", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != previous {
+		t.Fatalf("MoveRegistryTag() previous = %q, want %q", got, previous)
+	}
+	joined := registryMoveArguments(t, binary)
+	if !strings.Contains(joined, "exec\x00redbolt-registry\x00cat\x00--\x00/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/revisions/sha256/"+strings.Repeat("a", 64)+"/link") {
+		t.Fatalf("move arguments = %q, want manifest revision check", joined)
+	}
+	if !strings.Contains(joined, "exec\x00redbolt-registry\x00mkdir\x00-p\x00--\x00/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/tags/development/current") {
+		t.Fatalf("move arguments = %q, want tag directory creation", joined)
+	}
+	if !strings.Contains(joined, "cp\x00") || !strings.Contains(joined, "redbolt-registry:/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/tags/development/current/link.new") {
+		t.Fatalf("move arguments = %q, want staged link copy", joined)
+	}
+	if !strings.Contains(joined, "exec\x00redbolt-registry\x00mv\x00-f\x00--\x00/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/tags/development/current/link.new\x00/var/lib/registry/docker/registry/v2/repositories/acme-app/_manifests/tags/development/current/link") {
+		t.Fatalf("move arguments = %q, want atomic link rename", joined)
+	}
+}
+
+func TestMoveRegistryTagCreatesMissingTag(t *testing.T) {
+	target := "sha256:" + strings.Repeat("a", 64)
+	script := `#!/bin/sh
+printf '%s
+' "$@" >> "${0%/*}/args"
+if [ "$1" = "exec" ] && [ "$3" = "cat" ]; then
+  case "$5" in
+    */revisions/*) printf '%s
+' "${TARGET}"; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+exit 0
+`
+	binary := writeRegistryMoveBinary(t, strings.ReplaceAll(script, "${TARGET}", target))
+
+	got, err := (CommandRunner{Binary: binary}).MoveRegistryTag(context.Background(), "redbolt-registry", "acme-app", "first", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("MoveRegistryTag() previous = %q, want empty for a missing tag", got)
+	}
+}
+
+func TestMoveRegistryTagRejectsUnpushedDigest(t *testing.T) {
+	target := "sha256:" + strings.Repeat("a", 64)
+	binary := writeRegistryMoveBinary(t, `#!/bin/sh
+printf '%s
+' "$@" >> "${0%/*}/args"
+if [ "$1" = "exec" ] && [ "$3" = "cat" ]; then
+  exit 1
+fi
+exit 0
+`)
+
+	_, err := (CommandRunner{Binary: binary}).MoveRegistryTag(context.Background(), "redbolt-registry", "acme-app", "development", target)
+	if !errors.Is(err, ErrRegistryImageAbsent) {
+		t.Fatalf("MoveRegistryTag() error = %v, want ErrRegistryImageAbsent", err)
+	}
+	if joined := registryMoveArguments(t, binary); strings.Contains(joined, "cp\x00") || strings.Contains(joined, "\x00mv\x00") {
+		t.Fatalf("move arguments = %q, want no staged link write for an unpushed digest", joined)
+	}
+}
+
+func TestMoveRegistryTagRejectsRevisionMismatch(t *testing.T) {
+	target := "sha256:" + strings.Repeat("a", 64)
+	binary := writeRegistryMoveBinary(t, `#!/bin/sh
+printf '%s
+' "$@" >> "${0%/*}/args"
+if [ "$1" = "exec" ] && [ "$3" = "cat" ]; then
+  case "$5" in
+    */revisions/*) printf 'sha256:%s
+' "0000000000000000000000000000000000000000000000000000000000000000"; exit 0 ;;
+  esac
+fi
+exit 0
+`)
+
+	_, err := (CommandRunner{Binary: binary}).MoveRegistryTag(context.Background(), "redbolt-registry", "acme-app", "development", target)
+	if !errors.Is(err, ErrRegistryImageAbsent) {
+		t.Fatalf("MoveRegistryTag() error = %v, want ErrRegistryImageAbsent", err)
+	}
+}
+
+func TestMoveRegistryTagRejectsTraversal(t *testing.T) {
+	runner := CommandRunner{Binary: "docker"}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, testCase := range []struct {
+		repository string
+		tag        string
+		digest     string
+	}{
+		{"../escape", "good", digest},
+		{"acme-app", "../escape", digest},
+		{"acme-app", "good", "sha256:" + strings.Repeat("a", 64) + "/../escape"},
+		{"acme-app", "good", "not-a-digest"},
+		{"", "good", digest},
+		{"acme-app", "", digest},
+		{"BAD", "good", digest},
+		{"acme-app", "-bad", digest},
+	} {
+		if _, err := runner.MoveRegistryTag(context.Background(), "redbolt-registry", testCase.repository, testCase.tag, testCase.digest); err == nil {
+			t.Fatalf("MoveRegistryTag(%q, %q, %q) error = nil, want invalid", testCase.repository, testCase.tag, testCase.digest)
+		}
+	}
+	if _, err := runner.MoveRegistryTag(context.Background(), "  ", "acme-app", "development", digest); err == nil {
+		t.Fatal("MoveRegistryTag(empty container) error = nil, want container name error")
+	}
+}

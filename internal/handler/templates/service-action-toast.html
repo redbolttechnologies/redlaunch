@@ -3,6 +3,9 @@
   <span class="toast-icon" aria-hidden="true">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else}}…{{end}}</span>
   <div class="toast-copy">
     <strong class="toast-title">{{if eq .State "complete"}}Service {{.Operation}} completed{{else if eq .State "failed"}}Service {{.Operation}} failed{{else}}{{serviceActionPresentTense .Operation}} service <code>{{.ServiceName}}</code>…{{end}}</strong>
+    {{if eq .State "running"}}{{with .Detail}}
+    <p class="toast-detail">{{.}}</p>
+    {{end}}{{end}}
     {{if eq .State "failed"}}
     <p class="toast-detail">{{.ErrorDetail}}</p>
     {{if .ErrorTechnical}}<p class="toast-detail toast-technical"><code>{{.ErrorTechnical}}</code></p>{{end}}

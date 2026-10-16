@@ -202,6 +202,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create registry service: %w", err)
 	}
+	applications.SetVersionRegistryOperations(registry, registry, registry)
 
 	serverSSHKeys, err := service.NewServerSSHKeyService(
 		cfg.ProjectsRoot,

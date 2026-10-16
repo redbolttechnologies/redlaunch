@@ -857,7 +857,36 @@ Verify:
 Rollback: set the `app` (and `migrate`, if any) image back to the previous
 SHA in Redlaunch's service editor, then re-run only the `Pull and restart`
 logic (or click **Restart** in the UI). The immutable SHA tags make the
-previous image addressable.
+previous image addressable. For services that deploy through a moving
+registry tag, switching versions in the UI is the simpler rollback (see 3.4).
+
+### 3.4 Switch versions in Redlaunch
+
+The moving tag a service deploys from (`latest`, `development`, `production`,
+…) can be managed entirely in Redlaunch instead of re-running the workflow's
+pull-and-restart step:
+
+- Open the service (**Applications → application → service**). The
+  **Versions** widget lists the images pushed to the service's repository,
+  grouped by digest, with the tags assigned to each image. The deployed image
+  is flagged; when the deployment tag was moved but the container was not
+  recreated yet, the widget shows a restart notice.
+- **Switch** moves the service's deployment tag to the selected image, pulls
+  it, and recreates the container. If the pull or recreation fails, the tag is
+  restored to its previous image so the registry never disagrees with the
+  running service.
+- **Deploy version** on the application's Services tab moves every eligible
+  service's deployment tag to the image carrying one chosen tag in its own
+  repository, then recreates those services. Services whose repository does
+  not contain the tag are skipped. Use it to deploy one build everywhere (for
+  example `build-42`) or to promote an environment (for example move
+  `production` to whatever `development` points at).
+- The same operations are available through the management API and MCP:
+  `list_service_versions`, `switch_version` (with `digest` or `tag`), and
+  `switch_application_version`.
+
+Services deploy versions only when their image is `localhost:5000/<repository>:<tag>`;
+external registry images have no version listing.
 
 ---
 

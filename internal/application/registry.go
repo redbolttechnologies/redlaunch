@@ -80,6 +80,24 @@ func ValidateRegistryTag(value string) (string, error) {
 	return tag, nil
 }
 
+// ValidateRegistryDigest normalizes one manifest digest reference such as
+// sha256:<64 hex>. It mirrors the Docker distribution digest rules used by
+// the Compose adapter without importing infrastructure code.
+func ValidateRegistryDigest(value string) (string, error) {
+	digest := strings.TrimSpace(value)
+	algorithm, encoded, ok := strings.Cut(digest, ":")
+	if !ok || algorithm != "sha256" || len(encoded) != 64 {
+		return "", ErrRegistryDigestInvalid
+	}
+	for _, character := range encoded {
+		hexDigit := character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
+		if !hexDigit {
+			return "", ErrRegistryDigestInvalid
+		}
+	}
+	return digest, nil
+}
+
 // RegistryImageKey identifies one repository tag for deployed-reference
 // protection.
 func RegistryImageKey(repository, tag string) string {

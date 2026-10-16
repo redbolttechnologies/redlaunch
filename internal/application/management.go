@@ -38,6 +38,8 @@ type ManagementArguments struct {
 	Version       string                  `json:"version"`
 	DefaultUser   string                  `json:"default_user"`
 	Action        string                  `json:"action"`
+	Tag           string                  `json:"tag"`
+	Digest        string                  `json:"digest"`
 }
 
 // ManagementOperations lists only operations supported by the service layer.
@@ -48,7 +50,7 @@ func ManagementOperations() []ManagementOperation {
 		"application_id": id, "domain_id": id, "routing_id": id,
 		"name": str, "folder_name": str, "service_name": str, "original_name": str,
 		"value": str, "owner": str, "username": str, "password": str,
-		"provider": str, "version": str, "default_user": str,
+		"provider": str, "version": str, "default_user": str, "tag": str, "digest": str,
 		"databases":     map[string]any{"type": "array", "items": str},
 		"configuration": managementStructSchema(reflect.TypeFor[ApplicationServiceInput]()),
 		"routing":       managementStructSchema(reflect.TypeFor[RoutingInput]()),
@@ -72,6 +74,9 @@ func ManagementOperations() []ManagementOperation {
 	add("update_service", "Replace a custom application service configuration.", false, []string{"application_id", "service_name", "configuration"})
 	add("delete_service", "Delete a service and its routing.", false, []string{"application_id", "service_name"})
 	add("service_action", "Start, stop, restart, or run a registered service once.", false, []string{"application_id", "service_name", "action"})
+	add("list_service_versions", "List the registry images of a service's repository and the image it currently deploys.", true, []string{"application_id", "service_name"})
+	add("switch_version", "Move a service's deployment tag to a registry image and recreate the service. Pass the image digest, or a tag to resolve within the service's repository.", false, []string{"application_id", "service_name"}, "tag", "digest")
+	add("switch_application_version", "Move every eligible service's deployment tag to the image carrying the given tag in its repository and recreate those services.", false, []string{"application_id", "tag"})
 	add("list_environment", "List environment names only; values are never returned.", true, []string{"application_id"})
 	for _, kind := range []string{"variable", "secret"} {
 		add("add_"+kind, "Add an application "+kind+". Values are not echoed.", false, []string{"application_id", "name", "value"})

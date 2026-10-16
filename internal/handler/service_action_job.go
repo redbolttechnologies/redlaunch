@@ -35,6 +35,8 @@ type serviceActionJob struct {
 	credentialUser string
 	credentialPass string
 	hasCredentials bool
+	deployDigest   string
+	stage          string
 	state          string
 	errorDetail    string
 	errorTechnical string
@@ -47,6 +49,7 @@ type serviceActionProgressData struct {
 	ServiceName    string
 	Operation      string
 	State          string
+	Detail         string
 	ErrorDetail    string
 	ErrorTechnical string
 	StatusURL      string
@@ -191,9 +194,35 @@ func (j *serviceActionJob) snapshot() serviceActionProgressData {
 		ServiceName:    j.serviceName,
 		Operation:      j.operation,
 		State:          j.state,
+		Detail:         j.stage,
 		ErrorDetail:    j.errorDetail,
 		ErrorTechnical: j.errorTechnical,
 	}
+}
+
+// setDeployTarget attaches the selected image digest to a version deployment
+// job. The value is validated before the job starts and is never secret.
+func (j *serviceActionJob) setDeployTarget(digest string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.deployDigest = digest
+}
+
+func (j *serviceActionJob) takeDeployTarget() string {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.deployDigest
+}
+
+// setStage records the running stage so the toast can show what the version
+// deployment is doing while pulls and recreations run.
+func (j *serviceActionJob) setStage(_, message string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.state != serviceActionJobStateRunning {
+		return
+	}
+	j.stage = message
 }
 
 // setCredentials attaches the desired database credentials to a credentials
@@ -232,6 +261,12 @@ func (h *Handler) runServiceActionJob(ctx context.Context, job *serviceActionJob
 		err = h.serviceActions.RestartService(ctx, job.applicationID, job.serviceName)
 	case "run":
 		err = h.serviceActions.RunServiceOnce(ctx, job.applicationID, job.serviceName)
+	case "deploy":
+		if h.versionDeploys == nil {
+			err = errors.New("version deployment service is not configured")
+			break
+		}
+		err = h.versionDeploys.DeployServiceVersion(ctx, job.applicationID, job.serviceName, job.takeDeployTarget(), job.setStage)
 	case "credentials":
 		err = h.runPostgresCredentialsJob(ctx, job)
 	default:

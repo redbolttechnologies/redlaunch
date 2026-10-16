@@ -362,6 +362,9 @@ only management inventory and job polling.
 | `update_service` | `application_id`, `service_name`, `configuration` |
 | `delete_service` | `application_id`, `service_name` |
 | `service_action` | `application_id`, `service_name`, `action` (`start`, `stop`, `restart`, or `run`) |
+| `list_service_versions` | `application_id`, `service_name` |
+| `switch_version` | `application_id`, `service_name`, and `digest` or `tag` (the tag is resolved inside the service's repository) |
+| `switch_application_version` | `application_id`, `tag` |
 | `add_variable`, `add_secret` | `application_id`, `name`, `value` |
 | `update_variable`, `update_secret` | `application_id`, `original_name`, `name`, `value` |
 | `delete_variable`, `delete_secret`, `create_domain`, `delete_domain` | `application_id`, `name` |
