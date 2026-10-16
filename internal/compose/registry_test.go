@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeRegistryFixture(t *testing.T, root, linkPath, digest string) {
@@ -431,4 +432,49 @@ func TestReadRegistryContentsIncludesUntaggedRevisions(t *testing.T) {
 	if got[1].Repository != "nested/web" || got[1].Digest != digestA || got[1].Tag != "" || got[1].PushedAt.IsZero() {
 		t.Fatalf("untagged image = %#v", got[1])
 	}
+}
+
+func TestReadRegistryContentsPreservesManifestPushTimeAfterTagMove(t *testing.T) {
+	root := t.TempDir()
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+	pushedA := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	pushedB := pushedA.Add(time.Hour)
+	switchedAt := pushedA.Add(24 * time.Hour)
+	writeLink := func(path, digest string, timestamp time.Time) {
+		writeRegistryFixture(t, root, path, digest)
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.Chtimes(full, timestamp, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLink("web/_manifests/revisions/sha256/"+strings.Repeat("a", 64)+"/link", digestA, pushedA)
+	writeLink("web/_manifests/revisions/sha256/"+strings.Repeat("b", 64)+"/link", digestB, pushedB)
+	tagPath := "web/_manifests/tags/production/current/link"
+	writeLink(tagPath, digestB, pushedB)
+	check := func(wantTagged string, wantTagTime time.Time) {
+		t.Helper()
+		contents, err := readRegistryContents(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(contents) != 2 {
+			t.Fatalf("contents = %#v, want both images", contents)
+		}
+		for _, content := range contents {
+			wantPushTime := pushedA
+			if content.Digest == digestB {
+				wantPushTime = pushedB
+			}
+			if !content.ManifestPushedAt.Equal(wantPushTime) {
+				t.Fatalf("manifest time for %s = %v, want %v", content.Digest, content.ManifestPushedAt, wantPushTime)
+			}
+			if content.Digest == wantTagged && (content.Tag != "production" || !content.PushedAt.Equal(wantTagTime)) {
+				t.Fatalf("tag assignment = %#v, want production at %v", content, wantTagTime)
+			}
+		}
+	}
+	check(digestB, pushedB)
+	writeLink(tagPath, digestA, switchedAt)
+	check(digestA, switchedAt)
 }

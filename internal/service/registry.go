@@ -107,11 +107,15 @@ func (s *RegistryService) listRegistryImages(ctx context.Context, includeUntagge
 		if content.Tag == "" && !includeUntagged {
 			continue
 		}
+		pushedAt := content.PushedAt
+		if includeUntagged {
+			pushedAt = content.ManifestPushedAt
+		}
 		images = append(images, application.RegistryImage{
 			Repository: content.Repository,
 			Tag:        content.Tag,
 			Digest:     content.Digest,
-			PushedAt:   content.PushedAt,
+			PushedAt:   pushedAt,
 		})
 	}
 	sort.Slice(images, func(left, right int) bool {

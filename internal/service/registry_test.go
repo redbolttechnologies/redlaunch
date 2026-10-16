@@ -167,3 +167,52 @@ func TestRegistryServicePurgeRequiresDeleter(t *testing.T) {
 		t.Fatal("PurgeRepository() error = nil, want missing deleter error")
 	}
 }
+
+func TestRegistryVersionImagesUseManifestPushTime(t *testing.T) {
+	pushed := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	switched := pushed.Add(24 * time.Hour)
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{contents: []compose.RegistryContent{
+		{Repository: "web", Tag: "production", Digest: "sha256:aaaa", PushedAt: switched, ManifestPushedAt: pushed},
+		{Repository: "web", Digest: "sha256:bbbb", PushedAt: pushed.Add(time.Hour), ManifestPushedAt: pushed.Add(time.Hour)},
+		// Missing revision metadata must not present a tag move as a push.
+		{Repository: "web", Tag: "legacy", Digest: "sha256:cccc", PushedAt: switched},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	images, err := registry.ListRegistryVersionImages(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 3 {
+		t.Fatalf("version images = %#v, want 3", images)
+	}
+	for _, image := range images {
+		if image.Tag == "legacy" {
+			if !image.PushedAt.IsZero() {
+				t.Fatalf("missing revision time = %v, want unknown", image.PushedAt)
+			}
+		} else {
+			want := pushed
+			if image.Tag == "" {
+				want = pushed.Add(time.Hour)
+			}
+			if !image.PushedAt.Equal(want) {
+				t.Fatalf("version push time = %v, want %v", image.PushedAt, want)
+			}
+		}
+	}
+	versions := application.GroupRegistryVersions(images, "web")
+	if versions[0].Digest != "sha256:bbbb" || versions[1].Digest != "sha256:aaaa" {
+		t.Fatalf("version order = %#v, want push order independent of the tag move", versions)
+	}
+	tags, err := registry.ListRegistryImages(t.Context())
+	if err != nil || len(tags) != 2 {
+		t.Fatalf("tags = %#v, %v, want two tagged images", tags, err)
+	}
+	for _, tag := range tags {
+		if !tag.PushedAt.Equal(switched) {
+			t.Fatalf("retention timestamp = %v, want tag assignment time %v", tag.PushedAt, switched)
+		}
+	}
+}

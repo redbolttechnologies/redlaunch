@@ -145,7 +145,8 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
 - Manage service versions on the service's Versions list: the pushed images of
   its repository are grouped by digest with their tags (including untagged
-  images retained in the registry), the deployed image is
+  images retained in the registry). Pushed times come from manifest revisions
+  and stay unchanged when switching versions. The deployed image is
   flagged, and switching moves the service's deployment tag (for example
   `development` or `production`) to the selected image and recreates the
   service. An application-wide **Deploy version** action moves every service's

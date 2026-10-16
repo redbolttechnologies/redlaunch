@@ -39,6 +39,9 @@ type RegistryContent struct {
 	Tag        string
 	Digest     string
 	PushedAt   time.Time
+	// ManifestPushedAt is the revision link time, independent of tag moves.
+	// It is zero when the retained revision could not be found.
+	ManifestPushedAt time.Time
 }
 
 // ListRegistryContents returns tagged images and retained untagged manifest
@@ -314,11 +317,20 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 	if err != nil && !errors.Is(err, errRegistryImageLimit) {
 		return nil, fmt.Errorf("read copied registry repositories: %w", err)
 	}
+	revisionTimes := make(map[string]time.Time, len(revisions))
+	for _, revision := range revisions {
+		revisionTimes[revision.Repository+"\x00"+revision.Digest] = revision.PushedAt
+	}
+	for index := range contents {
+		content := &contents[index]
+		content.ManifestPushedAt = revisionTimes[content.Repository+"\x00"+content.Digest]
+	}
 	for _, revision := range revisions {
 		if len(contents) >= maxRegistryImages {
 			break
 		}
 		if !tagged[revision.Repository+"\x00"+revision.Digest] {
+			revision.ManifestPushedAt = revision.PushedAt
 			contents = append(contents, revision)
 		}
 	}

@@ -11,9 +11,9 @@ import (
 type RegistryVersion struct {
 	Digest string
 	Tags   []string
-	// PushedAt is the newest tag assignment time, or the revision time for
-	// an untagged image. It orders the versions listing and may be zero
-	// when the time could not be read.
+	// PushedAt is the registry manifest revision time, independent of tag
+	// assignments. It orders the versions listing and may be zero when
+	// the revision time could not be read.
 	PushedAt time.Time
 }
 
