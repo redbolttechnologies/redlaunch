@@ -104,6 +104,8 @@
     const confirmation = dialog.querySelector("[data-service-delete-confirmation]");
     const submitButton = dialog.querySelector("[data-service-delete-submit]");
     const closeButtons = dialog.querySelectorAll("[data-service-delete-close]");
+    const volumes = dialog.querySelector("fieldset");
+    let volumesLoading = false;
     let returnFocus = null;
 
     const syncSubmitState = () => {
@@ -111,7 +113,7 @@
         return;
       }
       confirmation.setCustomValidity("");
-      submitButton.disabled = confirmation.value !== serviceName;
+      submitButton.disabled = volumesLoading || confirmation.value !== serviceName;
     };
 
     const cleanup = () => {
@@ -132,6 +134,14 @@
     };
 
     const openDialog = () => {
+      volumesLoading = Boolean(openButton.getAttribute("hx-get"));
+      if (volumes) {
+        volumes.querySelectorAll("input[type=checkbox]").forEach((checkbox) => {
+          checkbox.checked = false;
+          checkbox.disabled = true;
+        });
+        volumes.setAttribute("aria-busy", volumesLoading ? "true" : "false");
+      }
       returnFocus = openButton;
       const menu = openButton.closest(".service-actions-menu");
       if (menu) {
@@ -155,6 +165,21 @@
     };
 
     openButton.addEventListener("click", openDialog);
+    openButton.addEventListener("htmx:afterRequest", (event) => {
+      volumesLoading = false;
+      if (volumes) {
+        volumes.setAttribute("aria-busy", "false");
+        if (!event.detail.successful) {
+          const legend = document.createElement("legend");
+          legend.textContent = "Volume data";
+          const message = document.createElement("p");
+          message.className = "field-help";
+          message.textContent = "Volume choices could not be loaded. A new deletion will retain all volume data. An interrupted deletion will resume with its original volume selections.";
+          volumes.replaceChildren(legend, message);
+        }
+      }
+      syncSubmitState();
+    });
     closeButtons.forEach((closeButton) => {
       closeButton.addEventListener("click", closeDialog);
     });
@@ -173,6 +198,10 @@
     }
     if (form) {
       form.addEventListener("submit", (event) => {
+        if (volumesLoading) {
+          event.preventDefault();
+          return;
+        }
         if (!confirmation || confirmation.value !== serviceName) {
           event.preventDefault();
           if (confirmation) {

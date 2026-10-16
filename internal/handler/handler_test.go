@@ -17,6 +17,7 @@ import (
 	"redlaunch/internal/application"
 	redlaunchauth "redlaunch/internal/auth"
 	systemmetrics "redlaunch/internal/metrics"
+	"redlaunch/internal/service"
 )
 
 type fakeSetupManager struct {
@@ -897,8 +898,8 @@ func (m *fakeSetupManager) SetupWithProgress(ctx context.Context, installProxy, 
 	return m.Setup(ctx, installProxy, installRegistry)
 }
 
-func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
-	web, err := New(nil)
+func TestIndexRendersDashboardWithApplicationsMenuItem(t *testing.T) {
+	web, err := New(nil, &fakeDashboardMetricsService{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,8 +955,8 @@ func TestIndexRendersEmptyMainPageWithApplicationsMenuItem(t *testing.T) {
 	if mainHeaderStart < 0 || mainHeaderEnd < 0 || serverInfoStart < mainHeaderStart || serverInfoStart > mainHeaderStart+mainHeaderEnd {
 		t.Fatalf("GET / rendered the server info outside the main header: %s", body)
 	}
-	if strings.Contains(body, "<h1") {
-		t.Fatalf("GET / rendered page content even though the main page should be empty: %s", body)
+	if !strings.Contains(body, `<h1 id="page-title">Dashboard</h1>`) || !strings.Contains(body, `href="/dashboard" aria-current="page"`) {
+		t.Fatalf("GET / did not render the active Dashboard: %s", body)
 	}
 }
 
@@ -963,6 +964,7 @@ func TestDashboardRendersServerMetricsAndFirstNavigationItem(t *testing.T) {
 	dashboard := &fakeDashboardMetricsService{snapshot: systemmetrics.Snapshot{
 		CPUUsagePercent: 37.5,
 		Memory: systemmetrics.Memory{
+			TotalBytes:     8 * 1024 * 1024 * 1024,
 			AvailableBytes: 3 * 1024 * 1024 * 1024,
 			UsedBytes:      5 * 1024 * 1024 * 1024,
 			FreeBytes:      1 * 1024 * 1024 * 1024,
@@ -980,7 +982,7 @@ func TestDashboardRendersServerMetricsAndFirstNavigationItem(t *testing.T) {
 		},
 		CollectedAt: time.Date(2026, time.September, 2, 12, 34, 56, 0, time.UTC),
 	}}
-	web, err := New(nil, dashboard)
+	web, err := New(nil, dashboard, &fakeDashboardDocker{snapshot: service.DockerDashboard{Containers: []service.ContainerUsage{{Name: "worker<one>", Status: "running", Running: true, Available: true, CPUPercent: 82.4, MemoryBytes: 2 * 1024 * 1024}}, ImageCount: 12, ImageBytes: 6 * 1024 * 1024 * 1024}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,20 +1000,19 @@ func TestDashboardRendersServerMetricsAndFirstNavigationItem(t *testing.T) {
 		`>CPU usage</h2>`,
 		`>Memory usage</h2>`,
 		`>Disk usage</h2>`,
-		`>Available</dt>`,
-		`>Used</dt>`,
-		`>Free</dt>`,
 		`37.5%`,
 		`3.0 GB`,
 		`5.0 GB`,
-		`1.0 GB`,
 		`12.0 GB`,
 		`8.0 GB`,
-		`Top 10 most CPU-intensive processes`,
-		`Top 10 most memory-consuming processes`,
+		`Services resource usage`,
+		`Storage volumes`,
+		`Docker images`,
+		`Prune unused images`,
+		`Service resource trends`,
 		`worker&lt;one&gt;`,
-		`>101</code>`,
-		`12.5%`,
+		`82.4%`,
+		`12`,
 		`/static/htmx.min.js`,
 		`hx-get="/dashboard/metrics"`,
 		`hx-trigger="every 10s"`,
@@ -1040,13 +1041,14 @@ func TestDashboardMetricsFragmentRendersOnlyMetrics(t *testing.T) {
 	dashboard := &fakeDashboardMetricsService{snapshot: systemmetrics.Snapshot{
 		CPUUsagePercent: 11.2,
 		Memory: systemmetrics.Memory{
+			TotalBytes:     1024 * 1024 * 1024,
 			AvailableBytes: 256 * 1024 * 1024,
 			UsedBytes:      768 * 1024 * 1024,
 			FreeBytes:      128 * 1024 * 1024,
 		},
 		CollectedAt: time.Date(2026, time.September, 2, 13, 0, 0, 0, time.UTC),
 	}}
-	web, err := New(nil, dashboard)
+	web, err := New(nil, dashboard, &fakeDashboardDocker{snapshot: service.DockerDashboard{Containers: []service.ContainerUsage{{Name: "worker<one>", Status: "running", Running: true, Available: true, CPUPercent: 82.4, MemoryBytes: 2 * 1024 * 1024}}, ImageCount: 12, ImageBytes: 6 * 1024 * 1024 * 1024}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1063,7 @@ func TestDashboardMetricsFragmentRendersOnlyMetrics(t *testing.T) {
 	if strings.Contains(body, "<html") || strings.Contains(body, `class="sidebar"`) {
 		t.Fatalf("GET /dashboard/metrics rendered the full page: %s", body)
 	}
-	for _, expected := range []string{`11.2%`, `256.0 MB`, `768.0 MB`, `Top 10 most CPU-intensive processes`} {
+	for _, expected := range []string{`11.2%`, `256.0 MB`, `768.0 MB`, `Services resource usage`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /dashboard/metrics did not render %q: %s", expected, body)
 		}
@@ -1080,7 +1082,7 @@ func TestDashboardRendersMetricsScopeAndStaleState(t *testing.T) {
 		CollectedAt: time.Now().UTC(),
 		Stale:       true,
 	}}
-	web, err := New(nil, dashboard)
+	web, err := New(nil, dashboard, &fakeDashboardDocker{snapshot: service.DockerDashboard{Containers: []service.ContainerUsage{{Name: "worker<one>", Status: "running", Running: true, Available: true, CPUPercent: 82.4, MemoryBytes: 2 * 1024 * 1024}}, ImageCount: 12, ImageBytes: 6 * 1024 * 1024 * 1024}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3646,13 +3648,20 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 		`Update credentials`,
 		`action="/applications/7/services/db/credentials"`,
 		`id="postgres-credentials-dialog"`,
+		`data-service-delete-open`,
+		`id="service-delete-dialog-1"`,
+		`action="/applications/7/services/db/delete"`,
+		`hx-get="/applications/7/services/db/delete/volumes"`,
+		`/static/htmx.min.js`,
+		`/static/service-menu.js`,
+		`Type <code>db</code> to confirm`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /applications/7/services/db did not render %q: %s", expected, body)
 		}
 	}
-	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 5 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 5", got)
+	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 6 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 6", got)
 	}
 	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 4 {
 		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 4", got)

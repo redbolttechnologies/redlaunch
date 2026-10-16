@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -786,18 +787,24 @@ func (s *Store) BeginServiceDeletion(ctx context.Context, applicationID int64, s
 func (s *Store) GetServiceDeletion(ctx context.Context, applicationID int64, serviceName string) (application.ServiceDeletionIntent, error) {
 	var intent application.ServiceDeletionIntent
 	var createdAt, updatedAt string
+	var volumes sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT application_id, service_name, stage, state,
-			last_error, created_at, updated_at
+			last_error, created_at, updated_at, volumes
 		FROM service_deletion_intents
 		WHERE application_id = ? AND service_name = ?`, applicationID, serviceName).Scan(
 		&intent.ApplicationID, &intent.ServiceName, &intent.Stage,
-		&intent.State, &intent.LastError, &createdAt, &updatedAt)
+		&intent.State, &intent.LastError, &createdAt, &updatedAt, &volumes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.ServiceDeletionIntent{}, application.ErrServiceNotFound
 	}
 	if err != nil {
 		return application.ServiceDeletionIntent{}, fmt.Errorf("get service deletion: %w", err)
+	}
+	if volumes.Valid {
+		if err := json.Unmarshal([]byte(volumes.String), &intent.Volumes); err != nil {
+			return application.ServiceDeletionIntent{}, fmt.Errorf("decode service deletion volumes: %w", err)
+		}
 	}
 	intent.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
@@ -2224,6 +2231,60 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("create proxy settings: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(25,?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	var oauthApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 26`).Scan(&oauthApplied); err != nil {
+		return fmt.Errorf("check OAuth migration: %w", err)
+	}
+	if oauthApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `
+			CREATE TABLE oauth_clients (
+				client_id TEXT PRIMARY KEY,
+				display_name TEXT NOT NULL,
+				redirect_uris TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);
+			CREATE TABLE oauth_grants (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				client_id TEXT NOT NULL REFERENCES oauth_clients (client_id) ON DELETE CASCADE,
+				display_name TEXT NOT NULL,
+				resource TEXT NOT NULL,
+				scope TEXT NOT NULL,
+				application_id INTEGER REFERENCES applications (id) ON DELETE CASCADE,
+				access_token_id INTEGER NOT NULL UNIQUE REFERENCES api_tokens (id) ON DELETE CASCADE,
+				refresh_token_hash BLOB NOT NULL UNIQUE,
+				previous_refresh_token_hash BLOB,
+				rotated_at TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL,
+				refresh_idle_expires_at TEXT NOT NULL,
+				absolute_expires_at TEXT NOT NULL,
+				CHECK ((scope = 'manage' AND application_id IS NULL) OR (scope = 'run' AND application_id IS NOT NULL))
+			);
+			CREATE INDEX idx_oauth_grants_client_id ON oauth_grants (client_id);
+			CREATE TABLE oauth_superseded_refresh_tokens (
+				refresh_token_hash BLOB PRIMARY KEY,
+				grant_id INTEGER NOT NULL REFERENCES oauth_grants (id) ON DELETE CASCADE,
+				superseded_at TEXT NOT NULL
+			);
+			CREATE INDEX idx_oauth_superseded_refresh_tokens_grant_id ON oauth_superseded_refresh_tokens (grant_id);
+		`); err != nil {
+			return fmt.Errorf("create OAuth tables: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (26, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record OAuth migration: %w", err)
+		}
+	}
+	var serviceVolumesApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 27`).Scan(&serviceVolumesApplied); err != nil {
+		return err
+	}
+	if serviceVolumesApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE service_deletion_intents ADD COLUMN volumes TEXT`); err != nil {
+			return fmt.Errorf("migrate service deletion volumes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (27, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}

@@ -32,7 +32,7 @@ func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
 		// the API prefix. Browsers cannot set the Authorization header from
 		// cross-site contexts, so exempting the prefix does not weaken CSRF
 		// protection for session-authenticated routes.
-		if isAPITokenPath(r) {
+		if isAPITokenPath(r) || isOAuthMachinePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -48,6 +48,12 @@ func (h *Handler) withCSRFProtection(next http.Handler) http.Handler {
 
 func (h *Handler) withOriginCheck(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// MCP validates Origin against its advertised OAuth resource origin on
+		// every method, including loopback tunnels with secure browser cookies.
+		if isMCPMachinePath(r.URL.Path) && !strings.HasPrefix(r.URL.Path, protectedResourcePrefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
@@ -231,12 +237,14 @@ func (h *Handler) expireSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const defaultContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://googleusercontent.com https://*.googleusercontent.com; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
 func (h *Handler) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://googleusercontent.com https://*.googleusercontent.com; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", defaultContentSecurityPolicy)
 		next.ServeHTTP(w, r)
 	})
 }

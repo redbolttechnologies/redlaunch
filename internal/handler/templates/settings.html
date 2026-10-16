@@ -13,14 +13,16 @@
 
   <div class="application-tabs settings-tabs" data-application-tabs>
     <div class="application-tablist settings-tablist" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
-      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive}}false{{else}}true{{end}}" tabindex="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive}}-1{{else}}0{{end}}" data-application-tab="domains-panel">Domains</button>
+      <button class="application-tab" id="domains-tab" type="button" role="tab" aria-controls="domains-panel" aria-selected="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive .SettingsPage.MCPActive}}false{{else}}true{{end}}" tabindex="{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive .SettingsPage.MCPActive}}-1{{else}}0{{end}}" data-application-tab="domains-panel">Domains</button>
       <button class="application-tab" id="ssh-keys-tab" type="button" role="tab" aria-controls="ssh-keys-panel" aria-selected="{{if .SettingsPage.SSHActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.SSHActive}}0{{else}}-1{{end}}" data-application-tab="ssh-keys-panel">SSH keys</button>
       <button class="application-tab" id="api-tokens-tab" type="button" role="tab" aria-controls="api-tokens-panel" aria-selected="{{if .SettingsPage.APITokensActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.APITokensActive}}0{{else}}-1{{end}}" data-application-tab="api-tokens-panel">API tokens</button>
+      {{if .SettingsPage.MCPEnabled}}<button class="application-tab" id="mcp-tab" type="button" role="tab" aria-controls="mcp-panel" aria-selected="{{if .SettingsPage.MCPActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.MCPActive}}0{{else}}-1{{end}}" data-application-tab="mcp-panel">MCP connections</button>{{end}}
       <button class="application-tab" id="users-tab" type="button" role="tab" aria-controls="users-panel" aria-selected="{{if .SettingsPage.UsersActive}}true{{else}}false{{end}}" tabindex="{{if .SettingsPage.UsersActive}}0{{else}}-1{{end}}" data-application-tab="users-panel">Users</button>
       <button class="application-tab" id="software-update-tab" type="button" role="tab" aria-controls="software-update-panel" aria-selected="false" tabindex="-1" data-application-tab="software-update-panel">Software update</button>
     </div>
 
-    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive}} hidden{{end}}>
+    <section class="application-tab-panel" id="domains-panel" role="tabpanel" aria-labelledby="domains-tab" tabindex="0"{{if or .SettingsPage.SSHActive .SettingsPage.APITokensActive .SettingsPage.UsersActive .SettingsPage.MCPActive}} hidden{{end}}>
+      {{template "settings-management-access" .}}
       <section class="service-widget settings-public-access" aria-labelledby="public-access-title">
         <header class="service-widget-header">
           <div class="service-widget-heading">
@@ -194,6 +196,7 @@
       </section>
     </section>
 
+    {{if .SettingsPage.MCPEnabled}}{{template "settings-mcp" .}}{{end}}
     {{template "settings-users" .}}
 
     <section class="application-tab-panel" id="software-update-panel" role="tabpanel" aria-labelledby="software-update-tab" tabindex="0" hidden>
@@ -216,6 +219,7 @@
 </section>
 
 {{template "user-dialogs" .}}
+{{if .SettingsPage.MCPEnabled}}{{template "mcp-connection-dialog" .}}{{end}}
 
 <dialog class="application-dialog domain-edit-dialog" id="domain-edit-dialog" data-domain-edit-dialog{{with .SettingsPage.DomainEdit}}{{if .Open}} data-domain-edit-open{{end}}{{end}} aria-modal="true" aria-labelledby="domain-edit-dialog-title" aria-describedby="domain-edit-dialog-description">
   <div class="application-dialog-panel">

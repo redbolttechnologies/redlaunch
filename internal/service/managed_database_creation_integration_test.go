@@ -127,4 +127,27 @@ func TestManagedDatabaseCreationPostgresPermissions(t *testing.T) {
 	if _, err := compose(ctx, "exec", "-T", "-e", "PGPASSWORD="+first.Credentials.Password, "postgres", "psql", "-X", "-h", "127.0.0.1", "-U", "analytics", "-d", "reused", "-c", "SELECT 1"); err != nil {
 		t.Fatal("existing user password was changed")
 	}
+	workspace := &workspaceRunnerFake{managedDatabasesRunnerFake: runner, queryFunc: func(database, owner, statement string) (string, error) {
+		return compose(ctx, "exec", "-T", "postgres", "psql", "-X", "--csv", "--quiet", "--pset", "footer=off", "--set", "ON_ERROR_STOP=1", "--username="+owner, "--dbname="+database, "-c", statement)
+	}}
+	managed.runner = workspace
+	if _, err := workspace.queryFunc("analytics", "analytics", `ALTER TABLE sample ADD COLUMN dropped text; ALTER TABLE sample ADD COLUMN id integer; ALTER TABLE sample DROP COLUMN dropped; CREATE VIEW sample_view AS SELECT id FROM sample; CREATE TABLE zero_columns ();`); err != nil {
+		t.Fatal("could not initialize disposable column metadata fixtures")
+	}
+	_, schemas, err := managed.GetDatabaseWorkspace(ctx, "analytics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schemas) != 1 || schemas[0].Name != "public" || len(schemas[0].Tables) != 3 {
+		t.Fatalf("unexpected real database metadata: %#v", schemas)
+	}
+	if columns := strings.Join(schemas[0].Tables[0].Columns, ","); columns != "value,id" {
+		t.Fatalf("dropped/system columns included or ordinal order changed: %s", columns)
+	}
+	if columns := strings.Join(schemas[0].Tables[1].Columns, ","); columns != "id" {
+		t.Fatalf("view columns not listed: %s", columns)
+	}
+	if len(schemas[0].Tables[2].Columns) != 0 {
+		t.Fatal("zero-column table metadata was lost")
+	}
 }

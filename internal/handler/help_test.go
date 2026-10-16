@@ -17,7 +17,7 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
-func TestMCPHelpOpenCodeExamplesUseNamedServerMap(t *testing.T) {
+func TestMCPHelpOpenCodeExamplesUseV2ServerMap(t *testing.T) {
 	source, err := documentation.Files.ReadFile("MCP.md")
 	if err != nil {
 		t.Fatal(err)
@@ -34,20 +34,34 @@ func TestMCPHelpOpenCodeExamplesUseNamedServerMap(t *testing.T) {
 		if config.MCP == nil {
 			continue // Other clients use a different configuration format.
 		}
-		if _, wrapped := config.MCP["servers"]; wrapped {
-			t.Fatal("OpenCode examples must put named servers directly under mcp")
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(config.MCP["servers"], &servers); err != nil || servers["redlaunch"] == nil {
+			t.Fatal("OpenCode V2 examples must put named servers under mcp.servers")
 		}
 		var server struct {
-			Type        string            `json:"type"`
-			Command     []string          `json:"command"`
-			Enabled     bool              `json:"enabled"`
+			Type    string   `json:"type"`
+			Command []string `json:"command"`
+			URL     string   `json:"url"`
+			OAuth   struct {
+				Scope string `json:"scope"`
+			} `json:"oauth"`
+			Headers     map[string]string `json:"headers"`
 			Environment map[string]string `json:"environment"`
 		}
-		if err := json.Unmarshal(config.MCP["redlaunch"], &server); err != nil {
+		if err := json.Unmarshal(servers["redlaunch"], &server); err != nil {
 			t.Fatalf("missing or invalid redlaunch server entry: %v", err)
 		}
-		if server.Type != "local" || !server.Enabled || len(server.Command) < 2 || server.Command[1] != "mcp" {
-			t.Fatal("OpenCode example cannot launch the local Redlaunch MCP server")
+		switch server.Type {
+		case "local":
+			if len(server.Command) < 2 || server.Command[1] != "mcp" {
+				t.Fatal("OpenCode example cannot launch the local Redlaunch MCP server")
+			}
+		case "remote":
+			if server.URL != "https://your-vps.example.com/mcp/manage" || server.OAuth.Scope != "manage" || len(server.Headers) != 0 || len(server.Environment) != 0 {
+				t.Fatal("remote OpenCode example must use OAuth and URL configuration without credentials")
+			}
+		default:
+			t.Fatal("OpenCode example has an unknown transport")
 		}
 		for key, value := range server.Environment {
 			if value != "{env:"+key+"}" {

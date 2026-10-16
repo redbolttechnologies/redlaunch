@@ -9,6 +9,26 @@ Redlaunch is built with Go, SQLite, server-rendered HTML, HTMX, and a small
 amount of Alpine.js. It runs as a single application and manages Docker through
 the host's Docker socket.
 
+## Deleting a service
+
+Choose **Delete** from the application's service-list context menu, or **Delete
+service** on the service details page. Type the service name exactly to confirm.
+The container is stopped and removed, its Compose definition and metadata are
+deleted, and its routing and scheduled backups are cleaned up.
+
+Volume data is **retained by default**. Check individual named volumes in the
+confirmation dialog to permanently delete their data. Only exclusively used,
+project-owned, non-external volumes are eligible. Shared volumes, external
+volumes, anonymous volumes, bind-mounted directories, and backup files are
+retained. Docker refuses removal of a volume still in use by another container.
+If volume choices cannot be loaded, a new service deletion retains all volume
+data; a retry still uses the original saved selections.
+
+Deletion progress shows failures. Retry deletion from the application service
+list to resume an interrupted operation; the original volume selections are
+saved and cannot be changed on retry. Existing API deletion calls retain volume
+data for new operations.
+
 ## Installation
 
 Download and run the installer as the user that should own the Redlaunch
@@ -86,12 +106,13 @@ For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
 
-Connect your coding assistant to Redlaunch with `redlaunch mcp`. The
-[Redlaunch MCP guide](MCP.md) walks through prerequisites, setup for Codex,
-OpenCode, and Claude Code, your first workflow request, and an optional
-connection to your VPS for checking progress and running one-off services.
-Use a separate server-wide management token to manage applications, services,
-environment values, routing, and managed databases.
+Connect OpenCode, Codex, or Claude Code to your VPS by adding its MCP URL and
+signing in to Redlaunch in your browser. No API token or token environment
+variables are needed. Follow the [MCP browser sign-in guide](MCP.md#connect-to-your-server-with-browser-sign-in)
+to choose server-wide management or application-only service runs and set up
+your assistant. The [full MCP guide](MCP.md) also covers the existing local
+`redlaunch mcp` setup for offline guides, workflow generation, and token-based
+stdio connections.
 
 Open **Help** in the sidebar (or visit `/help`) for Getting started, First
 steps, how-to guides, and troubleshooting. The online help includes these
@@ -157,6 +178,43 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   tab keeps the selected database while editing schedules or managing backup
   history, with confirmation before restoring or deleting a backup. Settings
   separates cluster details and runtime controls from the disable action.
+- Click a database name on **Databases → Databases** to open its SQL workspace.
+  Schemas and tables appear on the left, with an SQL editor above query results
+  on the right. Expand a table to see its columns in database order. Right-click
+  a table (or use its actions button or Shift+F10) and choose
+  **Show data (max. 1000 rows)** to load and automatically execute a quoted
+  SELECT script. Edited SQL and write operations require **Run Query** or
+  Ctrl/⌘+Enter; writes take effect immediately. The console includes table
+  search, syntax highlighting, line numbers, and a whitespace-only formatter
+  (Ctrl/⌘+K or Query actions → Format SQL). Results paginate locally in groups
+  of 25 rows and can be downloaded as CSV or JSON without rerunning the query.
+  CSV downloads protect spreadsheet formula-like values; JSON preserves the
+  displayed values. **Refresh schemas and tables** reloads the schema
+  browser after schema changes and clears the editor/results. Queries run as
+  the database owner through the container's local socket, not as the cluster
+  administrator. Administrative owners and owners with host-file/program
+  privileges cannot use the workspace. SQL execution uses a 30-second
+  statement timeout, a 5-second lock timeout, and a 4 MiB output limit. Tabular
+  results display at most 1000 rows; use LIMIT in custom queries to bound work.
+  Multi-result scripts with differing column counts display escaped text output.
+  psql backslash commands are not supported.
+- **Import dump file…** opens a confirmation dialog for restoring into the
+  selected managed database. Plain UTF-8 `.sql` and PostgreSQL custom-format
+  dumps (`pg_dump -Fc`, commonly `.dump` or `.backup`) are supported, up to
+  32 MiB. Externally compressed (.gz/.zip), tar, and directory-format dumps are
+  not supported; compression inside custom-format archives is supported.
+  Take a backup first and import only trusted files. Generate portable SQL
+  dumps with `pg_dump --no-owner --no-privileges`; custom imports ignore ownership
+  and grants. SQL import requires a current PostgreSQL client supporting psql
+  restricted mode (PostgreSQL 17.6 / 16.10 / 15.14 or newer); older clients fail
+  closed. COPY data is supported, but shell/file/connection-switching psql
+  commands are blocked. Restores execute as the non-administrative database
+  owner, stop at the first error, and use a single transaction and a 10-minute
+  execution deadline. Explicit transaction control in SQL dumps can prevent
+  complete rollback. Existing conflicting objects are not automatically
+  dropped, and source roles are not created. Successful import refreshes the
+  workspace and displays a confirmation toast; dump contents are not displayed
+  or retained by Redlaunch after the request.
 - Schedule, restore, download, and remove PostgreSQL backups.
 - Update a PostgreSQL service's database user and password from its service
   details page. The live database role is updated first, then the managed
@@ -283,6 +341,23 @@ only after deliberately adding read-only host mounts and setting
 `METRICS_PROC_ROOT` and `METRICS_FILESYSTEM_ROOT` to their in-container paths.
 Running the binary directly on a VPS can use `METRICS_SCOPE=vps` with the
 default `/proc` and `/` paths.
+
+After setup, `/` opens the Dashboard. The dashboard lists individual containers
+labeled `redlaunch.managed=true`, with core projects first, shows their application
+names, and reports CPU, working-set memory, cumulative network traffic, and
+Docker status. These values come from the local Docker Engine at
+`/var/run/docker.sock`, independently of the host-metrics scope. Attached named
+volumes show their owning application names and actual used bytes; bind mounts
+and per-volume capacity estimates are excluded. Shared volumes list every owning
+application, and core resources show `Core`. Trends retain up to one hour of
+dashboard observations in memory and reset when the manager restarts; collection
+occurs on dashboard refreshes.
+
+**Prune unused images** requires confirmation and removes all local Docker
+images not referenced by any container, including tagged images. Images used
+by running or stopped containers are retained. Containers, volumes, networks,
+and registry tags are not pruned. Deleted images must be pulled or rebuilt
+before future use. The dashboard reports reclaimed bytes after cleanup.
 
 See [.env.example](.env.example) for the authentication settings. Environment
 variables override values loaded from `.env`.

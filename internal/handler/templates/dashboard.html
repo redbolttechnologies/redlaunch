@@ -1,193 +1,114 @@
-{{define "dashboard.html"}}
-{{template "layout" .}}
-{{end}}
+{{define "dashboard.html"}}{{template "layout" .}}{{end}}
 
 {{define "dashboard-content.html"}}
 <section class="dashboard-page" data-dashboard aria-labelledby="page-title">
   <header class="page-heading">
     <div class="page-heading-copy">
       <h1 id="page-title">Dashboard</h1>
-      <p>Monitor the resources visible to the Redlaunch manager.</p>
+      <p>Monitor resource usage, storage and services running on your Redlaunch server.</p>
     </div>
-    <p class="dashboard-refresh-note" role="status" aria-live="polite">Refreshes every 10 seconds. <span class="dashboard-refresh-indicator" id="dashboard-refresh-indicator">Updating…</span></p>
+    <button class="button button-secondary" type="button" hx-get="/dashboard/metrics" hx-target="#dashboard-metrics" hx-indicator="#dashboard-refresh-indicator">Refresh <span class="dashboard-refresh-indicator" id="dashboard-refresh-indicator">Updating…</span></button>
   </header>
-
+  {{if .DashboardPage.ActionError}}<div class="application-alert" role="alert">{{.DashboardPage.ActionError}}</div>{{end}}
+  {{if .DashboardPage.Notice}}<div class="application-notice" role="status">{{.DashboardPage.Notice}}</div>{{end}}
+  <dialog class="application-dialog" id="dashboard-prune-dialog" aria-labelledby="dashboard-prune-title" aria-describedby="dashboard-prune-description" {{if .DashboardPage.ConfirmPrune}}open data-prune-confirmation{{end}}>
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header"><div><h2 id="dashboard-prune-title">Prune unused images?</h2><p id="dashboard-prune-description">Remove all images on this Docker host that are not referenced by a container. Images used by running or stopped containers are kept. Removed images will need to be pulled or rebuilt if you use them again.</p></div></header>
+      <form method="post" action="/dashboard/images/prune" data-dashboard-prune-form>
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="confirmation" value="prune">
+        <div class="application-dialog-actions"><a class="button button-secondary" href="/dashboard" data-dashboard-prune-close>Cancel</a><button class="button button-destructive" type="submit">Prune unused images</button></div>
+        <p class="dashboard-metric-help" data-dashboard-pruning hidden>Pruning images… This may take a moment.</p>
+      </form>
+    </div>
+  </dialog>
+  <script src="/static/dashboard.js" defer></script>
   <div class="dashboard-metrics" id="dashboard-metrics" data-dashboard-metrics hx-get="/dashboard/metrics" hx-trigger="every 10s" hx-swap="innerHTML" hx-indicator="#dashboard-refresh-indicator">
     {{template "dashboard-metrics.html" .}}
   </div>
 </section>
 {{end}}
 
+{{define "dashboard-gauge"}}
+<svg class="dashboard-gauge" viewBox="0 0 40 40" role="img" aria-label="{{dashboardPercent .}} used">
+  <circle class="dashboard-gauge-track" cx="20" cy="20" r="15.9155" fill="none" stroke-width="5"></circle>
+  <circle class="dashboard-gauge-fill" cx="20" cy="20" r="15.9155" fill="none" stroke-width="5" stroke-linecap="round" stroke-dasharray="{{.}} 100" transform="rotate(-90 20 20)"></circle>
+</svg>
+{{end}}
+
 {{define "dashboard-metrics.html"}}
-{{if .DashboardPage.Error}}
-<div class="dashboard-alert" role="alert">
-  <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="9"></circle>
-    <path d="M12 8v4M12 16h.01"></path>
-  </svg>
-  <span>{{.DashboardPage.Error}}</span>
-</div>
-{{else}}
+{{$metrics := .DashboardPage.Metrics}}{{$docker := .DashboardPage.Docker}}
 <div class="dashboard-metrics-meta">
-  <span>Scope: {{dashboardMetricsScope .DashboardPage.Metrics.Scope}} ({{dashboardMetricsScopeDetail .DashboardPage.Metrics.Scope}}) · Last updated <time datetime="{{dashboardTimeISO .DashboardPage.Metrics.CollectedAt}}">{{dashboardTime .DashboardPage.Metrics.CollectedAt}}</time> ({{dashboardMetricAge .DashboardPage.Metrics.CollectedAt}})</span>
-  {{if .DashboardPage.Metrics.Stale}}<span class="dashboard-metrics-stale" role="status">Refresh unavailable; showing the last valid sample.</span>{{end}}
+  <span>Scope: {{dashboardMetricsScope $metrics.Scope}} ({{dashboardMetricsScopeDetail $metrics.Scope}}) · Updated <time datetime="{{dashboardTimeISO $metrics.CollectedAt}}">{{dashboardMetricAge $metrics.CollectedAt}}</time> · Refreshes every 10 seconds</span>
+  {{if $metrics.Stale}}<span class="dashboard-metrics-stale" role="status">Refresh unavailable; showing the last valid sample.</span>{{end}}
 </div>
-
-<section class="dashboard-overview-grid" aria-label="{{dashboardMetricsScope .DashboardPage.Metrics.Scope}} resource metrics">
-  <article class="service-widget dashboard-resource-card">
-    <header class="service-widget-header">
-      <div class="service-widget-heading-with-icon">
-        <span class="service-widget-section-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 3v18M3 12h18"></path>
-            <path d="m5.5 5.5 13 13M18.5 5.5l-13 13"></path>
-          </svg>
-        </span>
-        <div class="service-widget-heading">
-          <h2>CPU usage</h2>
-          <p>Aggregate procfs CPU in the configured view</p>
-        </div>
-      </div>
-    </header>
-    <div class="service-widget-body dashboard-resource-body">
-      <p class="dashboard-metric-value">{{dashboardPercent .DashboardPage.Metrics.CPUUsagePercent}}</p>
-      <p class="dashboard-metric-help">Across all available CPU cores.</p>
-    </div>
+{{if .DashboardPage.Error}}<div class="dashboard-alert" role="alert">{{.DashboardPage.Error}}</div>{{end}}
+<section class="dashboard-overview-grid" aria-label="{{dashboardMetricsScope $metrics.Scope}} resource metrics">
+  <article class="service-widget dashboard-resource-card dashboard-cpu">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2>CPU usage</h2><p>Aggregate CPU in the configured view</p></div></header>
+    <div class="service-widget-body dashboard-resource-body">{{if .DashboardPage.Error}}<p>Unavailable</p>{{else}}{{template "dashboard-gauge" $metrics.CPUUsagePercent}}<div><p class="dashboard-metric-value">{{dashboardPercent $metrics.CPUUsagePercent}}</p><p class="dashboard-metric-help">Across available CPU cores</p></div>{{end}}</div>
   </article>
-
-  <article class="service-widget dashboard-resource-card">
-    <header class="service-widget-header">
-      <div class="service-widget-heading-with-icon">
-        <span class="service-widget-section-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-            <path d="M7 8h10M7 12h10M7 16h4"></path>
-          </svg>
-        </span>
-        <div class="service-widget-heading">
-          <h2>Memory usage</h2>
-          <p>Procfs memory in the configured view</p>
-        </div>
-      </div>
-    </header>
-    <div class="service-widget-body dashboard-resource-body">
-      <dl class="dashboard-resource-list">
-        <div>
-          <dt>Available</dt>
-          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.AvailableBytes}}</code></dd>
-        </div>
-        <div>
-          <dt>Used</dt>
-          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.UsedBytes}}</code></dd>
-        </div>
-        <div>
-          <dt>Free</dt>
-          <dd><code>{{dashboardSize .DashboardPage.Metrics.Memory.FreeBytes}}</code></dd>
-        </div>
-      </dl>
-    </div>
+  <article class="service-widget dashboard-resource-card dashboard-memory">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2>Memory usage</h2><p>Memory in the configured view</p></div></header>
+    <div class="service-widget-body dashboard-resource-body">{{if .DashboardPage.Error}}<p>Unavailable</p>{{else}}{{template "dashboard-gauge" (dashboardRatio $metrics.Memory.UsedBytes $metrics.Memory.TotalBytes)}}<div><p class="dashboard-metric-value">{{dashboardPercent (dashboardRatio $metrics.Memory.UsedBytes $metrics.Memory.TotalBytes)}}</p><p class="dashboard-metric-help">{{dashboardSize $metrics.Memory.UsedBytes}} / {{dashboardSize $metrics.Memory.TotalBytes}}</p><p class="dashboard-metric-help">{{dashboardSize $metrics.Memory.AvailableBytes}} available</p></div>{{end}}</div>
   </article>
-
+  <article class="service-widget dashboard-resource-card dashboard-disk">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2>Disk usage</h2><p>Filesystem of the configured root</p></div></header>
+    <div class="service-widget-body dashboard-resource-body">{{if .DashboardPage.Error}}<p>Unavailable</p>{{else}}{{template "dashboard-gauge" (dashboardRatio $metrics.Disk.UsedBytes (dashboardDiskTotal $metrics.Disk))}}<div><p class="dashboard-metric-value">{{dashboardPercent (dashboardRatio $metrics.Disk.UsedBytes (dashboardDiskTotal $metrics.Disk))}}</p><p class="dashboard-metric-help">{{dashboardSize $metrics.Disk.UsedBytes}} used</p><p class="dashboard-metric-help">{{dashboardSize $metrics.Disk.AvailableBytes}} available</p></div>{{end}}</div>
+  </article>
   <article class="service-widget dashboard-resource-card">
-    <header class="service-widget-header">
-      <div class="service-widget-heading-with-icon">
-        <span class="service-widget-section-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 20V4h16v16H4Z"></path>
-            <path d="M8 16v-3M12 16V8M16 16v-6"></path>
-          </svg>
-        </span>
-        <div class="service-widget-heading">
-          <h2>Disk usage</h2>
-          <p>Filesystem of the configured root</p>
-        </div>
-      </div>
-    </header>
-    <div class="service-widget-body dashboard-resource-body">
-      <dl class="dashboard-resource-list dashboard-disk-list">
-        <div>
-          <dt>Used</dt>
-          <dd><code>{{dashboardSize .DashboardPage.Metrics.Disk.UsedBytes}}</code></dd>
-        </div>
-        <div>
-          <dt>Available</dt>
-          <dd><code>{{dashboardSize .DashboardPage.Metrics.Disk.AvailableBytes}}</code></dd>
-        </div>
-      </dl>
+    <header class="service-widget-header"><div class="service-widget-heading"><h2>Docker images</h2><p>Images on the Docker host</p></div></header>
+    <div class="service-widget-body dashboard-images-body">
+      {{if $docker.DiskUnavailable}}<p class="dashboard-metric-help">Image usage is unavailable.</p>{{else}}<div><p class="dashboard-metric-value">{{$docker.ImageCount}}</p><p class="dashboard-metric-help">{{dashboardSize $docker.ImageBytes}} total layer size</p></div>{{end}}
+      {{if $docker.DiskUnavailable}}<button class="button button-destructive" type="button" disabled>Prune unused images</button>{{else}}<a class="button button-destructive" href="/dashboard/images/prune" data-dashboard-prune-open aria-haspopup="dialog" aria-controls="dashboard-prune-dialog">Prune unused images</a>{{end}}
     </div>
   </article>
 </section>
-
+{{if $docker.ApplicationsUnavailable}}<p class="dashboard-alert" role="status">Application names are temporarily unavailable.</p>{{end}}
 <div class="dashboard-process-grid">
-  <section class="service-widget dashboard-process-widget" aria-labelledby="top-cpu-processes-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-          <h2 id="top-cpu-processes-title">Top 10 most CPU-intensive processes</h2>
-          <p>Processes visible in this PID namespace during the latest sample.</p>
-      </div>
-    </header>
-    <div class="dashboard-process-table-wrap">
-      <table class="dashboard-process-table">
-        <thead>
-          <tr>
-            <th scope="col">Process</th>
-            <th scope="col">PID</th>
-            <th scope="col">CPU</th>
-            <th scope="col">Memory</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .DashboardPage.Metrics.TopCPU}}
-          <tr>
-            <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
-            <td><code>{{.PID}}</code></td>
-            <td><code>{{dashboardPercent .CPUPercent}}</code></td>
-            <td><code>{{dashboardSize .MemoryBytes}}</code></td>
-          </tr>
-          {{else}}
-          <tr>
-            <td class="dashboard-process-empty" colspan="4">No process data is available.</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-    </div>
+  <section class="service-widget dashboard-process-widget" aria-labelledby="services-usage-title">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2 id="services-usage-title">Services resource usage</h2><p>Individual managed containers. Core services appear first.</p></div></header>
+    <div class="dashboard-process-table-wrap"><table class="dashboard-process-table">
+      <thead><tr><th scope="col">Service</th><th scope="col">Application</th><th scope="col">Status</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Network ↓ / ↑</th><th scope="col">Uptime</th></tr></thead>
+      <tbody>{{range $docker.Containers}}<tr>
+        <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
+        <td title="{{.ApplicationName}}">{{.ApplicationName}}</td>
+        <td><span class="dashboard-container-status {{if .Running}}dashboard-running{{end}}">{{.Status}}</span></td>
+        {{if .Available}}<td><code>{{dashboardPercent .CPUPercent}}</code></td><td><code>{{dashboardSize .MemoryBytes}}</code></td><td><code>{{dashboardSize .ReceivedBytes}} / {{dashboardSize .SentBytes}}</code></td>{{else}}<td colspan="3" class="dashboard-metric-help">{{if .Running}}Usage unavailable{{else}}Not running{{end}}</td>{{end}}
+        <td>{{.Uptime}}</td>
+      </tr>{{else}}<tr><td class="dashboard-process-empty" colspan="7">{{if $docker.ContainersUnavailable}}Container usage is temporarily unavailable.{{else}}No managed containers found.{{end}}</td></tr>{{end}}</tbody>
+    </table></div>
+    <p class="dashboard-table-note">CPU can exceed 100% across multiple cores. Network totals are cumulative since container start.</p>
   </section>
-
-  <section class="service-widget dashboard-process-widget" aria-labelledby="top-memory-processes-title">
-    <header class="service-widget-header">
-      <div class="service-widget-heading">
-          <h2 id="top-memory-processes-title">Top 10 most memory-consuming processes</h2>
-          <p>Resident memory of processes visible in this PID namespace.</p>
-      </div>
-    </header>
-    <div class="dashboard-process-table-wrap">
-      <table class="dashboard-process-table">
-        <thead>
-          <tr>
-            <th scope="col">Process</th>
-            <th scope="col">PID</th>
-            <th scope="col">Memory</th>
-            <th scope="col">Share</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .DashboardPage.Metrics.TopMemory}}
-          <tr>
-            <th scope="row"><code title="{{.Name}}">{{.Name}}</code></th>
-            <td><code>{{.PID}}</code></td>
-            <td><code>{{dashboardSize .MemoryBytes}}</code></td>
-            <td><code>{{dashboardPercent .MemoryPercent}}</code></td>
-          </tr>
-          {{else}}
-          <tr>
-            <td class="dashboard-process-empty" colspan="4">No process data is available.</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-    </div>
+  <section class="service-widget dashboard-process-widget" aria-labelledby="storage-volumes-title">
+    <header class="service-widget-header"><div class="service-widget-heading"><h2 id="storage-volumes-title">Storage volumes</h2><p>Disk usage of volumes attached to managed containers.</p></div></header>
+    <div class="dashboard-process-table-wrap"><table class="dashboard-process-table dashboard-volumes-table"><thead><tr><th scope="col">Volume</th><th scope="col">Application</th><th scope="col">Mounted at</th><th scope="col">Used</th></tr></thead><tbody>
+      {{range $docker.Volumes}}<tr><th scope="row"><code title="{{.Name}}">{{.Name}}</code></th><td title="{{range $i,$name:=.ApplicationNames}}{{if $i}}, {{end}}{{$name}}{{end}}">{{range $i,$name:=.ApplicationNames}}{{if $i}}, {{end}}{{$name}}{{end}}</td><td><code title="{{.MountedAt}}">{{.MountedAt}}</code></td><td>{{if .Available}}<code>{{dashboardSize .Bytes}}</code>{{else}}Unavailable{{end}}</td></tr>{{else}}<tr><td class="dashboard-process-empty" colspan="4">{{if $docker.VolumesUnavailable}}Volume usage is temporarily unavailable.{{else}}No attached managed volumes found.{{end}}</td></tr>{{end}}
+    </tbody></table></div><p class="dashboard-table-note">Volumes share their host filesystem capacity. Bind mounts are excluded.</p>
   </section>
 </div>
+<section class="service-widget dashboard-trends" aria-labelledby="service-trends-title">
+  <header class="service-widget-header"><div class="service-widget-heading"><h2 id="service-trends-title">Service resource trends</h2><p>CPU and memory observations from dashboard refreshes over the last hour. History starts with this manager session.</p></div></header>
+  <div class="dashboard-process-grid service-widget-body">
+    {{template "dashboard-trend-chart" (dashboardChartData $docker.Trends false)}}
+    {{template "dashboard-trend-chart" (dashboardChartData $docker.Trends true)}}
+  </div>
+</section>
 {{end}}
+
+{{define "dashboard-trend-chart"}}
+{{$max:=dashboardTrendMax .Trends .Memory}}{{$memory:=.Memory}}{{$trends:=.Trends}}
+<div class="dashboard-chart-panel">
+  <h3>{{if .Memory}}Memory usage{{else}}CPU usage{{end}}</h3>
+  {{if .Trends}}
+  <p class="dashboard-metric-help">Scale: 0 – {{dashboardTrendScale $max .Memory}}</p>
+  <div class="dashboard-chart-with-legend">
+    <div><svg class="dashboard-chart" viewBox="0 0 480 100" preserveAspectRatio="none" role="img" aria-label="{{if .Memory}}Memory{{else}}CPU{{end}} usage by service from first to latest observed sample">
+      <path class="dashboard-chart-grid" d="M0 0H480M0 50H480M0 100H480M0 0V100M120 0V100M240 0V100M360 0V100M480 0V100"/>
+      {{range $i,$trend:=.Trends}}{{$points:=dashboardTrendPoints $trend.Samples $memory $max $trends}}{{if $points}}<polyline class="dashboard-chart-line dashboard-series-{{dashboardTrendColor $i}}" fill="none" points="{{$points}}"><title>{{$trend.Name}}</title></polyline>{{end}}{{end}}
+    </svg><div class="dashboard-chart-times"><span>First observed sample</span><span>Latest sample</span></div></div>
+    <ul class="dashboard-chart-legend">{{range $i,$trend:=.Trends}}<li><span class="dashboard-series-dot dashboard-series-{{dashboardTrendColor $i}}" aria-hidden="true"></span><code title="{{$trend.Name}}">{{$trend.Name}}</code></li>{{end}}</ul>
+  </div>
+  <p class="dashboard-metric-help">At least two samples per service are needed to draw its trend.</p>
+  {{else}}<p class="dashboard-metric-help">Trends will appear when running containers report usage.</p>{{end}}
+</div>
 {{end}}

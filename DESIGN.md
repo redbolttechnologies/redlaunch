@@ -71,11 +71,14 @@ Required semantic tokens include:
 * accent
 * accent-foreground
 * success
+* info
+* info-foreground
 * warning
 * destructive
 * destructive-foreground
 * code
 * code-foreground
+* code-string
 * border
 * input
 * ring
@@ -88,6 +91,16 @@ Use `brand` and `brand-foreground` for the red activation action and matching
 feature icons in the managed-databases introduction. Keep destructive actions
 on the `destructive` tokens. The brand action supports white text at normal
 body sizes in both themes.
+
+The SQL console uses the same red `brand` / `brand-foreground` tokens as
+`/databases` for its query action, editor icon, selected table, result heading,
+and current result page. Reuse the standard Button, Table, Dropdown Menu, Alert
+Dialog, and status badge patterns. Its code surface
+adds a monospace line-number gutter and escaped syntax highlighting; keywords
+use brand, strings code-string (destructive in light mode, an accessible red in
+dark mode), numbers success, and comments muted-foreground. Query actions use
+the brand foreground token in both themes.
+Result pagination changes only presentation of the already bounded result set.
 
 ## Typography
 

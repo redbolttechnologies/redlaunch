@@ -25,6 +25,7 @@ import (
 	"redlaunch/internal/application"
 	redlaunchauth "redlaunch/internal/auth"
 	systemmetrics "redlaunch/internal/metrics"
+	"redlaunch/internal/service"
 )
 
 //go:embed templates/*.html static/*
@@ -59,12 +60,14 @@ type Handler struct {
 	serverSSHKeys                  serverSSHKeyService
 	users                          userManagementService
 	apiTokens                      apiTokenService
+	oauth                          oauthService
 	apiRunJobs                     *apiRunJobStore
 	managementJobs                 *managementJobStore
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	registryImages                 registryImageService
 	dashboardMetrics               dashboardMetricsService
+	dashboardDocker                dashboardDockerService
 	authentication                 authenticationService
 	selfUpdater                    selfUpdateService
 	setupJobs                      *setupJobStore
@@ -253,6 +256,11 @@ type proxyActionService interface {
 	RestartProxy(context.Context) error
 }
 
+type dashboardDockerService interface {
+	CollectDockerDashboard(context.Context) (service.DockerDashboard, error)
+	PruneUnusedImages(context.Context) (uint64, error)
+}
+
 type dashboardMetricsService interface {
 	Collect(context.Context) (systemmetrics.Snapshot, error)
 }
@@ -282,6 +290,10 @@ type serverSSHKeyService interface {
 
 type selfUpdateService interface {
 	QueueUpdateWithProgress(context.Context, func(stage, message string)) error
+}
+
+type managementAccessService interface {
+	QueueManagementAccessMode(context.Context, string) error
 }
 
 // ServerInfo contains the local machine identity shown in the application shell.
@@ -315,6 +327,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"proxyCreatedAtISO":           proxyCreatedAtISO,
 		"proxyCreatedAtTitle":         proxyCreatedAtTitle,
 		"serviceDetailsPath":          serviceDetailsPath,
+		"serviceDeleteDialog":         serviceDeleteDialog,
 		"backupDownloadPath":          backupDownloadPath,
 		"backupTime":                  backupTimeText,
 		"backupTimeISO":               backupTimeISO,
@@ -346,6 +359,19 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"registryTimeTitle":           registryTimeTitle,
 		"versionDigestShort":          versionDigestShort,
 		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
+		"databaseWorkspacePath":       managedDatabaseWorkspacePath,
+		"dashboardRatio":              dashboardRatio,
+		"dashboardDiskTotal":          func(d systemmetrics.Disk) uint64 { return d.TotalBytes },
+		"dashboardChartData": func(trends []service.ServiceTrend, memory bool) any {
+			return struct {
+				Trends []service.ServiceTrend
+				Memory bool
+			}{trends, memory}
+		},
+		"dashboardTrendMax":    dashboardTrendMax,
+		"dashboardTrendScale":  dashboardTrendScale,
+		"dashboardTrendColor":  func(i int) int { return i % 5 },
+		"dashboardTrendPoints": dashboardTrendPoints,
 	}).ParseFS(embeddedFiles, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -379,10 +405,12 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	var serverSSHKeys serverSSHKeyService
 	var users userManagementService
 	var apiTokens apiTokenService
+	var oauth oauthService
 	proxy := proxyDetailsService(noProxyService{})
 	proxyActions := proxyActionService(noProxyService{})
 	var registryImages registryImageService
 	dashboardMetrics := dashboardMetricsService(systemmetrics.New())
+	var dashboardDocker dashboardDockerService
 	var authentication authenticationService
 	var selfUpdater selfUpdateService
 	security := SecurityConfig{AccessMode: accessModeSSHOnly}
@@ -605,6 +633,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				apiTokens = dependency
 			}
+		case oauthService:
+			if dependency != nil {
+				oauth = dependency
+			}
 		case proxyDetailsService:
 			if dependency != nil {
 				proxy = dependency
@@ -620,6 +652,8 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				registryImages = dependency
 			}
+		case dashboardDockerService:
+			dashboardDocker = dependency
 		case dashboardMetricsService:
 			if dependency != nil {
 				dashboardMetrics = dependency
@@ -703,12 +737,14 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		serverSSHKeys:                  serverSSHKeys,
 		users:                          users,
 		apiTokens:                      apiTokens,
+		oauth:                          oauth,
 		apiRunJobs:                     apiRunJobs,
 		managementJobs:                 managementJobs,
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
 		dashboardMetrics:               dashboardMetrics,
+		dashboardDocker:                dashboardDocker,
 		authentication:                 authentication,
 		selfUpdater:                    selfUpdater,
 		setupJobs:                      setupJobs,
@@ -745,6 +781,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /applications", h.applications)
 	mux.HandleFunc("GET /dashboard", h.dashboard)
 	mux.HandleFunc("GET /dashboard/metrics", h.dashboardMetricsFragment)
+	mux.HandleFunc("POST /dashboard/images/prune", h.dashboardPruneImages)
+	mux.HandleFunc("GET /dashboard/images/prune", h.dashboard)
 	mux.HandleFunc("GET /proxy", h.proxyPage)
 	mux.HandleFunc("GET /proxy/settings", h.proxySettingsPage)
 	mux.HandleFunc("POST /proxy/settings", h.proxySettingsPage)
@@ -765,6 +803,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /databases/stop", h.managedDatabasesClusterAction("stop"))
 	mux.HandleFunc("POST /databases/restart", h.managedDatabasesClusterAction("restart"))
 	mux.HandleFunc("POST /databases/create", h.createManagedDatabase)
+	mux.HandleFunc("GET /databases/{name}", h.databaseWorkspace)
+	mux.HandleFunc("POST /databases/{name}/query", h.databaseWorkspace)
+	mux.HandleFunc("POST /databases/{name}/import", h.importDatabaseDump)
 	mux.HandleFunc("POST /databases/drop", h.dropManagedDatabase)
 	mux.HandleFunc("POST /databases/users/create", h.createManagedDatabaseUser)
 	mux.HandleFunc("POST /databases/users/password", h.updateManagedDatabaseUserPassword)
@@ -810,7 +851,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/ssh-keys/delete", h.revokeServerSSHKey)
 	mux.HandleFunc("POST /settings/api-tokens", h.createAPIToken)
 	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
+	mux.HandleFunc("POST /settings/mcp-connections/delete", h.revokeMCPConnection)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
+	mux.HandleFunc("POST /settings/management-access", h.saveManagementAccess)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/start", h.startService)
@@ -819,6 +862,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/credentials", h.updatePostgresCredentials)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/volumes", h.serviceDeletionVolumes)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/status", h.serviceDeleteStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/action/status", h.serviceActionStatus)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/versions/deploy", h.deployServiceVersion)
@@ -844,10 +888,17 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/edit", h.updateApplicationContainer)
 	mux.HandleFunc("POST /applications", h.createApplication)
 	mux.HandleFunc("GET /healthz", h.health)
-	mux.HandleFunc("POST /api/v1/management/{operation}", h.managementAPI)
-	mux.HandleFunc("GET /api/v1/management/jobs/{job}", h.managementJobStatus)
-	mux.HandleFunc("POST /api/v1/applications/{id}/services/{service}/run", h.runServiceViaAPI)
-	mux.HandleFunc("GET /api/v1/applications/{id}/services/{service}/run/status", h.apiRunJobStatus)
+	h.registerMachineAPIRoutes(mux)
+	mux.HandleFunc("/mcp/manage", h.mcpHTTP)
+	mux.HandleFunc("/mcp/apps/{id}", h.mcpHTTP)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp/manage", h.mcpProtectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp/apps/{id}", h.mcpProtectedResource)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server", h.oauthMetadata)
+	mux.HandleFunc("POST /oauth/register", h.oauthRegister)
+	mux.HandleFunc("GET /oauth/authorize", h.oauthAuthorize)
+	mux.HandleFunc("POST /oauth/authorize", h.oauthAuthorizeDecision)
+	mux.HandleFunc("POST /oauth/token", h.oauthToken)
+	mux.HandleFunc("POST /oauth/revoke", h.oauthRevoke)
 	static, err := fs.Sub(embeddedFiles, "static")
 	if err == nil {
 		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
@@ -873,9 +924,7 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		h.writeSetupPage(w, r, http.StatusOK, setupPageData{}, progress)
 		return
 	}
-	page := h.shellPageData(r)
-	page.SetupProgress = progress
-	h.writeTemplate(w, "index.html", page)
+	h.writeDashboardPage(w, r, http.StatusOK, h.dashboardData(r.Context()), progress)
 }
 
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
@@ -2841,6 +2890,17 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	volumes := r.PostForm["delete_volumes"]
+	if len(volumes) > 128 {
+		http.Error(w, "Too many selected volumes.", http.StatusBadRequest)
+		return
+	}
+	if len(volumes) > 0 {
+		if _, ok := h.serviceDeletion.(serviceVolumeDeletionService); !ok {
+			http.Error(w, "Volume deletion is unavailable.", http.StatusBadRequest)
+			return
+		}
+	}
 	job, created, err := h.serviceDeleteJobs.createUnique(id, serviceName)
 	if err != nil {
 		h.logger.Error("create service deletion job", "application_id", id, "service", serviceName, "error", err)
@@ -2848,6 +2908,7 @@ func (h *Handler) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
+		job.volumes = append([]string(nil), volumes...)
 		if err := h.startTrackedJob("service-delete:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
 			h.runServiceDeleteJob(ctx, job)
 		}); err != nil {
@@ -4836,6 +4897,7 @@ type pageData struct {
 	ApplicationDeleteProgress    *applicationDeleteProgressData
 	BackupProgress               *backupProgressData
 	ManagedDatabasesProgress     *managedDatabasesProgressData
+	DatabaseWorkspacePage        *databaseWorkspacePageData
 	SelfUpdateProgress           *selfUpdateProgressData
 	ServiceActionProgress        *serviceActionProgressData
 	ServiceActionToasts          []*serviceActionProgressData
@@ -4846,6 +4908,7 @@ type pageData struct {
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData
 	ServiceDetailsPage           *serviceDetailsPageData
+	ServiceDeleteVolumes         *serviceDeleteVolumesData
 	ProxyPage                    *proxyPageData
 	RegistryPage                 *registryPageData
 	PostgreSQLServicePage        *postgresqlServicePageData
@@ -5155,17 +5218,27 @@ type registryPurgeDialogData struct {
 }
 
 type settingsPageData struct {
-	Users         []application.UserAccount
-	UsersActive   bool
-	UserDialog    string
-	UserID        int64
-	UserEmail     string
-	UserError     string
-	CanDeleteUser bool
-	Domains       []application.RedlaunchDomain
-	CSRFToken     string
-	DomainEdit    *domainEditPageData
-	DomainDelete  *domainDeletePageData
+	ManagementAccessAvailable bool
+	ManagementAccessMode      string
+	ManagementAccessSelection string
+	ManagementAccessError     string
+	ManagementAccessQueued    bool
+	ManagementSecureCookies   bool
+	MCPEnabled                bool
+	MCPActive                 bool
+	MCPConnections            []application.OAuthConnection
+	MCPDelete                 *mcpConnectionDeletePageData
+	Users                     []application.UserAccount
+	UsersActive               bool
+	UserDialog                string
+	UserID                    int64
+	UserEmail                 string
+	UserError                 string
+	CanDeleteUser             bool
+	Domains                   []application.RedlaunchDomain
+	CSRFToken                 string
+	DomainEdit                *domainEditPageData
+	DomainDelete              *domainDeletePageData
 
 	SSHKeys          []application.ServerSSHKey
 	SSHKeysUsername  string
@@ -5202,6 +5275,13 @@ type sshKeyDeletePageData struct {
 	ID          int64
 	DisplayName string
 	Error       string
+}
+
+type mcpConnectionDeletePageData struct {
+	ID         int64
+	ClientName string
+	Resource   string
+	Error      string
 }
 
 type apiTokenDeletePageData struct {

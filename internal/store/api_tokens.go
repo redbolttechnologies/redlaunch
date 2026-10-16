@@ -18,6 +18,7 @@ func (s *Store) ListAPITokens(ctx context.Context) ([]application.APIToken, erro
 		SELECT id, display_name, prefix, COALESCE(application_id, 0), scope, created_at,
 			expires_at, last_used_at
 		FROM api_tokens
+		WHERE NOT EXISTS (SELECT 1 FROM oauth_grants WHERE access_token_id = api_tokens.id)
 		ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list API tokens: %w", err)
@@ -107,6 +108,16 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, tokenHash []byte) (applic
 // CreateAPIToken persists one operator-managed API token with its SHA-256
 // verifier. Plaintext tokens must never reach this layer.
 func (s *Store) CreateAPIToken(ctx context.Context, item application.APIToken, tokenHash []byte) (application.APIToken, error) {
+	return insertAPIToken(ctx, s.db, item, tokenHash)
+}
+
+// sqlExecer is satisfied by both *sql.DB and *sql.Tx, so token inserts can
+// join a larger transaction such as an OAuth grant rotation.
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertAPIToken(ctx context.Context, execer sqlExecer, item application.APIToken, tokenHash []byte) (application.APIToken, error) {
 	if len(tokenHash) == 0 {
 		return application.APIToken{}, application.ErrAPITokenHashMissing
 	}
@@ -117,7 +128,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, item application.APIToken, t
 	if item.Scope == application.APITokenScopeManage && item.ApplicationID == 0 {
 		applicationID = nil
 	}
-	result, err := s.db.ExecContext(ctx, `
+	result, err := execer.ExecContext(ctx, `
 		INSERT INTO api_tokens (display_name, prefix, token_hash, application_id,
 			scope, created_at, expires_at, last_used_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

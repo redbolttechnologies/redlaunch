@@ -1,0 +1,73 @@
+{{define "oauth-consent.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Approve an MCP connection to Redlaunch">
+  <title>Redlaunch · Approve connection</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+  <main class="login-page" aria-labelledby="oauth-title">
+    <section class="login-card">
+      <div class="login-brand" aria-label="Redlaunch">
+        {{template "brand" .}}
+      </div>
+      <div class="login-heading">
+        <h1 id="oauth-title">Approve MCP connection</h1>
+        <p><strong>{{.ClientName}}</strong> wants to connect to this server.</p>
+      </div>
+      <p>Access: {{.ResourceLabel}}</p>
+      <p>Returns to <code>{{.RedirectHost}}</code>.</p>
+      <form class="application-form" method="post" action="/oauth/authorize">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <input type="hidden" name="client_id" value="{{.Request.ClientID}}">
+        <input type="hidden" name="redirect_uri" value="{{.Request.RedirectURI}}">
+        <input type="hidden" name="response_type" value="{{.Request.ResponseType}}">
+        <input type="hidden" name="state" value="{{.Request.State}}">
+        <input type="hidden" name="code_challenge" value="{{.Request.CodeChallenge}}">
+        <input type="hidden" name="code_challenge_method" value="{{.Request.CodeChallengeMethod}}">
+        <input type="hidden" name="resource" value="{{.Request.Resource}}">
+        <input type="hidden" name="scope" value="{{.Request.Scope}}">
+        <div class="application-form-actions">
+          <button class="button button-secondary" type="submit" name="decision" value="deny">Deny</button>
+          <button class="button button-primary" type="submit" name="decision" value="approve">Approve</button>
+        </div>
+      </form>
+      <p class="login-footnote">Approve only connections you started yourself. An approved connection can change this server within the access shown above.</p>
+    </section>
+  </main>
+</body>
+</html>
+{{end}}
+
+{{define "oauth-error.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Redlaunch MCP connection">
+  <title>Redlaunch · Connection not approved</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+  <main class="login-page" aria-labelledby="oauth-title">
+    <section class="login-card">
+      <div class="login-brand" aria-label="Redlaunch">
+        {{template "brand" .}}
+      </div>
+      <div class="login-heading">
+        <h1 id="oauth-title">Connection not approved</h1>
+      </div>
+      <div class="setup-alert login-alert" role="alert">
+        <span>{{.Message}}</span>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+{{end}}

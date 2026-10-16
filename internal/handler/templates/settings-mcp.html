@@ -1,0 +1,58 @@
+{{define "settings-mcp"}}
+<section class="application-tab-panel" id="mcp-panel" role="tabpanel" aria-labelledby="mcp-tab" tabindex="0"{{if not .SettingsPage.MCPActive}} hidden{{end}}>
+  <section class="service-widget" aria-labelledby="mcp-connections-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="mcp-connections-title">MCP connections</h2>
+        <p>Manage assistant connections approved through browser sign-in. Credentials stay with the assistant and are never displayed here. Client names are unverified.</p>
+      </div>
+      <a class="button button-secondary" href="/help/mcp">Connection guide</a>
+    </header>
+    <div class="service-widget-body">
+      {{if .SettingsPage.MCPConnections}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table">
+          <caption class="sr-only">Approved OAuth MCP connections</caption>
+          <thead><tr><th scope="col">Client</th><th scope="col">Access</th><th scope="col">Resource</th><th scope="col">Last used</th><th scope="col">Grant expires</th><th scope="col" class="application-environment-actions"><span class="sr-only">Actions</span></th></tr></thead>
+          <tbody>
+            {{range .SettingsPage.MCPConnections}}
+            <tr>
+              <th scope="row">{{.ClientName}}<span class="field-help"><code>{{.ClientID}}</code></span></th>
+              <td>{{if eq .Scope "manage"}}Manage this server{{else}}Run services in {{with index $.SettingsPage.APITokenApplicationNames .ApplicationID}}{{.}}{{else}}application {{.ApplicationID}}{{end}}{{end}}</td>
+              <td><code>{{.Resource}}</code></td>
+              <td>{{with .LastUsedAt}}<time datetime="{{backupAtISO .}}">{{backupAt .}}</time>{{else}}Never{{end}}</td>
+              <td><time datetime="{{backupAtISO .ExpiresAt}}">{{backupAt .ExpiresAt}}</time>{{if .Expired}} <span class="service-status-badge service-status-neutral">Expired</span>{{end}}</td>
+              <td class="application-environment-actions">
+                <a class="button button-destructive" href="/settings?tab=mcp&amp;mcp_revoke={{.ID}}" data-mcp-revoke data-mcp-id="{{.ID}}" data-mcp-name="{{.ClientName}}" data-mcp-resource="{{.Resource}}" aria-controls="mcp-connection-delete-dialog" aria-haspopup="dialog" aria-expanded="false" aria-label="Revoke MCP connection {{.ClientName}}">Revoke</a>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <p class="field-help">Last used records successful API authentication and is preserved across refreshes. Grant expiry is the earlier of 30 days without a refresh or 90 days since approval; it is not the hourly access-token expiry.</p>
+      {{else}}
+      <div class="service-widget-empty" role="status"><p>No MCP connections are approved. Add this server's remote MCP URL in your assistant and complete browser sign-in.</p></div>
+      {{end}}
+    </div>
+  </section>
+</section>
+{{end}}
+
+{{define "mcp-connection-dialog"}}
+<dialog class="application-dialog" id="mcp-connection-delete-dialog" data-mcp-dialog{{if .SettingsPage.MCPDelete}} open{{end}} aria-modal="true" aria-labelledby="mcp-connection-delete-title" aria-describedby="mcp-connection-delete-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div><h2 id="mcp-connection-delete-title">Revoke MCP connection</h2><p id="mcp-connection-delete-description">Revoke <strong data-mcp-display>{{with .SettingsPage.MCPDelete}}{{.ClientName}}{{end}}</strong>? Its access and refresh tokens will stop working immediately. The assistant must sign in again to reconnect.</p></div>
+    </header>
+    <form class="application-form" method="post" action="/settings/mcp-connections/delete">
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      <input type="hidden" name="id" value="{{with .SettingsPage.MCPDelete}}{{.ID}}{{end}}">
+      <input type="hidden" name="confirm" value="yes">
+      {{with .SettingsPage.MCPDelete}}{{if .Error}}<div class="application-alert application-dialog-alert" role="alert">{{.Error}}</div>{{end}}{{end}}
+      <p>Resource: <code data-mcp-resource-display>{{with .SettingsPage.MCPDelete}}{{.Resource}}{{end}}</code></p>
+      <footer class="application-form-actions"><a class="button button-secondary" href="/settings?tab=mcp" data-mcp-close>Cancel</a><button class="button button-destructive" type="submit">Revoke connection</button></footer>
+    </form>
+  </div>
+</dialog>
+{{end}}

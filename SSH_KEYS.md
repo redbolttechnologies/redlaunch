@@ -168,13 +168,13 @@ set -euo pipefail
 DEPLOY_DIR=/opt/redlaunch/projects/applications/<name>
 # DEPLOY_DIR must be the absolute managed application directory: the manager
 # mounts the projects root at the identical host path, so this path resolves
-# both on the host and inside the manager container.
-if [ -f "$DEPLOY_DIR/compose.yml" ]; then
+# inside the manager container. The SSH user may not traverse it on the host.
+if docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yml"; then
   compose_file="compose.yml"
-elif [ -f "$DEPLOY_DIR/compose.yaml" ]; then
+elif docker exec redbolt-redlaunch test -f "$DEPLOY_DIR/compose.yaml"; then
   compose_file="compose.yaml"
 else
-  echo "no compose.yml or compose.yaml found in $DEPLOY_DIR" >&2
+  echo "no compose.yml or compose.yaml accessible in $DEPLOY_DIR inside redbolt-redlaunch" >&2
   exit 1
 fi
 project_name=$(docker exec redbolt-redlaunch redlaunch compose-project-name --directory "$DEPLOY_DIR")
@@ -190,9 +190,15 @@ env_args+=(--env-file vars.env --env-file secrets.env)
 docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose --project-name "$project_name" "${env_args[@]}" -f "$compose_file" run --rm migrate
 ```
 
-Check for the Compose file by absolute path: the Compose file is world-readable
-while `vars.env`/`secrets.env` intentionally stay `0600`. Keep the explicit
-`--project-name` on every manual Compose invocation in a managed directory
+Check for the Compose file inside the manager container, as shown above.
+Managed application directories are created with mode `0750`; a world-readable
+Compose file does not grant the SSH user access through a restricted parent
+directory. Host-side `test -f` can therefore report false even when the file
+exists. Run all managed-file checks and diagnostics (including `test`, `ls`,
+and `stat`) via `docker exec redbolt-redlaunch`, and keep environment files
+private. Do not loosen directory or secret-file permissions to fix CI.
+
+Keep the explicit `--project-name` on every manual Compose invocation in a managed directory
 (`up`, `run`, `exec`, `logs`), whether run on the host or through
 `docker exec -w "$DEPLOY_DIR" redbolt-redlaunch docker compose ...`;
 omitting it recreates the duplicate project described above.

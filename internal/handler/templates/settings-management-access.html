@@ -1,0 +1,38 @@
+{{define "settings-management-access"}}
+<section class="service-widget" aria-labelledby="management-access-title">
+  <header class="service-widget-header">
+    <div class="service-widget-heading">
+      <h2 id="management-access-title">Management access mode</h2>
+      <p>Choose how Redlaunch recognizes management connections. Managed HTTPS enables browser sign-in to public MCP through Caddy. Adding a domain does not change this startup setting.</p>
+    </div>
+  </header>
+  <div class="service-widget-body">
+    <p>Running mode: <strong>{{if eq .SettingsPage.ManagementAccessMode "managed-https"}}Managed HTTPS{{else}}SSH-only{{end}}</strong> (<code>{{.SettingsPage.ManagementAccessMode}}</code>).</p>
+    {{if .SettingsPage.ManagementAccessQueued}}
+    <div class="service-widget-empty" role="status">
+      <p>The <code>{{.SettingsPage.ManagementAccessSelection}}</code> setting was saved and a restart was queued. Redlaunch will briefly disconnect; the running mode shown above is unchanged until the restart completes.</p>
+      <a class="button button-secondary" href="/settings">Refresh settings after restart</a>
+    </div>
+    {{else}}
+    {{if .SettingsPage.ManagementAccessError}}<div class="application-alert" role="alert">{{.SettingsPage.ManagementAccessError}}</div>{{end}}
+    <form class="application-form" method="post" action="/settings/management-access" data-management-access-form>
+      <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
+      <input type="hidden" name="current_mode" value="{{.SettingsPage.ManagementAccessMode}}">
+      <div class="field">
+        <label for="management-access-mode">Access mode</label>
+        <select id="management-access-mode" name="access_mode" aria-describedby="management-access-help"{{if not .SettingsPage.ManagementAccessAvailable}} disabled{{end}}>
+          <option value="ssh-only"{{if eq .SettingsPage.ManagementAccessSelection "ssh-only"}} selected{{end}}>SSH-only</option>
+          <option value="managed-https"{{if eq .SettingsPage.ManagementAccessSelection "managed-https"}} selected{{end}}>Managed HTTPS</option>
+        </select>
+        <p class="field-help" id="management-access-help">SSH-only uses the HTTP startup mode for local access and SSH tunnels. Managed HTTPS uses secure login cookies; use your configured HTTPS domain or a supported loopback tunnel. This setting does not change port bindings, firewall rules, or Caddy domains.</p>
+      </div>
+      {{if .SettingsPage.ManagementSecureCookies}}<p class="field-help"><code>AUTH_COOKIE_SECURE=true</code> is explicitly configured and stays unchanged. Selecting SSH-only will not disable secure cookies or HTTPS recognition.</p>{{end}}
+      {{if .SettingsPage.ManagementAccessAvailable}}
+      <label class="checkbox-field" for="management-access-confirm"><input id="management-access-confirm" type="checkbox" name="confirm" value="yes" required><span class="checkbox-field-copy"><span class="checkbox-field-title">Confirm restart</span><span class="checkbox-field-help">I understand that saving restarts Redlaunch, and I have a working HTTPS address or SSH tunnel to reconnect.</span></span></label>
+      <div class="application-form-actions"><button class="button button-primary" type="submit">Save and restart</button></div>
+      {{else}}<p class="field-help">The installation restart service is not configured. Set <code>MANAGEMENT_ACCESS_MODE</code> in the installation configuration and recreate Redlaunch manually.</p>{{end}}
+    </form>
+    {{end}}
+  </div>
+</section>
+{{end}}

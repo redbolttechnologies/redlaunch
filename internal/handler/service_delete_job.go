@@ -38,6 +38,7 @@ type serviceDeleteJob struct {
 	id             string
 	applicationID  int64
 	serviceName    string
+	volumes        []string
 	state          string
 	currentStage   string
 	errorStage     string
@@ -229,6 +230,7 @@ func serviceDeleteJobSteps() []serviceDeleteJobStep {
 		{Stage: "schedules", Label: "Disable scheduled backups", State: serviceDeleteJobStepRemaining},
 		{Stage: "stop", Label: "Stop service container", State: serviceDeleteJobStepRemaining},
 		{Stage: "remove", Label: "Remove service container", State: serviceDeleteJobStepRemaining},
+		{Stage: "volumes", Label: "Delete selected volumes (if any)", State: serviceDeleteJobStepRemaining},
 		{Stage: "compose", Label: "Remove service from Compose file", State: serviceDeleteJobStepRemaining},
 		{Stage: "routing", Label: "Remove service routing", State: serviceDeleteJobStepRemaining},
 		{Stage: "metadata", Label: "Delete service metadata", State: serviceDeleteJobStepRemaining},
@@ -238,7 +240,9 @@ func serviceDeleteJobSteps() []serviceDeleteJobStep {
 func (h *Handler) runServiceDeleteJob(ctx context.Context, job *serviceDeleteJob) {
 	var err error
 	job.update("stop", "Stopping the service container with Docker Compose")
-	if manager, ok := h.serviceDeletion.(serviceDeletionProgressService); ok {
+	if manager, ok := h.serviceDeletion.(serviceVolumeDeletionService); ok {
+		err = manager.DeleteServiceWithVolumes(ctx, job.applicationID, job.serviceName, job.volumes, job.update)
+	} else if manager, ok := h.serviceDeletion.(serviceDeletionProgressService); ok {
 		err = manager.DeleteServiceWithProgress(ctx, job.applicationID, job.serviceName, job.update)
 	} else {
 		err = h.serviceDeletion.DeleteService(ctx, job.applicationID, job.serviceName)
@@ -269,6 +273,8 @@ func serviceDeletionUserMessage(err error) string {
 		return "The service container could not be stopped."
 	case strings.HasPrefix(detail, "remove service container:"):
 		return "The service container could not be removed."
+	case strings.HasPrefix(detail, "delete service volumes:"):
+		return "The selected volumes could not be deleted. Retry to finish the deletion."
 	case strings.HasPrefix(detail, "remove service from compose file:"):
 		return "The service could not be removed from the Docker Compose file."
 	case strings.HasPrefix(detail, "delete service metadata:"):
@@ -282,6 +288,7 @@ func serviceDeletionDiagnosticDetail(err error) string {
 	return deletionDiagnosticDetail(err, []string{
 		"stop service: ",
 		"remove service container: ",
+		"delete service volumes: ",
 		"remove service from compose file: ",
 		"delete service metadata: ",
 		"stage service removal in compose file: ",
