@@ -223,7 +223,13 @@ func TestSessionIsSignedExpiringAndRevocationAware(t *testing.T) {
 		t.Fatalf("ValidateSession() = (%#v, %t, %v), want authorized session", user, valid, err)
 	}
 
-	tampered := session[:len(session)-1] + "x"
+	// The signature segment is raw base64: its final character carries unused
+	// low bits, so a fixed replacement can decode to the same bytes and leave
+	// the token valid. Flipping the high bit of the character's 6-bit value
+	// always changes the signed bytes.
+	const rawURLAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	last := session[len(session)-1]
+	tampered := session[:len(session)-1] + string(rawURLAlphabet[strings.IndexByte(rawURLAlphabet, last)^0x20])
 	if _, valid, err := service.ValidateSession(context.Background(), tampered); err != nil || valid {
 		t.Fatalf("ValidateSession(tampered) = (%t, %v), want false, nil", valid, err)
 	}
