@@ -310,6 +310,14 @@ func run(ctx context.Context) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 
+	retentionCtx, cancelRetention := context.WithCancel(ctx)
+	retentionDone := make(chan struct{})
+	go func() {
+		defer close(retentionDone)
+		applications.RunRegistryRetention(retentionCtx, registry, logger)
+	}()
+	defer func() { cancelRetention(); <-retentionDone }()
+
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server listening", "addr", cfg.HTTPAddr)

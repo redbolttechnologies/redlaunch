@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"redlaunch/internal/application"
 	"redlaunch/internal/compose"
@@ -37,6 +38,7 @@ type RegistryTagMover interface {
 // image registry for the Registry page.
 type RegistryService struct {
 	container string
+	mutations sync.Mutex
 	runner    RegistryContentLister
 	deleter   RegistryTagDeleter
 	mover     RegistryTagMover
@@ -164,6 +166,8 @@ func (s *RegistryService) PlanRepositoryPurge(ctx context.Context, repository st
 // PlanRepositoryPurge for the supplied keep count. Protected references are
 // never deleted. It returns the deleted tags in purge order.
 func (s *RegistryService) PurgeRepository(ctx context.Context, repository string, keep int, protected map[string]bool) ([]application.RegistryImage, error) {
+	s.mutations.Lock()
+	defer s.mutations.Unlock()
 	repository, err := application.ValidateRegistryRepository(repository)
 	if err != nil {
 		return nil, err
@@ -193,6 +197,8 @@ func (s *RegistryService) PurgeRepository(ctx context.Context, repository string
 // tag did not exist yet. The digest must be a manifest previously pushed to
 // the same repository.
 func (s *RegistryService) MoveTag(ctx context.Context, repository, tag, digest string) (string, error) {
+	s.mutations.Lock()
+	defer s.mutations.Unlock()
 	repository, err := application.ValidateRegistryRepository(repository)
 	if err != nil {
 		return "", err
@@ -222,6 +228,8 @@ func (s *RegistryService) MoveTag(ctx context.Context, repository, tag, digest s
 // assignment when a version deployment fails before the service was
 // recreated.
 func (s *RegistryService) RemoveTag(ctx context.Context, repository, tag string) error {
+	s.mutations.Lock()
+	defer s.mutations.Unlock()
 	repository, err := application.ValidateRegistryRepository(repository)
 	if err != nil {
 		return err

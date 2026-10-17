@@ -141,6 +141,17 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   Leaving an edited secret value blank preserves its existing value.
 - Show container status, ports, logs, and explicitly scoped resource usage.
 - List the images previously pushed to the local registry from the Registry page.
+- Automatically retain the two newest distinct image digests per local-registry
+  repository, including untagged versions. Cleanup runs at server startup and
+  hourly. Multiple tags on one digest count as one version; multi-platform
+  child manifests are preserved with their image. Older deployed or configured
+  versions are also kept, so a repository can retain more than two versions.
+  Cleanup skips deletion when inspection fails, the inventory exceeds 1,000
+  entries, or manifest dependencies are incomplete; versions with unknown push
+  times are kept. Failures are recorded in the server log.
+  Removed versions lose their tags and manifest revision links. Shared blobs
+  remain on disk until an operator runs offline registry garbage collection
+  with registry writes stopped; automatic retention does not run live blob GC.
 - Manually purge older tags per repository with a keep count (keep the N most
   recent images, 0 for unlimited, max 100); deployed tags are always kept.
 - Manage service versions on the service's Versions list: the pushed images of

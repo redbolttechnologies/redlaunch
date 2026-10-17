@@ -273,9 +273,6 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if len(contents) >= maxRegistryImages {
-			return errRegistryImageLimit
-		}
 		fileInfo, err := os.Lstat(path)
 		if err != nil {
 			return err
@@ -287,7 +284,7 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 		revisionDigest := ""
 		if !ok {
 			repository, revisionDigest, ok = splitRegistryRevisionPath(root, path)
-			if !ok || len(revisions) >= maxRegistryImages {
+			if !ok {
 				return nil
 			}
 		}
@@ -306,15 +303,21 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 		}
 		if revisionDigest != "" {
 			if digest == revisionDigest {
+				if len(revisions) >= maxRegistryImages {
+					return errRegistryImageLimit
+				}
 				revisions = append(revisions, content)
 			}
 		} else {
+			if len(contents) >= maxRegistryImages {
+				return errRegistryImageLimit
+			}
 			tagged[repository+"\x00"+digest] = true
 			contents = append(contents, content)
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, errRegistryImageLimit) {
+	if err != nil {
 		return nil, fmt.Errorf("read copied registry repositories: %w", err)
 	}
 	revisionTimes := make(map[string]time.Time, len(revisions))
@@ -326,10 +329,10 @@ func readRegistryContents(root string) ([]RegistryContent, error) {
 		content.ManifestPushedAt = revisionTimes[content.Repository+"\x00"+content.Digest]
 	}
 	for _, revision := range revisions {
-		if len(contents) >= maxRegistryImages {
-			break
-		}
 		if !tagged[revision.Repository+"\x00"+revision.Digest] {
+			if len(contents) >= maxRegistryImages {
+				return nil, errRegistryImageLimit
+			}
 			revision.ManifestPushedAt = revision.PushedAt
 			contents = append(contents, revision)
 		}
