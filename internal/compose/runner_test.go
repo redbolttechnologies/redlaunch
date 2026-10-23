@@ -219,6 +219,11 @@ func TestCommandRunnerServiceActionsUseExplicitComposeArguments(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"vars.env", "secrets.env"} {
+		if err := os.WriteFile(filepath.Join(projectDir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	binary := filepath.Join(t.TempDir(), "docker")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"${0%/*}/args\"\ncase \" $* \" in *\" config \"*) printf '{}\\n';; esac\n"), 0o700); err != nil {
@@ -233,7 +238,7 @@ func TestCommandRunnerServiceActionsUseExplicitComposeArguments(t *testing.T) {
 	}{
 		{name: "start", action: runner.Start, command: "start"},
 		{name: "stop", action: runner.Stop, command: "stop"},
-		{name: "restart", action: runner.Restart, command: "restart"},
+		{name: "restart", action: runner.Restart, command: "up -d --quiet-pull --force-recreate --no-deps"},
 		{name: "remove", action: runner.Remove, command: "rm -f"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -245,13 +250,22 @@ func TestCommandRunnerServiceActionsUseExplicitComposeArguments(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-			want := expectedComposeArguments(projectDir)
+			want := []string{"compose", "--project-name", composeProjectName(projectDir), "--env-file", "vars.env", "--env-file", "secrets.env", "-f", "compose.yml"}
 			want = append(want, strings.Split(testCase.command, " ")...)
 			want = append(want, "db")
 			if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 				t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 			}
 		})
+	}
+}
+
+func TestCommandRunnerRestartRequiresServiceName(t *testing.T) {
+	for _, name := range []string{"", "  "} {
+		err := (CommandRunner{Binary: filepath.Join(t.TempDir(), "missing-docker")}).Restart(context.Background(), t.TempDir(), name)
+		if err == nil || err.Error() != "Compose service name is required" {
+			t.Fatalf("Restart() error = %v, want service name required", err)
+		}
 	}
 }
 

@@ -131,6 +131,8 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
 - Import an existing Compose project.
 - Clone an application into an independent environment variant (dev, stage) from its Settings tab. Secrets copy as-is for review, domains copy without routing, volume data is not copied, and all services stay stopped.
 - Start, stop, restart, and remove managed services.
+  Restart recreates the selected service with the current saved variables,
+  secrets, and Compose configuration, leaving dependencies untouched.
 - Run a managed service once as a one-off task (for example a database
   migration) with `docker compose run --rm` semantics; the container is
   removed afterwards and secrets stay on the server.

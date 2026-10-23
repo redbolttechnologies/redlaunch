@@ -773,9 +773,14 @@ func (r CommandRunner) Stop(ctx context.Context, projectDir, serviceName string)
 	return r.runServiceCommand(ctx, projectDir, "stop", serviceName)
 }
 
-// Restart restarts one service in a Compose project.
+// Restart recreates one service with its current configuration and environment
+// files. Dependencies are left untouched.
 func (r CommandRunner) Restart(ctx context.Context, projectDir, serviceName string) error {
-	return r.runServiceCommand(ctx, projectDir, "restart", serviceName)
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return errors.New("Compose service name is required")
+	}
+	return r.runComposeUpWithOptions(ctx, projectDir, serviceName, "--force-recreate", "--no-deps")
 }
 
 // Remove removes one service's container from a Compose project. The service
