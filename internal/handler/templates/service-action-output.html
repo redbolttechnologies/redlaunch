@@ -1,0 +1,55 @@
+{{define "service-action-output.html"}}
+<dialog class="application-dialog service-action-output-dialog" data-service-output-dialog role="dialog" aria-modal="true" aria-labelledby="service-action-output-title" aria-describedby="service-action-output-description">
+  <div class="application-dialog-panel service-action-output-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="service-action-output-title">Run output</h2>
+        <p id="service-action-output-description">Captured stdout and stderr for <code>{{.ServiceActionOutput.ServiceName}}</code>. Output is redacted and retained in memory for one hour.</p>
+      </div>
+      <button class="icon-button" type="button" data-service-output-close aria-label="Close run output dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <div class="service-action-output-body">
+      <dl class="service-action-output-summary">
+        <div>
+          <dt>Exit code</dt>
+          <dd><code>{{.ServiceActionOutput.Result.ExitCode}}</code></dd>
+        </div>
+        <div>
+          <dt>Duration</dt>
+          <dd><code>{{.ServiceActionOutput.Result.Duration}}</code></dd>
+        </div>
+      </dl>
+
+      {{if .ServiceActionOutput.Result.Truncated}}
+      <p class="application-alert application-alert-warning service-action-output-notice" role="status">Output was truncated to the retained limit. Earlier output is shown.</p>
+      {{end}}
+
+      <section class="service-action-output-section" aria-labelledby="service-action-output-stdout-title">
+        <header class="service-action-output-section-header">
+          <h3 id="service-action-output-stdout-title">stdout</h3>
+          <button class="button button-secondary" type="button" data-copy-target="service-action-output-stdout"><span>Copy stdout</span></button>
+        </header>
+        {{if .ServiceActionOutput.Result.Stdout}}<pre class="service-action-output-pre" id="service-action-output-stdout" tabindex="0">{{.ServiceActionOutput.Result.Stdout}}</pre>{{else}}<p class="field-help">No stdout output.</p>{{end}}
+      </section>
+
+      <section class="service-action-output-section" aria-labelledby="service-action-output-stderr-title">
+        <header class="service-action-output-section-header">
+          <h3 id="service-action-output-stderr-title">stderr</h3>
+          <button class="button button-secondary" type="button" data-copy-target="service-action-output-stderr"><span>Copy stderr</span></button>
+        </header>
+        {{if .ServiceActionOutput.Result.Stderr}}<pre class="service-action-output-pre" id="service-action-output-stderr" tabindex="0">{{.ServiceActionOutput.Result.Stderr}}</pre>{{else}}<p class="field-help">No stderr output.</p>{{end}}
+      </section>
+    </div>
+
+    <footer class="application-form-actions service-action-output-actions">
+      <a class="button button-secondary" href="{{.ServiceActionOutput.DownloadURL}}" download>Download output</a>
+      <button class="button button-primary" type="button" data-service-output-close>Close</button>
+    </footer>
+  </div>
+</dialog>
+{{end}}

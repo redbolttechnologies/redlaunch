@@ -112,6 +112,13 @@ func (h *Handler) managementAPI(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			job.status = "failed"
 			job.result = nil
+			// One-off runs return captured, redacted output even when the
+			// command exits non-zero so operators can diagnose the failure.
+			if op.Name == "service_action" && args.Action == "run" {
+				if runResult, ok := result.(application.OneOffRunResult); ok {
+					job.result = runResult
+				}
+			}
 			h.logger.Warn("management operation failed", "operation", op.Name, "job_id", id)
 		}
 		job.finishedAt = time.Now()
@@ -134,7 +141,7 @@ func (h *Handler) managementJobStatus(w http.ResponseWriter, r *http.Request) {
 	job.mu.RLock()
 	defer job.mu.RUnlock()
 	response := map[string]any{"status": job.status}
-	if job.status == "complete" {
+	if job.result != nil {
 		response["result"] = job.result
 	}
 	if job.status == "failed" {
@@ -204,7 +211,11 @@ func (h *Handler) executeManagement(ctx context.Context, op string, a applicatio
 			case "restart":
 				return success, h.serviceActions.RestartService(ctx, a.ApplicationID, a.ServiceName)
 			case "run":
-				return success, h.serviceActions.RunServiceOnce(ctx, a.ApplicationID, a.ServiceName)
+				parameters := application.OneOffRunParameters{}
+				if a.Parameters != nil {
+					parameters = *a.Parameters
+				}
+				return h.serviceActions.RunServiceOnceWithParameters(ctx, a.ApplicationID, a.ServiceName, parameters)
 			}
 		}
 	case "list_service_versions":

@@ -476,7 +476,7 @@ type composeServiceStarter interface {
 }
 
 type composeOneOffRunner interface {
-	RunOneOff(context.Context, string, string) error
+	RunOneOff(context.Context, string, string, compose.OneOffRunParameters) (compose.OneOffRunResult, error)
 }
 
 type composeServiceRemover interface {
@@ -1286,37 +1286,49 @@ func (s *Applications) RestartService(ctx context.Context, applicationID int64, 
 	})
 }
 
-// RunServiceOnce executes one registered service as a one-off task (for
-// example a database migration) and removes its container afterwards. Unlike
-// StartService it does not leave a long-running container behind, and unlike
-// RestartService it also works when the service is currently stopped. The
-// managed environment files are resolved server-side; secrets never leave the
-// host.
+// RunServiceOnce executes one registered service as a one-off task without
+// per-run parameters. It is the backward-compatible wrapper around
+// RunServiceOnceWithParameters.
 func (s *Applications) RunServiceOnce(ctx context.Context, applicationID int64, serviceName string) error {
+	_, err := s.RunServiceOnceWithParameters(ctx, applicationID, serviceName, application.OneOffRunParameters{})
+	return err
+}
+
+// RunServiceOnceWithParameters executes one registered service as a one-off
+// task (for example a database migration) and removes its container
+// afterwards. Arguments and allowlisted environment overrides apply only to
+// that container; the service definition and managed environment files are
+// never modified. The captured result is returned even when the run fails so
+// callers can show the real exit code and output.
+func (s *Applications) RunServiceOnceWithParameters(ctx context.Context, applicationID int64, serviceName string, parameters application.OneOffRunParameters) (application.OneOffRunResult, error) {
 	if s.detailsRepository == nil {
-		return errors.New("application details repository is not configured")
+		return application.OneOffRunResult{}, errors.New("application details repository is not configured")
 	}
 	serviceName, err := application.ValidateServiceName(serviceName)
 	if err != nil {
-		return err
+		return application.OneOffRunResult{}, err
+	}
+	parameters, err = application.ValidateOneOffRunParameters(parameters)
+	if err != nil {
+		return application.OneOffRunResult{}, err
 	}
 	runner, ok := s.runner.(composeOneOffRunner)
 	if !ok {
-		return errors.New("compose one-off runner is not configured")
+		return application.OneOffRunResult{}, errors.New("compose one-off runner is not configured")
 	}
 	lease, err := s.acquireApplicationProject(ctx, applicationID)
 	if err != nil {
-		return err
+		return application.OneOffRunResult{}, err
 	}
 	defer lease.release()
 
 	item, err := s.detailsRepository.Get(ctx, applicationID)
 	if err != nil {
-		return fmt.Errorf("get application for service action: %w", err)
+		return application.OneOffRunResult{}, fmt.Errorf("get application for service action: %w", err)
 	}
 	services, err := s.detailsRepository.ListServices(ctx, applicationID)
 	if err != nil {
-		return fmt.Errorf("list services for service action: %w", err)
+		return application.OneOffRunResult{}, fmt.Errorf("list services for service action: %w", err)
 	}
 	registered := false
 	for _, service := range services {
@@ -1326,16 +1338,27 @@ func (s *Applications) RunServiceOnce(ctx context.Context, applicationID int64, 
 		}
 	}
 	if !registered {
-		return application.ErrServiceNotFound
+		return application.OneOffRunResult{}, application.ErrServiceNotFound
 	}
 	directory, err := s.managedApplicationDirectory(item)
 	if err != nil {
-		return fmt.Errorf("resolve application directory for service action: %w", err)
+		return application.OneOffRunResult{}, fmt.Errorf("resolve application directory for service action: %w", err)
 	}
-	if err := runner.RunOneOff(ctx, directory, serviceName); err != nil {
-		return fmt.Errorf("run service: %w", err)
+	result, err := runner.RunOneOff(ctx, directory, serviceName, compose.OneOffRunParameters{
+		Args: parameters.Args,
+		Env:  parameters.Env,
+	})
+	converted := application.OneOffRunResult{
+		ExitCode:  result.ExitCode,
+		Stdout:    result.Stdout,
+		Stderr:    result.Stderr,
+		Truncated: result.Truncated,
+		Duration:  result.Duration,
 	}
-	return nil
+	if err != nil {
+		return converted, fmt.Errorf("run service: %w", err)
+	}
+	return converted, nil
 }
 
 // DeleteService stops and removes one registered service container, removes

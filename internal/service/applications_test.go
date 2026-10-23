@@ -103,6 +103,8 @@ type serviceRuntimeRunner struct {
 	environmentCalls int
 	reloadErr        error
 	reloads          []string
+	oneOffParameters compose.OneOffRunParameters
+	oneOffResult     compose.OneOffRunResult
 }
 
 type blockingServiceRuntimeRunner struct {
@@ -208,12 +210,13 @@ func (r *serviceRuntimeRunner) Restart(_ context.Context, projectDir, serviceNam
 	return r.actionErr
 }
 
-func (r *serviceRuntimeRunner) RunOneOff(_ context.Context, projectDir, serviceName string) error {
+func (r *serviceRuntimeRunner) RunOneOff(_ context.Context, projectDir, serviceName string, parameters compose.OneOffRunParameters) (compose.OneOffRunResult, error) {
 	r.action = "run"
 	r.actions = append(r.actions, "run")
 	r.projectDir = projectDir
 	r.service = serviceName
-	return r.actionErr
+	r.oneOffParameters = parameters
+	return r.oneOffResult, r.actionErr
 }
 
 func (r *serviceRuntimeRunner) Remove(_ context.Context, projectDir, serviceName string) error {
@@ -553,7 +556,7 @@ func TestApplicationsImportDockerComposeProjectAttachesSharedNetwork(t *testing.
 			contents: "services:\n  web:\n    image: nginx:1.27\n    networks:\n      - default\n  db:\n    image: postgres:17\n    networks:\n      - default\n\nnetworks:\n  internal:\n    driver: bridge\n",
 		},
 		{
-			name: "service on custom network only",
+			name:     "service on custom network only",
 			contents: "services:\n  web:\n    image: nginx:1.27\n    networks:\n      - frontend\n\nnetworks:\n  frontend:\n    driver: bridge\n",
 		},
 	} {
@@ -2825,6 +2828,121 @@ func TestApplicationsControlsRegisteredServices(t *testing.T) {
 				t.Fatalf("service action = (%q, %q, %q), want (%q, db, %q)", runner.action, runner.service, runner.projectDir, testCase.action, directory)
 			}
 		})
+	}
+}
+
+func TestApplicationsRunServiceOnceWithParametersPassesValuesAndReturnsResult(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+	}
+	runner := &serviceRuntimeRunner{oneOffResult: compose.OneOffRunResult{
+		ExitCode: 0,
+		Stdout:   "migration complete\n",
+		Stderr:   "warning\n",
+		Duration: time.Second,
+	}}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, applicationsDir, "status-page")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	parameters := application.OneOffRunParameters{
+		Args: []string{"--database-name", "example", "--confirm"},
+		Env:  map[string]string{"NODE_ENV": "development"},
+	}
+	result, err := applications.RunServiceOnceWithParameters(context.Background(), 7, "migrate", parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stdout != "migration complete\n" || result.Stderr != "warning\n" || result.ExitCode != 0 {
+		t.Fatalf("result = %+v, want captured output", result)
+	}
+	if strings.Join(runner.oneOffParameters.Args, "\x00") != strings.Join(parameters.Args, "\x00") || runner.oneOffParameters.Env["NODE_ENV"] != "development" {
+		t.Fatalf("one-off parameters = %#v, want %#v", runner.oneOffParameters, parameters)
+	}
+	if runner.service != "migrate" || runner.projectDir != directory {
+		t.Fatalf("one-off target = (%q, %q), want (%q, migrate)", runner.projectDir, runner.service, directory)
+	}
+}
+
+func TestApplicationsRunServiceOnceWithoutParametersKeepsEmptyValues(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+	}
+	runner := &serviceRuntimeRunner{oneOffResult: compose.OneOffRunResult{ExitCode: 0, Stdout: "legacy output"}}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, applicationsDir, "status-page"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := applications.RunServiceOnce(context.Background(), 7, "migrate"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.oneOffParameters.Args) != 0 || len(runner.oneOffParameters.Env) != 0 {
+		t.Fatalf("legacy RunServiceOnce parameters = %#v, want empty", runner.oneOffParameters)
+	}
+	if runner.action != "run" || runner.service != "migrate" {
+		t.Fatalf("legacy run action = (%q, %q), want (run, migrate)", runner.action, runner.service)
+	}
+}
+
+func TestApplicationsRunServiceOnceRejectsInvalidParametersBeforeRunner(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+	}
+	runner := &serviceRuntimeRunner{}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, applicationsDir, "status-page"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	_, err = applications.RunServiceOnceWithParameters(context.Background(), 7, "migrate", application.OneOffRunParameters{
+		Env: map[string]string{"PATH": "/tmp"},
+	})
+	if !errors.Is(err, application.ErrOneOffRunEnvironmentKeyNotAllowed) {
+		t.Fatalf("RunServiceOnceWithParameters(invalid) error = %v, want allowlist error", err)
+	}
+	if runner.action != "" {
+		t.Fatalf("runner action = %q, want no action", runner.action)
+	}
+}
+
+func TestApplicationsRunServiceOnceReturnsResultOnRunnerFailure(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	repository := &applicationRepositoryStub{
+		applications: []application.Application{{ID: 7, Name: "Status page", FolderName: "status-page"}},
+		services:     []application.Service{{ID: 1, ApplicationID: 7, Name: "migrate"}},
+	}
+	runner := &serviceRuntimeRunner{
+		actionErr:    errors.New("compose failed"),
+		oneOffResult: compose.OneOffRunResult{ExitCode: 2, Stdout: "partial", Stderr: "failure"},
+	}
+	applications, err := NewApplications(repository, root, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, applicationsDir, "status-page"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	result, err := applications.RunServiceOnceWithParameters(context.Background(), 7, "migrate", application.OneOffRunParameters{})
+	if err == nil {
+		t.Fatal("RunServiceOnceWithParameters() error = nil, want runner failure")
+	}
+	if result.ExitCode != 2 || result.Stdout != "partial" || result.Stderr != "failure" {
+		t.Fatalf("result = %+v, want captured failure output", result)
 	}
 }
 

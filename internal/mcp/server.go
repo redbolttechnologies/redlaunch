@@ -171,6 +171,7 @@ type guide struct {
 
 var guides = []guide{
 	{"redlaunch://guides/api-tokens", "api-tokens", "API scope, authentication, async runs, status codes, and rotation.", "text/markdown", "API_TOKENS.md"},
+	{"redlaunch://guides/run-reference", "run-reference", "Parameterized one-off runs, output capture, limits, and security.", "text/markdown", "REFERENCE.md"},
 	{"redlaunch://guides/recipes", "recipes", "GitHub Actions workflows: publish images, migrate, deploy via registry or direct image copy; managed Compose identity and container-side file checks.", "text/markdown", "RECIPES.md"},
 	{"redlaunch://guides/ssh-keys", "ssh-keys", "SSH transport, permissions, known hosts, and key rotation.", "text/markdown", "SSH_KEYS.md"},
 	{"redlaunch://guides/installation", "installation", "VPS installation and management endpoint reachability.", "text/markdown", "INSTALL.md"},

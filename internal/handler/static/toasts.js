@@ -35,14 +35,90 @@
     if (document.querySelector('[data-toast-job][data-state="running"]')) {
       return;
     }
+    // A completed run keeps its output action available until the operator
+    // dismisses the toast; refreshing would drop the completed-job query.
+    if (toast && toast.dataset.outputAvailable === "true") {
+      return;
+    }
     refreshScheduled = true;
     const title = toast && toast.querySelector(".toast-title");
     if (title) {
       title.textContent += " — refreshing…";
     }
     const closeURL = (toast && toast.dataset.closeUrl) || window.location.pathname;
-    window.setTimeout(() => window.location.assign(closeURL), refreshDelay);
+    window.setTimeout(() => {
+      if (document.querySelector("[data-service-output-dialog][open]")) {
+        return;
+      }
+      window.location.assign(closeURL);
+    }, refreshDelay);
   };
+
+  const bindOutputDialog = (dialog) => {
+    const container = document.getElementById("service-action-output");
+    if (!container) {
+      return;
+    }
+    const closeDialog = () => {
+      if (typeof dialog.close === "function" && dialog.open) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute("open");
+        container.replaceChildren();
+        document.body.classList.remove("dialog-open");
+      }
+    };
+    dialog.querySelectorAll("[data-service-output-close]").forEach((button) => {
+      button.addEventListener("click", closeDialog);
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        closeDialog();
+      }
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      closeDialog();
+    });
+    dialog.addEventListener("close", () => {
+      container.replaceChildren();
+      document.body.classList.remove("dialog-open");
+    });
+    dialog.querySelectorAll("[data-copy-target]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const target = document.getElementById(button.dataset.copyTarget || "");
+        try {
+          if (!target || !window.redlaunchClipboard) {
+            throw new Error("copy unavailable");
+          }
+          await window.redlaunchClipboard.copyText(target.textContent || "");
+          window.redlaunchClipboard.showButtonFeedback(button, "Copied");
+        } catch {
+          if (window.redlaunchClipboard) {
+            window.redlaunchClipboard.showButtonFeedback(button, "Copy failed");
+          }
+        }
+      });
+    });
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) {
+        dialog.showModal();
+      }
+    } else {
+      dialog.setAttribute("open", "");
+    }
+    document.body.classList.add("dialog-open");
+  };
+
+  document.body.addEventListener("htmx:afterSwap", (event) => {
+    if (!event.target || event.target.id !== "service-action-output") {
+      return;
+    }
+    const dialog = event.target.querySelector("[data-service-output-dialog]");
+    if (dialog) {
+      bindOutputDialog(dialog);
+    }
+  });
 
   const showPollingError = (toast) => {
     if (!toast) {
@@ -82,6 +158,9 @@
       }
       toast.replaceWith(updated);
       bindToast(updated);
+      if (window.htmx && typeof window.htmx.process === "function") {
+        window.htmx.process(updated);
+      }
       if (updated.dataset.state === "running") {
         window.setTimeout(() => pollToast(updated), pollingDelay);
       } else if (updated.dataset.state === "complete") {

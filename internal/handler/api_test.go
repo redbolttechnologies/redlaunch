@@ -122,6 +122,15 @@ func decodeAPIResponse(t *testing.T, body string) map[string]string {
 	return response
 }
 
+func decodeAPIObject(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var response map[string]any
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		t.Fatalf("decode API response %q: %v", body, err)
+	}
+	return response
+}
+
 func TestAPIRunRequiresBearerAuthentication(t *testing.T) {
 	applications := apiApplications()
 	tokens := newFakeAPITokenService()
@@ -269,7 +278,7 @@ func TestAPIRunDispatchesJobAndReportsCompletion(t *testing.T) {
 		if statusRecorder.Code != http.StatusOK {
 			t.Fatalf("status code = %d, want %d", statusRecorder.Code, http.StatusOK)
 		}
-		status := decodeAPIResponse(t, statusRecorder.Body.String())
+		status := decodeAPIObject(t, statusRecorder.Body.String())
 		if status["status"] == apiRunJobStateComplete {
 			break
 		}
@@ -283,6 +292,9 @@ func TestAPIRunDispatchesJobAndReportsCompletion(t *testing.T) {
 	}
 	if action, _, name := applications.getServiceAction(); action != "run" || name != "migrate" {
 		t.Fatalf("service action = (%q, %q), want (run, migrate)", action, name)
+	}
+	if len(applications.serviceActionParameters.Args) != 0 || len(applications.serviceActionParameters.Env) != 0 {
+		t.Fatalf("legacy empty-body run parameters = %#v, want empty", applications.serviceActionParameters)
 	}
 }
 
@@ -309,18 +321,152 @@ func TestAPIRunReportsFailureDetail(t *testing.T) {
 		statusRequest.Header.Set("Authorization", "Bearer valid-token")
 		statusRecorder := httptest.NewRecorder()
 		handler.ServeHTTP(statusRecorder, statusRequest)
-		status := decodeAPIResponse(t, statusRecorder.Body.String())
+		status := decodeAPIObject(t, statusRecorder.Body.String())
 		if status["status"] == apiRunJobStateFailed {
-			if !strings.Contains(status["detail"], "relation does not exist") {
-				t.Fatalf("failure detail = %q, want migration cause", status["detail"])
+			detail, _ := status["detail"].(string)
+			if !strings.Contains(detail, "relation does not exist") {
+				t.Fatalf("failure detail = %q, want migration cause", detail)
 			}
-			if strings.Contains(status["detail"], "run service:") {
-				t.Fatalf("failure detail kept the operational prefix: %q", status["detail"])
+			if strings.Contains(detail, "run service:") {
+				t.Fatalf("failure detail kept the operational prefix: %q", detail)
 			}
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("run job did not fail in time: %v", status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestAPIRunWithParametersPassesValuesAndReturnsCapturedOutput(t *testing.T) {
+	applications := apiApplications()
+	applications.serviceActionResult = application.OneOffRunResult{
+		ExitCode: 0,
+		Stdout:   "migration complete\n",
+		Stderr:   "one warning\n",
+		Duration: time.Second,
+	}
+	tokens := newFakeAPITokenService()
+	tokens.authToken = validAPIToken()
+	web := newAPIHandler(t, applications, tokens)
+	handler := web.Routes()
+
+	body := `{"parameters":{"args":["--database-name","example","--confirm"],"env":{"NODE_ENV":"development"}}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/applications/7/services/migrate/run", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("dispatch status = %d, want %d: %s", recorder.Code, http.StatusAccepted, recorder.Body)
+	}
+	dispatch := decodeAPIResponse(t, recorder.Body.String())
+
+	status := waitForAPIStatus(t, handler, dispatch["status_url"], apiRunJobStateComplete)
+	if status["exit_code"] != float64(0) {
+		t.Fatalf("exit_code = %v, want 0", status["exit_code"])
+	}
+	output, ok := status["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %#v, want object", status["output"])
+	}
+	if output["stdout"] != "migration complete\n" || output["stderr"] != "one warning\n" || output["truncated"] != false {
+		t.Fatalf("output = %#v, want captured streams", output)
+	}
+	if got := strings.Join(applications.serviceActionParameters.Args, "\x00"); got != "--database-name\x00example\x00--confirm" {
+		t.Fatalf("arguments = %q, want ordered values", got)
+	}
+	if applications.serviceActionParameters.Env["NODE_ENV"] != "development" {
+		t.Fatalf("environment = %#v, want NODE_ENV=development", applications.serviceActionParameters.Env)
+	}
+}
+
+func TestAPIRunRejectsInvalidParameters(t *testing.T) {
+	cases := map[string]string{
+		"unknown environment key": `{"parameters":{"env":{"PATH":"/tmp"}}}`,
+		"newline argument":        `{"parameters":{"args":["before\nafter"]}}`,
+		"carriage return value":   `{"parameters":{"env":{"NODE_ENV":"before\rafter"}}}`,
+		"unknown top-level field": `{"parameters":{},"extra":true}`,
+		"unknown parameter field": `{"parameters":{"command":"sh"}}`,
+		"oversized body":          `{"parameters":{"args":["` + strings.Repeat("a", application.MaxOneOffRunRequestBytes) + `"]}}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			applications := apiApplications()
+			tokens := newFakeAPITokenService()
+			tokens.authToken = validAPIToken()
+			web := newAPIHandler(t, applications, tokens)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/applications/7/services/migrate/run", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer valid-token")
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			web.Routes().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body)
+			}
+			if action, _, _ := applications.getServiceAction(); action != "" {
+				t.Fatalf("invalid parameters triggered action %q", action)
+			}
+		})
+	}
+}
+
+func TestAPIRunFailureReturnsOutputAndSanitizedDetail(t *testing.T) {
+	applications := apiApplications()
+	applications.serviceActionErr = errors.New("run service: migration failed: DATABASE_PASSWORD=super-secret")
+	applications.serviceActionResult = application.OneOffRunResult{
+		ExitCode: 3,
+		Stdout:   "partial stdout\n",
+		Stderr:   "migration failed\n",
+	}
+	tokens := newFakeAPITokenService()
+	tokens.authToken = validAPIToken()
+	web := newAPIHandler(t, applications, tokens)
+	handler := web.Routes()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/applications/7/services/migrate/run", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("dispatch status = %d, want 202", recorder.Code)
+	}
+	dispatch := decodeAPIResponse(t, recorder.Body.String())
+	status := waitForAPIStatus(t, handler, dispatch["status_url"], apiRunJobStateFailed)
+	if status["exit_code"] != float64(3) {
+		t.Fatalf("exit_code = %v, want 3", status["exit_code"])
+	}
+	output, ok := status["output"].(map[string]any)
+	if !ok || output["stdout"] != "partial stdout\n" || output["stderr"] != "migration failed\n" {
+		t.Fatalf("output = %#v, want failed-run streams", status["output"])
+	}
+	detail, _ := status["detail"].(string)
+	if strings.Contains(detail, "super-secret") || strings.Contains(detail, "run service:") {
+		t.Fatalf("detail = %q, want sanitized failure text", detail)
+	}
+}
+
+func waitForAPIStatus(t *testing.T, handler http.Handler, statusURL, want string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		request := httptest.NewRequest(http.MethodGet, statusURL, nil)
+		request.Header.Set("Authorization", "Bearer valid-token")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status code = %d, want 200: %s", recorder.Code, recorder.Body)
+		}
+		status := decodeAPIObject(t, recorder.Body.String())
+		if status["status"] == want {
+			return status
+		}
+		if status["status"] != apiRunJobStateRunning {
+			t.Fatalf("status = %v, want %s", status, want)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run job did not reach %s in time", want)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

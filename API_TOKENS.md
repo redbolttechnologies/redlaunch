@@ -6,8 +6,9 @@ Docker access, or knowledge of any secrets.
 
 An application-scoped run token authorizes exactly one action: starting one-off runs (`docker compose
 run --rm` semantics) in **one pinned application**. It cannot read
-environment files, run arbitrary commands (the command comes from the
-admin-managed `compose.yml`), reach other applications, or open a shell.
+environment files, replace the configured command or entrypoint, reach other
+applications, or open a shell. Per-run arguments and allowlisted environment
+overrides may be supplied without changing the service definition.
 
 Server-wide management tokens use a separate `manage` scope and authorize
 application, service, environment, routing, and shared database administration.
@@ -41,8 +42,99 @@ asynchronously so long migrations never hold the dispatch connection):
 ```
 
 Poll the status URL with the same `Authorization` header until it reports
-`complete` or `failed` (failures include the redacted Compose tail in
-`detail`). Unknown or expired job IDs report `404`.
+`complete` or `failed` (failures include a sanitized `detail`). Unknown or
+expired job IDs report `404`.
+
+## Run once with parameters
+
+`POST /api/v1/applications/{id}/services/{service}/run` accepts an optional
+JSON body. An empty body, or a body without `parameters`, behaves exactly like
+the original run-once call.
+
+```sh
+curl --fail --silent --show-error -X POST \
+  -H "Authorization: Bearer $REDLAUNCH_RUN_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "parameters": {
+      "args": ["--database-name", "example", "--confirm"],
+      "env": {"NODE_ENV": "development"}
+    }
+  }' \
+  "$REDLAUNCH_URL/api/v1/applications/7/services/migrate/run"
+```
+
+Arguments are appended to the service's configured command in order. They are
+separate argv entries: there is no shell parsing, glob expansion, or command
+substitution. Environment overrides use `docker compose run --env KEY=VALUE`
+and apply only to this container. The service's configured image, command, and
+entrypoint cannot be overridden, and the service definition is never modified.
+
+The environment allowlist is deliberately small:
+
+| Key | Purpose |
+| --- | --- |
+| `NODE_ENV` | Node.js runtime mode |
+| `TZ` | Container time zone |
+| `LANG`, `LC_ALL` | Locale |
+| `LOG_LEVEL` | Application log verbosity |
+
+Other keys are rejected, including execution-affecting variables such as
+`PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `BASH_ENV`, `ENV`,
+`PYTHONPATH`, `RUBYOPT`, and `PERL5OPT`. Never put secrets in run parameters:
+arguments and environment values may be visible in host process listings. Put
+credentials in `secrets.env` instead.
+
+Limits:
+
+- Up to 64 arguments, 4 KiB each, 64 KiB total.
+- Up to 16 environment entries, 4 KiB per value, 32 KiB total.
+- Arguments and values cannot contain NUL, carriage return, newline, or other
+  control characters.
+- The HTTP request body is limited to 64 KiB; unknown JSON fields are rejected.
+
+A completed status response includes the captured result:
+
+```json
+{
+  "status": "complete",
+  "exit_code": 0,
+  "output": {
+    "stdout": "migration complete\n",
+    "stderr": "",
+    "truncated": false
+  }
+}
+```
+
+A failed run keeps the real exit code and captured output and adds a sanitized
+failure summary:
+
+```json
+{
+  "status": "failed",
+  "exit_code": 1,
+  "output": {
+    "stdout": "starting migration\n",
+    "stderr": "relation does not exist\n",
+    "truncated": false
+  },
+  "detail": "migration failed: relation does not exist"
+}
+```
+
+Captured output is stripped of terminal escape sequences, has invalid UTF-8
+replaced, and is redacted against the managed secrets files and sensitive
+`KEY=value` patterns. At most 64 KiB per stream (128 KiB total) is retained;
+`truncated` reports when output was dropped. Output lives only in process
+memory for the existing one-hour job retention window and is not written to
+SQLite. Jobs and their output disappear when Redlaunch restarts.
+
+The UI exposes the same workflow as **Run with parameters…** on the service
+page and in the service actions menu. It requires explicit confirmation,
+supports argument reordering, and previews the effective command. See the
+[one-off run reference](REFERENCE.md) for the complete validation and output
+contract.
 
 ## Example: Drizzle migration from GitHub Actions
 
@@ -150,8 +242,8 @@ sent over plain HTTP can be intercepted.
 | Code | Meaning |
 | --- | --- |
 | `202` | Run dispatched (or the already-running job for a duplicate dispatch); poll `status_url`. |
-| `200` | Job status (`running`, `complete`, or `failed` with redacted `detail`). |
-| `400` | Invalid application ID or service name. |
+| `200` | Job status (`running`, `complete`, or `failed` with captured output and sanitized `detail`). |
+| `400` | Invalid application ID, service name, JSON body, or run parameters. |
 | `401` | Missing, unknown, malformed, or expired token. |
 | `403` | Valid token, but not scoped to this application. |
 | `404` | Unknown application, service, or job ID. |
@@ -184,8 +276,9 @@ Reads return `200` with `{"status":"complete","result":...}`. Mutations return
 `GET /api/v1/management/jobs/<job_id>` using a management Bearer token. Any valid
 management token can poll a server-wide management job. Completion returns
 `status: complete` and a sanitized `result`; failure returns `status: failed`
-and a generic error. HTTP failures and jobs never include upstream Docker
-output, credentials, or environment values. Inspect resource state before
+and a generic error. A failed one-off run also includes its redacted captured
+result so operators can diagnose it. HTTP failures never include upstream
+Docker output, credentials, or environment values. Inspect resource state before
 retrying a failed or lost mutation. Management dispatches have no automatic
 retry or duplicate-job reuse.
 
@@ -197,6 +290,29 @@ job. `503` means worker or retained-job capacity is full. Requests and responses
 use `Cache-Control: no-store`. Browser session cookies do not authenticate
 machine requests, and machine requests do not require browser CSRF cookies.
 The Settings token creation form still requires session authentication and CSRF.
+
+`service_action` with `action: "run"` accepts the same optional `parameters`
+object as the application run endpoint:
+
+```sh
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer $REDLAUNCH_MANAGEMENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "application_id": 7,
+    "service_name": "migrate",
+    "action": "run",
+    "parameters": {
+      "args": ["--database-name", "example", "--confirm"],
+      "env": {"NODE_ENV": "development"}
+    }
+  }' \
+  "$REDLAUNCH_URL/api/v1/management/service_action"
+```
+
+The completed job result is the captured `OneOffRunResult` with `exit_code`,
+`stdout`, `stderr`, `truncated`, and `duration`. Parameters are rejected for
+`start`, `stop`, and `restart`.
 
 See [MCP management](MCP.md#server-wide-management) for supported operations,
 configuration schemas, secret handling, job lifetimes, and database ownership.

@@ -40,6 +40,7 @@ type ManagementArguments struct {
 	Action        string                  `json:"action"`
 	Tag           string                  `json:"tag"`
 	Digest        string                  `json:"digest"`
+	Parameters    *OneOffRunParameters    `json:"parameters"`
 }
 
 // ManagementOperations lists only operations supported by the service layer.
@@ -55,6 +56,14 @@ func ManagementOperations() []ManagementOperation {
 		"configuration": managementStructSchema(reflect.TypeFor[ApplicationServiceInput]()),
 		"routing":       managementStructSchema(reflect.TypeFor[RoutingInput]()),
 		"action":        map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "run"}},
+		"parameters": map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"args": map[string]any{"type": "array", "maxItems": MaxOneOffRunArguments, "items": map[string]any{"type": "string", "maxLength": MaxOneOffRunArgumentBytes}},
+				"env":  map[string]any{"type": "object", "maxProperties": MaxOneOffRunEnvironmentEntries, "additionalProperties": map[string]any{"type": "string", "maxLength": MaxOneOffRunEnvironmentValueBytes}, "propertyNames": map[string]any{"enum": OneOffRunEnvironmentKeys()}},
+			},
+		},
 	}
 	var result []ManagementOperation
 	add := func(name, description string, read bool, required []string, optional ...string) {
@@ -73,7 +82,7 @@ func ManagementOperations() []ManagementOperation {
 	add("create_service", "Create a custom managed application service.", false, []string{"application_id", "configuration"})
 	add("update_service", "Replace a custom application service configuration.", false, []string{"application_id", "service_name", "configuration"})
 	add("delete_service", "Delete a service and its routing.", false, []string{"application_id", "service_name"})
-	add("service_action", "Start, stop, restart, or run a registered service once.", false, []string{"application_id", "service_name", "action"})
+	add("service_action", "Start, stop, restart, or run a registered service once. Parameters are accepted only for action run.", false, []string{"application_id", "service_name", "action"}, "parameters")
 	add("list_service_versions", "List the registry images of a service's repository and the image it currently deploys.", true, []string{"application_id", "service_name"})
 	add("switch_version", "Move a service's deployment tag to a registry image and recreate the service. Pass the image digest, or a tag to resolve within the service's repository.", false, []string{"application_id", "service_name"}, "tag", "digest")
 	add("switch_application_version", "Move every eligible service's deployment tag to the image carrying the given tag in its repository and recreate those services.", false, []string{"application_id", "tag"})
@@ -164,6 +173,16 @@ func DecodeManagementArguments(op ManagementOperation, raw []byte) (ManagementAr
 	}
 	if op.Name == "database_cluster_action" && args.Action == "run" {
 		return args, invalid
+	}
+	if _, ok := fields["parameters"]; ok {
+		if args.Action != "run" || args.Parameters == nil {
+			return args, invalid
+		}
+		validated, err := ValidateOneOffRunParameters(*args.Parameters)
+		if err != nil {
+			return args, invalid
+		}
+		args.Parameters = &validated
 	}
 	return args, nil
 }

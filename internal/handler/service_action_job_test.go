@@ -2,8 +2,11 @@ package handler
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"redlaunch/internal/application"
 )
 
 func TestServiceActionJobDedupesSameOperationAndRejectsConflicting(t *testing.T) {
@@ -58,6 +61,41 @@ func TestServiceActionJobTracksCompletionAndExpiry(t *testing.T) {
 	store.expire(time.Now())
 	if got := store.get(7, "db", failed.id); got != nil {
 		t.Fatalf("expired job still present")
+	}
+}
+
+func TestServiceActionJobRetainsParametersAndCapturedResultUntilExpiry(t *testing.T) {
+	store := newServiceActionJobStore()
+	job, _, err := store.createUnique(7, "migrate", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters := application.OneOffRunParameters{
+		Args: []string{"--confirm"},
+		Env:  map[string]string{"NODE_ENV": "development"},
+	}
+	job.setParameters(parameters)
+	parameters.Args[0] = "mutated"
+	parameters.Env["NODE_ENV"] = "mutated"
+	if got := job.takeParameters(); strings.Join(got.Args, "\x00") != "--confirm" || got.Env["NODE_ENV"] != "development" {
+		t.Fatalf("job parameters = %#v, want defensive copy", got)
+	}
+	job.setRunResult(application.OneOffRunResult{ExitCode: 1, Stdout: "out", Stderr: "err", Truncated: true})
+	job.fail(errors.New("run failed"))
+	snapshot := job.snapshot()
+	if snapshot.State != serviceActionJobStateFailed || snapshot.ExitCode != 1 || !snapshot.OutputAvailable || !snapshot.OutputTruncated {
+		t.Fatalf("snapshot = %+v, want failed result metadata", snapshot)
+	}
+	result, ok := job.runResultSnapshot()
+	if !ok || result.Stdout != "out" || result.Stderr != "err" {
+		t.Fatalf("run result = %+v, %v, want captured output", result, ok)
+	}
+	job.mu.Lock()
+	job.finishedAt = time.Now().Add(-2 * serviceActionJobRetention)
+	job.mu.Unlock()
+	store.expire(time.Now())
+	if store.get(7, "migrate", job.id) != nil {
+		t.Fatal("expired job still reachable from the store")
 	}
 }
 

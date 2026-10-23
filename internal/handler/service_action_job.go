@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"redlaunch/internal/application"
 )
 
 const (
@@ -41,19 +43,29 @@ type serviceActionJob struct {
 	errorDetail    string
 	errorTechnical string
 	finishedAt     time.Time
+
+	parameters    application.OneOffRunParameters
+	hasParameters bool
+	runResult     application.OneOffRunResult
+	hasRunResult  bool
 }
 
 type serviceActionProgressData struct {
-	JobID          string
-	ApplicationID  int64
-	ServiceName    string
-	Operation      string
-	State          string
-	Detail         string
-	ErrorDetail    string
-	ErrorTechnical string
-	StatusURL      string
-	CloseURL       string
+	JobID           string
+	ApplicationID   int64
+	ServiceName     string
+	Operation       string
+	State           string
+	Detail          string
+	ErrorDetail     string
+	ErrorTechnical  string
+	StatusURL       string
+	CloseURL        string
+	ExitCode        int
+	OutputAvailable bool
+	OutputTruncated bool
+	OutputURL       string
+	OutputDialogURL string
 }
 
 func newServiceActionJobStore() *serviceActionJobStore {
@@ -107,8 +119,13 @@ func (s *serviceActionJobStore) get(applicationID int64, serviceName, id string)
 	}
 	job.mu.RLock()
 	belongsToService := job.applicationID == applicationID && job.serviceName == serviceName
+	finishedAt := job.finishedAt
 	job.mu.RUnlock()
 	if !belongsToService {
+		return nil
+	}
+	if !finishedAt.IsZero() && time.Since(finishedAt) > serviceActionJobRetention {
+		delete(s.jobs, id)
 		return nil
 	}
 	return job
@@ -123,8 +140,13 @@ func (s *serviceActionJobStore) getByID(applicationID int64, id string) *service
 	}
 	job.mu.RLock()
 	belongsToApplication := job.applicationID == applicationID
+	finishedAt := job.finishedAt
 	job.mu.RUnlock()
 	if !belongsToApplication {
+		return nil
+	}
+	if !finishedAt.IsZero() && time.Since(finishedAt) > serviceActionJobRetention {
+		delete(s.jobs, id)
 		return nil
 	}
 	return job
@@ -189,15 +211,65 @@ func (j *serviceActionJob) snapshot() serviceActionProgressData {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	return serviceActionProgressData{
-		JobID:          j.id,
-		ApplicationID:  j.applicationID,
-		ServiceName:    j.serviceName,
-		Operation:      j.operation,
-		State:          j.state,
-		Detail:         j.stage,
-		ErrorDetail:    j.errorDetail,
-		ErrorTechnical: j.errorTechnical,
+		JobID:           j.id,
+		ApplicationID:   j.applicationID,
+		ServiceName:     j.serviceName,
+		Operation:       j.operation,
+		State:           j.state,
+		Detail:          j.stage,
+		ErrorDetail:     j.errorDetail,
+		ErrorTechnical:  j.errorTechnical,
+		ExitCode:        j.runResult.ExitCode,
+		OutputAvailable: j.hasRunResult,
+		OutputTruncated: j.runResult.Truncated,
 	}
+}
+
+// setParameters attaches validated per-run values before the job starts. The
+// map is copied so later form parsing cannot mutate a running job.
+func (j *serviceActionJob) setParameters(parameters application.OneOffRunParameters) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	env := make(map[string]string, len(parameters.Env))
+	for key, value := range parameters.Env {
+		env[key] = value
+	}
+	j.parameters = application.OneOffRunParameters{
+		Args: append([]string(nil), parameters.Args...),
+		Env:  env,
+	}
+	j.hasParameters = true
+}
+
+func (j *serviceActionJob) takeParameters() application.OneOffRunParameters {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	if !j.hasParameters {
+		return application.OneOffRunParameters{}
+	}
+	env := make(map[string]string, len(j.parameters.Env))
+	for key, value := range j.parameters.Env {
+		env[key] = value
+	}
+	return application.OneOffRunParameters{
+		Args: append([]string(nil), j.parameters.Args...),
+		Env:  env,
+	}
+}
+
+// setRunResult records captured output even when the run failed. The job owns
+// the strings until it expires, which keeps output in memory for one hour.
+func (j *serviceActionJob) setRunResult(result application.OneOffRunResult) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.runResult = result
+	j.hasRunResult = true
+}
+
+func (j *serviceActionJob) runResultSnapshot() (application.OneOffRunResult, bool) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.runResult, j.hasRunResult
 }
 
 // setDeployTarget attaches the selected image digest to a version deployment
@@ -260,7 +332,17 @@ func (h *Handler) runServiceActionJob(ctx context.Context, job *serviceActionJob
 	case "restart":
 		err = h.serviceActions.RestartService(ctx, job.applicationID, job.serviceName)
 	case "run":
-		err = h.serviceActions.RunServiceOnce(ctx, job.applicationID, job.serviceName)
+		result, runErr := h.serviceActions.RunServiceOnceWithParameters(ctx, job.applicationID, job.serviceName, job.takeParameters())
+		job.setRunResult(result)
+		err = runErr
+		h.logger.Info("ran one-off service action",
+			"application_id", job.applicationID,
+			"service", job.serviceName,
+			"job_id", job.id,
+			"exit_code", result.ExitCode,
+			"stdout_bytes", len(result.Stdout),
+			"stderr_bytes", len(result.Stderr),
+			"truncated", result.Truncated)
 	case "deploy":
 		if h.versionDeploys == nil {
 			err = errors.New("version deployment service is not configured")
@@ -274,6 +356,18 @@ func (h *Handler) runServiceActionJob(ctx context.Context, job *serviceActionJob
 	}
 	if err != nil {
 		job.fail(err)
+		if job.operation == "run" {
+			result, _ := job.runResultSnapshot()
+			h.logger.Error("run service action job",
+				"application_id", job.applicationID,
+				"service", job.serviceName,
+				"job_id", job.id,
+				"exit_code", result.ExitCode,
+				"stdout_bytes", len(result.Stdout),
+				"stderr_bytes", len(result.Stderr),
+				"truncated", result.Truncated)
+			return
+		}
 		h.logger.Error("run service action job",
 			"application_id", job.applicationID,
 			"service", job.serviceName,

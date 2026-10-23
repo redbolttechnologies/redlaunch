@@ -97,6 +97,13 @@
           <span>Run</span>
         </button>
       </form>
+      <button class="button button-secondary service-details-action" type="button" data-run-parameters-open data-service-name="{{.ServiceDetailsPage.Details.Service.Name}}" data-return-to="service-details" aria-controls="service-run-parameters-dialog" aria-haspopup="dialog" aria-expanded="false">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 7h16M4 12h10M4 17h7"></path>
+          <path d="m17 14 2 2-4 4h-2v-2l4-4Z"></path>
+        </svg>
+        <span>Run with parameters…</span>
+      </button>
       {{if eq .ServiceDetailsPage.Details.Service.Type "application"}}
       <a class="button button-secondary service-details-action" href="/applications/{{.ServiceDetailsPage.Application.ID}}/services/{{.ServiceDetailsPage.Details.Service.Name}}/edit">
         <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -140,6 +147,7 @@
   {{template "service-details-logs.html" .}}
   {{end}}
 </section>
+{{template "service-run-parameters-dialog.html" .}}
 {{with .ServiceDetailsPage.ServiceActionError}}{{template "service-action-error-dialog.html" .}}{{end}}
 {{if .BackupProgress}}
 {{template "backup-progress.html" .}}

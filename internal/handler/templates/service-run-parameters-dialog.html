@@ -1,0 +1,103 @@
+{{define "service-run-parameters-dialog.html"}}
+<dialog class="application-dialog service-run-parameters-dialog" id="service-run-parameters-dialog" data-run-parameters-dialog data-application-id="{{if .ApplicationDetailsPage}}{{.ApplicationDetailsPage.Application.ID}}{{else if .ServiceDetailsPage}}{{.ServiceDetailsPage.Application.ID}}{{end}}" role="dialog" aria-modal="true" aria-labelledby="service-run-parameters-title" aria-describedby="service-run-parameters-description">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div>
+        <h2 id="service-run-parameters-title">Run with parameters</h2>
+        <p id="service-run-parameters-description">Run <code data-run-service-name>this service</code> once with optional arguments and allowlisted environment overrides. The service definition is not changed.</p>
+      </div>
+      <button class="icon-button" type="button" data-run-parameters-close aria-label="Close run with parameters dialog">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 6 12 12M18 6 6 18"></path>
+        </svg>
+      </button>
+    </header>
+
+    <form class="application-form service-run-parameters-form" method="post" action="{{if .ServiceDetailsPage}}{{serviceDetailsPath .ServiceDetailsPage.Application.ID .ServiceDetailsPage.Details.Service.Name}}/run-with-parameters{{end}}" data-run-parameters-form>
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{if .ServiceDetailsPage}}service-details{{end}}" data-run-return-to>
+
+      <section class="service-run-section" aria-labelledby="service-run-arguments-title">
+        <div class="service-run-section-header">
+          <div>
+            <h3 id="service-run-arguments-title">Arguments</h3>
+            <p class="field-help">Passed after the service name, in this order. Do not enter a shell command.</p>
+          </div>
+          <button class="button button-secondary" type="button" data-run-argument-add>Add argument</button>
+        </div>
+        <div class="service-run-rows" data-run-argument-rows>
+          {{template "service-run-argument-row" .}}
+        </div>
+        <template data-run-argument-template>{{template "service-run-argument-row" .}}</template>
+      </section>
+
+      <section class="service-run-section" aria-labelledby="service-run-environment-title">
+        <div class="service-run-section-header">
+          <div>
+            <h3 id="service-run-environment-title">Environment overrides</h3>
+            <p class="field-help">Only non-secret values are allowed. Put credentials in <code>secrets.env</code>.</p>
+          </div>
+          <button class="button button-secondary" type="button" data-run-environment-add>Add override</button>
+        </div>
+        <div class="service-run-rows" data-run-environment-rows></div>
+        <template data-run-environment-template>{{template "service-run-environment-row" .}}</template>
+      </section>
+
+      <div class="field service-run-preview-field">
+        <span class="field-label">Effective command</span>
+        <pre class="service-run-preview" data-run-preview aria-live="polite">service</pre>
+        <span class="field-help">This preview shows the argument order and environment overrides for this run only.</span>
+      </div>
+
+      <label class="service-run-confirmation">
+        <input type="checkbox" name="confirm_run" value="on" required>
+        <span>I understand this command runs immediately and may change data.</span>
+      </label>
+
+      <p class="application-alert application-alert-warning service-run-warning" role="note">
+        Arguments and environment values may be visible in host process listings. Never put secrets, passwords, or tokens in run parameters.
+      </p>
+
+      <footer class="application-form-actions">
+        <button class="button button-secondary" type="button" data-run-parameters-close>Cancel</button>
+        <button class="button button-primary" type="submit" data-run-parameters-submit>Run once</button>
+      </footer>
+    </form>
+  </div>
+</dialog>
+{{end}}
+
+{{define "service-run-argument-row"}}
+<div class="service-run-row" data-run-argument-row>
+  <label class="sr-only">Argument</label>
+  <input type="text" name="arg" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="--flag or value" aria-label="Argument" data-run-argument-input>
+  <div class="service-run-row-actions">
+    <button class="icon-button" type="button" data-run-argument-up aria-label="Move argument up" title="Move up">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"></path></svg>
+    </button>
+    <button class="icon-button" type="button" data-run-argument-down aria-label="Move argument down" title="Move down">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg>
+    </button>
+    <button class="icon-button" type="button" data-run-argument-remove aria-label="Remove argument" title="Remove">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+    </button>
+  </div>
+</div>
+{{end}}
+
+{{define "service-run-environment-row"}}
+<div class="service-run-row service-run-environment-row" data-run-environment-row>
+  <label class="sr-only">Environment key</label>
+  <select name="env_key" aria-label="Environment key" data-run-environment-key>
+    <option value="">Select key…</option>
+    {{range oneOffRunEnvironmentKeys}}<option value="{{.}}">{{.}}</option>{{end}}
+  </select>
+  <label class="sr-only">Environment value</label>
+  <input type="text" name="env_value" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="value" aria-label="Environment value" data-run-environment-value>
+  <div class="service-run-row-actions">
+    <button class="icon-button" type="button" data-run-environment-remove aria-label="Remove environment override" title="Remove">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+    </button>
+  </div>
+</div>
+{{end}}

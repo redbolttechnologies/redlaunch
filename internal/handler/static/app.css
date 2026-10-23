@@ -5649,6 +5649,227 @@ h1 {
   }
 }
 
+.service-run-parameters-dialog {
+  width: min(calc(100% - var(--space-8)), 48rem);
+}
+
+.service-run-section {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.service-run-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.service-run-section-header h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.service-run-section-header p {
+  margin: var(--space-1) 0 0;
+}
+
+.service-run-rows {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.service-run-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.service-run-environment-row {
+  grid-template-columns: minmax(9rem, 0.4fr) minmax(0, 1fr) auto;
+}
+
+.service-run-row input,
+.service-run-row select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.8125rem;
+  outline: none;
+}
+
+.service-run-row input:focus,
+.service-run-row select:focus {
+  border-color: hsl(var(--ring) / 0.5);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.service-run-row-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.service-run-row-actions .icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.service-run-preview {
+  max-height: 12rem;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid hsl(var(--code) / 0.92);
+  border-radius: var(--radius);
+  color: hsl(var(--code-foreground));
+  background: hsl(var(--code));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.service-run-confirmation {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+}
+
+.service-run-confirmation input {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.125rem;
+  accent-color: hsl(var(--primary));
+}
+
+.service-run-warning {
+  margin: 0;
+}
+
+.toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.toast-actions .toast-action {
+  min-height: 2rem;
+  padding: 0 var(--space-3);
+  font-size: 0.75rem;
+}
+
+.service-action-output-dialog {
+  width: min(calc(100% - var(--space-8)), 56rem);
+}
+
+.service-action-output-body {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.service-action-output-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin: 0;
+}
+
+.service-action-output-summary div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.service-action-output-summary dt {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.service-action-output-summary dd {
+  margin: 0;
+}
+
+.service-action-output-notice {
+  margin: 0;
+}
+
+.service-action-output-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.service-action-output-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.service-action-output-section-header h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.service-action-output-pre {
+  max-height: 22rem;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid hsl(var(--code) / 0.92);
+  border-radius: calc(var(--radius) - 0.125rem);
+  color: hsl(var(--code-foreground));
+  background: hsl(var(--code));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media (max-width: 640px) {
+  .service-run-section-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .service-run-section-header .button {
+    justify-content: center;
+  }
+
+  .service-run-environment-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .service-run-environment-row select {
+    grid-column: 1 / -1;
+  }
+
+  .service-action-output-section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .toast-stack {
   position: fixed;
   z-index: 20;

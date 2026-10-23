@@ -224,6 +224,15 @@
                           </button>
                         </form>
                       </li>
+                      <li>
+                        <button class="service-actions-item" type="button" data-run-parameters-open data-service-name="{{.Name}}" aria-controls="service-run-parameters-dialog" aria-haspopup="dialog" aria-expanded="false">
+                          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 7h16M4 12h10M4 17h7"></path>
+                            <path d="m17 14 2 2-4 4h-2v-2l4-4Z"></path>
+                          </svg>
+                          <span>Run with parameters…</span>
+                        </button>
+                      </li>
                       <li class="service-actions-separator">
                         {{if eq .Type "application"}}
                         <a class="service-actions-item" href="/applications/{{$.ApplicationDetailsPage.Application.ID}}/services/{{.Name}}/edit">
@@ -931,6 +940,7 @@
 </dialog>
 
 {{with .ApplicationDetailsPage.ServiceActionError}}{{template "service-action-error-dialog.html" .}}{{end}}
+{{template "service-run-parameters-dialog.html" .}}
 {{end}}
 
 {{define "application-environment-panel"}}

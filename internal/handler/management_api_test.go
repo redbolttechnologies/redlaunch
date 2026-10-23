@@ -166,6 +166,42 @@ func TestManagementAPIApplicationServiceEnvironmentAndRouting(t *testing.T) {
 	}
 }
 
+func TestManagementAPIRunServiceWithParametersReturnsCapturedResult(t *testing.T) {
+	apps := apiApplications()
+	apps.serviceActionResult = application.OneOffRunResult{
+		ExitCode:  0,
+		Stdout:    "migration complete\n",
+		Stderr:    "",
+		Truncated: false,
+	}
+	web, _ := managementTestHandler(t, apps, nil)
+	result := dispatchManagement(t, web, "service_action", `{"application_id":7,"service_name":"migrate","action":"run","parameters":{"args":["--database-name","example","--confirm"],"env":{"NODE_ENV":"development"}}}`)
+	for _, expected := range []string{`"complete"`, `"exit_code":0`, `"stdout":"migration complete\n"`} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("result did not contain %q: %s", expected, result)
+		}
+	}
+	if got := strings.Join(apps.serviceActionParameters.Args, "\x00"); got != "--database-name\x00example\x00--confirm" {
+		t.Fatalf("arguments = %q, want ordered values", got)
+	}
+	if apps.serviceActionParameters.Env["NODE_ENV"] != "development" {
+		t.Fatalf("environment = %#v, want NODE_ENV=development", apps.serviceActionParameters.Env)
+	}
+}
+
+func TestManagementAPIRunFailureReturnsCapturedResult(t *testing.T) {
+	apps := apiApplications()
+	apps.serviceActionErr = errors.New("run service: migration failed")
+	apps.serviceActionResult = application.OneOffRunResult{ExitCode: 2, Stdout: "partial\n", Stderr: "failure\n"}
+	web, _ := managementTestHandler(t, apps, nil)
+	result := dispatchManagement(t, web, "service_action", `{"application_id":7,"service_name":"migrate","action":"run","parameters":{"args":["--confirm"]}}`)
+	for _, expected := range []string{`"failed"`, `"exit_code":2`, `"stdout":"partial\n"`, `"stderr":"failure\n"`} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("failed result did not contain %q: %s", expected, result)
+		}
+	}
+}
+
 func TestManagementAPIDatabasesAndSafeFailures(t *testing.T) {
 	db := &fakeManagedDatabases{credentials: &application.ManagedDatabaseCredentials{Username: "owner", Password: "generated-secret"}}
 	web, _ := managementTestHandler(t, apiApplications(), db)

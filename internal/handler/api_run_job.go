@@ -3,6 +3,8 @@ package handler
 import (
 	"sync"
 	"time"
+
+	"redlaunch/internal/application"
 )
 
 const (
@@ -31,8 +33,12 @@ type apiRunJob struct {
 	errorDetail   string
 	operationErr  error
 	finishedAt    time.Time
-	done          chan struct{}
-	doneOnce      sync.Once
+
+	parameters   application.OneOffRunParameters
+	runResult    application.OneOffRunResult
+	hasRunResult bool
+	done         chan struct{}
+	doneOnce     sync.Once
 }
 
 func newAPIRunJobStore() *apiRunJobStore {
@@ -133,4 +139,43 @@ func (j *apiRunJob) snapshot() (state, detail string) {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	return j.state, j.errorDetail
+}
+
+func (j *apiRunJob) setParameters(parameters application.OneOffRunParameters) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	env := make(map[string]string, len(parameters.Env))
+	for key, value := range parameters.Env {
+		env[key] = value
+	}
+	j.parameters = application.OneOffRunParameters{
+		Args: append([]string(nil), parameters.Args...),
+		Env:  env,
+	}
+}
+
+func (j *apiRunJob) parametersSnapshot() application.OneOffRunParameters {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	env := make(map[string]string, len(j.parameters.Env))
+	for key, value := range j.parameters.Env {
+		env[key] = value
+	}
+	return application.OneOffRunParameters{
+		Args: append([]string(nil), j.parameters.Args...),
+		Env:  env,
+	}
+}
+
+func (j *apiRunJob) setRunResult(result application.OneOffRunResult) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.runResult = result
+	j.hasRunResult = true
+}
+
+func (j *apiRunJob) runSnapshot() (string, string, application.OneOffRunResult, bool) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.state, j.errorDetail, j.runResult, j.hasRunResult
 }

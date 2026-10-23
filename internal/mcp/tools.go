@@ -27,16 +27,29 @@ func (s *Server) tools() []tool {
 			"service_name":   map[string]any{"type": "string", "description": "Registered Compose service name, not a command or container name."},
 		}
 	}
+	runProperties := func() map[string]any {
+		props := serviceProperties()
+		props["parameters"] = map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"description":          "Optional per-run arguments and allowlisted environment overrides. They do not modify the service definition.",
+			"properties": map[string]any{
+				"args": map[string]any{"type": "array", "maxItems": application.MaxOneOffRunArguments, "items": map[string]any{"type": "string", "maxLength": application.MaxOneOffRunArgumentBytes}, "description": "Positional arguments appended after the service name, in order."},
+				"env":  map[string]any{"type": "object", "maxProperties": application.MaxOneOffRunEnvironmentEntries, "additionalProperties": map[string]any{"type": "string", "maxLength": application.MaxOneOffRunEnvironmentValueBytes}, "propertyNames": map[string]any{"enum": application.OneOffRunEnvironmentKeys()}, "description": "Allowlisted environment overrides: NODE_ENV, TZ, LANG, LC_ALL, LOG_LEVEL."},
+			},
+		}
+		return props
+	}
 	tools := []tool{
-		{"read_guide", "Read a bundled Redlaunch integration guide. Use recipes for complete GHA image publishing, migration, and SSH deployment workflows; api-tokens for the machine API contract. " + sshWorkflowGuidance, schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"api-tokens", "recipes", "ssh-keys", "installation", "reference", "mcp"}}}, "topic"), local},
+		{"read_guide", "Read a bundled Redlaunch integration guide. Use recipes for complete GHA image publishing, migration, and SSH deployment workflows; api-tokens for the machine API contract; run-reference for parameterized one-off runs and captured output. " + sshWorkflowGuidance, schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"api-tokens", "run-reference", "recipes", "ssh-keys", "installation", "reference", "mcp"}}}, "topic"), local},
 		{"generate_run_workflow", "Generate a manual GitHub Actions workflow to run a registered service and poll completion. Uses vars.REDLAUNCH_URL and secrets.REDLAUNCH_RUN_TOKEN; does not dispatch anything. For SSH deployments read recipes. " + sshWorkflowGuidance, schema(serviceProperties(), "application_id", "service_name"), local},
 	}
 	if s.client != nil {
 		props := serviceProperties()
 		props["job_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "description": "Job ID returned by dispatch. Jobs expire one hour after finishing and do not survive Redlaunch restarts."}
-		tools = append(tools, tool{"get_run_status", "Poll an existing run using the configured application-scoped token. Returns only status; service output is omitted.", schema(props, "application_id", "service_name", "job_id"), map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}})
+		tools = append(tools, tool{"get_run_status", "Poll an existing run using the configured application-scoped token. Returns status, exit_code, and captured stdout/stderr when available.", schema(props, "application_id", "service_name", "job_id"), map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true}})
 		if s.allowRun {
-			tools = append(tools, tool{"run_service", "Start a registered one-off service using the configured token. Changes server state and may run migrations. Returns job_id; poll get_run_status. Concurrent duplicates reuse a running job, but retrying after completion starts another run.", schema(serviceProperties(), "application_id", "service_name"), map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}})
+			tools = append(tools, tool{"run_service", "Start a registered one-off service using the configured token. Optionally pass ordered args and allowlisted env overrides that apply only to this run. Changes server state and may run migrations. Returns job_id; poll get_run_status. Concurrent duplicates reuse a running job, but retrying after completion starts another run.", schema(runProperties(), "application_id", "service_name"), map[string]any{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}})
 		}
 	}
 	return append(tools, s.managementTools()...)
@@ -79,9 +92,10 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (an
 		return nil, failure(-32602, "Unknown guide topic")
 	}
 	var args struct {
-		ApplicationID int64  `json:"application_id"`
-		ServiceName   string `json:"service_name"`
-		JobID         string `json:"job_id,omitempty"`
+		ApplicationID int64                            `json:"application_id"`
+		ServiceName   string                           `json:"service_name"`
+		JobID         string                           `json:"job_id,omitempty"`
+		Parameters    *application.OneOffRunParameters `json:"parameters,omitempty"`
 	}
 	if !decodeArguments(raw, &args) || args.ApplicationID < 1 {
 		return nil, failure(-32602, "A positive application_id and valid service_name are required")
@@ -95,6 +109,16 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (an
 	if _, present := fields["job_id"]; name != "get_run_status" && present {
 		return nil, failure(-32602, "job_id is only accepted by get_run_status")
 	}
+	if _, present := fields["parameters"]; present && name != "run_service" {
+		return nil, failure(-32602, "parameters is only accepted by run_service")
+	}
+	if args.Parameters != nil {
+		validated, err := application.ValidateOneOffRunParameters(*args.Parameters)
+		if err != nil {
+			return nil, failure(-32602, "Invalid run parameters: "+err.Error())
+		}
+		args.Parameters = &validated
+	}
 	if name == "generate_run_workflow" {
 		return toolResult(runWorkflow(args.ApplicationID, serviceName), false), nil
 	}
@@ -105,7 +129,7 @@ func (s *Server) call(ctx context.Context, name string, raw json.RawMessage) (an
 		}
 		result, err = s.client.status(ctx, args.ApplicationID, serviceName, args.JobID)
 	} else {
-		result, err = s.client.run(ctx, args.ApplicationID, serviceName)
+		result, err = s.client.run(ctx, args.ApplicationID, serviceName, args.Parameters)
 	}
 	if err != nil {
 		return toolResult(err.Error(), true), nil

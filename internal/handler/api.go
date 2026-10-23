@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -118,6 +120,10 @@ func (h *Handler) runServiceViaAPI(w http.ResponseWriter, r *http.Request) {
 	if !h.apiServiceRegistered(w, r.Context(), id, serviceName) {
 		return
 	}
+	parameters, ok := decodeAPIRunParameters(w, r)
+	if !ok {
+		return
+	}
 
 	job, created, err := h.apiRunJobs.createUnique(id, serviceName)
 	if err != nil {
@@ -126,6 +132,7 @@ func (h *Handler) runServiceViaAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if created {
+		job.setParameters(parameters)
 		if err := h.startTrackedJob("api-run:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
 			h.runAPIRunJob(ctx, job, token)
 		}); err != nil {
@@ -140,6 +147,44 @@ func (h *Handler) runServiceViaAPI(w http.ResponseWriter, r *http.Request) {
 		"job_id":     job.id,
 		"status_url": apiRunStatusURL(id, serviceName, job.id),
 	})
+}
+
+// decodeAPIRunParameters decodes the optional parameter envelope. An empty
+// body preserves the original run-once request exactly. Unknown fields,
+// trailing JSON, oversized bodies, and invalid parameters are rejected with
+// one stable non-sensitive message.
+func decodeAPIRunParameters(w http.ResponseWriter, r *http.Request) (application.OneOffRunParameters, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, application.MaxOneOffRunRequestBytes))
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "The run parameters are invalid.")
+		return application.OneOffRunParameters{}, false
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return application.OneOffRunParameters{}, true
+	}
+	var request struct {
+		Parameters *application.OneOffRunParameters `json:"parameters"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "The run parameters are invalid.")
+		return application.OneOffRunParameters{}, false
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeAPIError(w, http.StatusBadRequest, "The run parameters are invalid.")
+		return application.OneOffRunParameters{}, false
+	}
+	if request.Parameters == nil {
+		return application.OneOffRunParameters{}, true
+	}
+	parameters, err := application.ValidateOneOffRunParameters(*request.Parameters)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "The run parameters are invalid.")
+		return application.OneOffRunParameters{}, false
+	}
+	return parameters, true
 }
 
 // apiRunJobStatus reports one machine-triggered run job. Unknown or expired
@@ -167,8 +212,16 @@ func (h *Handler) apiRunJobStatus(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "Run job not found.")
 		return
 	}
-	state, detail := job.snapshot()
-	response := map[string]string{"status": state}
+	state, detail, result, hasResult := job.runSnapshot()
+	response := map[string]any{"status": state}
+	if hasResult {
+		response["exit_code"] = result.ExitCode
+		response["output"] = map[string]any{
+			"stdout":    result.Stdout,
+			"stderr":    result.Stderr,
+			"truncated": result.Truncated,
+		}
+	}
 	if state == apiRunJobStateFailed && detail != "" {
 		response["detail"] = detail
 	}
@@ -199,21 +252,32 @@ func (h *Handler) apiServiceRegistered(w http.ResponseWriter, ctx context.Contex
 }
 
 func (h *Handler) runAPIRunJob(ctx context.Context, job *apiRunJob, token application.APIToken) {
-	if err := h.serviceActions.RunServiceOnce(ctx, job.applicationID, job.serviceName); err != nil {
+	result, err := h.serviceActions.RunServiceOnceWithParameters(ctx, job.applicationID, job.serviceName, job.parametersSnapshot())
+	job.setRunResult(result)
+	if err != nil {
 		job.fail(err)
 		h.logger.Error("run API service action",
 			"application_id", job.applicationID,
 			"service", job.serviceName,
+			"job_id", job.id,
 			"token_id", token.ID,
 			"token_prefix", token.Prefix,
-			"error", serviceActionErrorDetail(err))
+			"exit_code", result.ExitCode,
+			"stdout_bytes", len(result.Stdout),
+			"stderr_bytes", len(result.Stderr),
+			"truncated", result.Truncated)
 		return
 	}
 	h.logger.Info("ran API service action",
 		"application_id", job.applicationID,
 		"service", job.serviceName,
+		"job_id", job.id,
 		"token_id", token.ID,
-		"token_prefix", token.Prefix)
+		"token_prefix", token.Prefix,
+		"exit_code", result.ExitCode,
+		"stdout_bytes", len(result.Stdout),
+		"stderr_bytes", len(result.Stderr),
+		"truncated", result.Truncated)
 	job.complete()
 }
 

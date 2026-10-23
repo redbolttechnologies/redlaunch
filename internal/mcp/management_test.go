@@ -49,6 +49,35 @@ func TestManagementToolsRequireSeparateCredentialAndMutationOptIn(t *testing.T) 
 	}
 }
 
+func TestManagementClientReturnsFailedRunOutput(t *testing.T) {
+	stdout := strings.Repeat("a", 100<<10)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/management/service_action" && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"status":"running","job_id":"job-1"}`)
+		case r.URL.Path == "/api/v1/management/jobs/job-1" && r.Method == http.MethodGet:
+			fmt.Fprintf(w, `{"status":"failed","result":{"exit_code":2,"stdout":%q,"stderr":"failure","truncated":false,"duration":0},"error":"generic"}`, stdout)
+		default:
+			t.Error("unexpected management request")
+			w.WriteHeader(404)
+		}
+	}))
+	defer upstream.Close()
+	server, err := NewWithManagement(upstream.URL, "", testToken(), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, rpcErr := server.call(t.Context(), "get_management_job", json.RawMessage(`{"job_id":"job-1"}`))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	encoded, _ := json.Marshal(result)
+	if !strings.Contains(string(encoded), "exit_code") || !strings.Contains(string(encoded), strings.Repeat("a", 1024)) {
+		t.Fatal("failed run output was not returned")
+	}
+}
+
 func TestManagementTransportRejectsSensitiveErrorsAndRedirects(t *testing.T) {
 	var contacted bool
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { contacted = true }))

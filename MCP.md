@@ -294,7 +294,12 @@ or use your secret manager to supply them.
 
 The assistant now has `get_run_status`. Give it the application ID, service name,
 and job ID from an existing run and ask it to check progress. It returns
-`running`, `complete`, or `failed`; it does not return service logs.
+`running`, `complete`, or `failed` plus the real `exit_code` and captured
+`stdout`/`stderr` when the run has finished. Output is redacted, terminal
+escape sequences are removed, and the result is capped at 64 KiB per stream
+(128 KiB total). `truncated` reports when output was dropped. Jobs and their
+output remain available in process memory for one hour and disappear when
+Redlaunch restarts.
 If you do not have a job ID yet, Step 5 explains how to start a run.
 
 ## Step 5: Allow service runs when needed
@@ -317,6 +322,27 @@ For example:
 
 > Use Redlaunch MCP to run service migrate in application 7 once, then check
 > its progress until it finishes. Ask me before starting the run.
+
+To pass per-run values, include the optional `parameters` object. Arguments are
+ordered and appended after the service's configured command; environment keys
+must be one of `NODE_ENV`, `TZ`, `LANG`, `LC_ALL`, or `LOG_LEVEL`:
+
+```json
+{
+  "application_id": 7,
+  "service_name": "migrate",
+  "parameters": {
+    "args": ["--database-name", "example", "--confirm"],
+    "env": {"NODE_ENV": "development"}
+  }
+}
+```
+
+Parameters apply only to that one-off container and never modify the service
+definition. They cannot change the image, command, or entrypoint. Arguments and
+environment values may be visible in host process listings, so never put
+secrets in them; credentials belong in `secrets.env`. Invalid parameters are
+rejected before any Docker command runs.
 
 The assistant receives a job ID and uses it to check progress. If a request
 times out or the connection drops, check the existing run before trying again:
@@ -376,7 +402,7 @@ only management inventory and job polling.
 | `create_service` | `application_id`, `configuration` |
 | `update_service` | `application_id`, `service_name`, `configuration` |
 | `delete_service` | `application_id`, `service_name` |
-| `service_action` | `application_id`, `service_name`, `action` (`start`, `stop`, `restart`, or `run`) |
+| `service_action` | `application_id`, `service_name`, `action` (`start`, `stop`, `restart`, or `run`); optional `parameters` only for `run` |
 | `list_service_versions` | `application_id`, `service_name` |
 | `switch_version` | `application_id`, `service_name`, and `digest` or `tag` (the tag is resolved inside the service's repository) |
 | `switch_application_version` | `application_id`, `tag` |
@@ -422,11 +448,20 @@ before creating a database owned by that user. Database creation requires an
 existing owner to avoid generating undisclosed credentials. Database/user
 permissions and deletion use the same services as the web interface.
 
+A `service_action` with `action: "run"` may include `parameters` with ordered
+`args` and allowlisted `env` overrides (`NODE_ENV`, `TZ`, `LANG`, `LC_ALL`,
+`LOG_LEVEL`). Invalid parameters, or parameters on any other action, are
+rejected before execution. The completed job result contains the captured
+`exit_code`, `stdout`, `stderr`, `truncated`, and `duration`; output is redacted
+and bounded like the application run API.
+
 All mutations return `status: running` and `job_id`; poll `get_management_job`
 until `complete` (with `result`) or `failed`. Results exclude secret values,
-credentials, logs, and process error output. Failures are deliberately generic.
-Do not retry mutations blindly after failure, timeout, or a lost response:
-operations can have partial effects, and retries do not reuse previous jobs.
+credentials, logs, and process error output, except for the intentionally
+redacted stdout/stderr captured by a one-off run. Failures are deliberately
+generic. Do not retry mutations blindly after failure, timeout, or a lost
+response: operations can have partial effects, and retries do not reuse
+previous jobs.
 A completed deletion can remove application files and database data.
 
 Jobs use Redlaunch's tracked operation runtime (eight concurrent operations

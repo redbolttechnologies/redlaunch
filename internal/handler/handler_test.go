@@ -300,6 +300,8 @@ type fakeApplicationService struct {
 	serviceActionID                 int64
 	serviceActionName               string
 	serviceActionErr                error
+	serviceActionParameters         application.OneOffRunParameters
+	serviceActionResult             application.OneOffRunResult
 	serviceActionMu                 sync.Mutex
 	serviceDeleteID                 int64
 	serviceDeleteName               string
@@ -639,6 +641,18 @@ func (s *fakeApplicationService) RunServiceOnce(_ context.Context, id int64, ser
 	err := s.serviceActionErr
 	s.serviceActionMu.Unlock()
 	return err
+}
+
+func (s *fakeApplicationService) RunServiceOnceWithParameters(_ context.Context, id int64, serviceName string, parameters application.OneOffRunParameters) (application.OneOffRunResult, error) {
+	s.serviceActionMu.Lock()
+	s.serviceAction = "run"
+	s.serviceActionID = id
+	s.serviceActionName = serviceName
+	s.serviceActionParameters = parameters
+	result := s.serviceActionResult
+	err := s.serviceActionErr
+	s.serviceActionMu.Unlock()
+	return result, err
 }
 
 func (s *fakeApplicationService) UpdatePostgreSQLCredentials(_ context.Context, id int64, serviceName string, input application.PostgreSQLCredentialsInput) (application.Service, error) {
@@ -3660,8 +3674,8 @@ func TestServiceDetailsRendersHeaderAndOmitsEnvironmentVariables(t *testing.T) {
 			t.Fatalf("GET /applications/7/services/db did not render %q: %s", expected, body)
 		}
 	}
-	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 6 {
-		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 6", got)
+	if got := strings.Count(body, `<input type="hidden" name="csrf_token"`); got != 7 {
+		t.Fatalf("GET /applications/7/services/db rendered %d service action CSRF inputs, want 7", got)
 	}
 	if got := strings.Count(body, `<input type="hidden" name="return_to" value="service-details">`); got != 4 {
 		t.Fatalf("GET /applications/7/services/db rendered %d service action return targets, want 4", got)

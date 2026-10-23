@@ -1,14 +1,23 @@
 {{define "service-action-toast-item"}}
-<div class="toast toast-{{.State}}" data-toast-job data-state="{{.State}}" data-status-url="{{.StatusURL}}" data-close-url="{{.CloseURL}}" role="status" aria-live="polite">
+<div class="toast toast-{{.State}}" data-toast-job data-state="{{.State}}" data-status-url="{{.StatusURL}}" data-close-url="{{.CloseURL}}" data-output-available="{{if .OutputAvailable}}true{{else}}false{{end}}" role="status" aria-live="polite">
   <span class="toast-icon" aria-hidden="true">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else}}…{{end}}</span>
   <div class="toast-copy">
-    <strong class="toast-title">{{if eq .State "complete"}}Service {{.Operation}} completed{{else if eq .State "failed"}}Service {{.Operation}} failed{{else}}{{serviceActionPresentTense .Operation}} service <code>{{.ServiceName}}</code>…{{end}}</strong>
+    <strong class="toast-title">{{if eq .Operation "run"}}{{if eq .State "complete"}}Run completed (exit {{.ExitCode}}){{else if eq .State "failed"}}{{if .OutputAvailable}}Run failed (exit {{.ExitCode}}){{else}}Run failed{{end}}{{else}}Running service <code>{{.ServiceName}}</code>…{{end}}{{else}}{{if eq .State "complete"}}Service {{.Operation}} completed{{else if eq .State "failed"}}Service {{.Operation}} failed{{else}}{{serviceActionPresentTense .Operation}} service <code>{{.ServiceName}}</code>…{{end}}{{end}}</strong>
     {{if eq .State "running"}}{{with .Detail}}
     <p class="toast-detail">{{.}}</p>
     {{end}}{{end}}
     {{if eq .State "failed"}}
     <p class="toast-detail">{{.ErrorDetail}}</p>
     {{if .ErrorTechnical}}<p class="toast-detail toast-technical"><code>{{.ErrorTechnical}}</code></p>{{end}}
+    {{end}}
+    {{if eq .Operation "run"}}
+    {{if .OutputTruncated}}<p class="toast-detail">Output was truncated to the retained limit.</p>{{end}}
+    {{if .OutputAvailable}}
+    <div class="toast-actions">
+      <button class="button button-secondary toast-action" type="button" hx-get="{{.OutputDialogURL}}" hx-target="#service-action-output" hx-swap="innerHTML" aria-haspopup="dialog">View output</button>
+      <a class="button button-secondary toast-action" href="{{.OutputURL}}&amp;download=1" download>Download</a>
+    </div>
+    {{end}}
     {{end}}
   </div>
   <button class="toast-close" type="button" data-toast-close aria-label="Dismiss and refresh">×</button>

@@ -102,6 +102,16 @@ For host shell access from external automation, see the
 For machine-triggered one-off runs (for example database migrations from
 GitHub Actions), see the [API tokens guide](API_TOKENS.md).
 
+A one-off run can pass ordered arguments and environment overrides that apply
+only to that container, for example a maintenance script that needs
+`NODE_ENV=development` and CLI flags. Overrides are limited to `NODE_ENV`,
+`TZ`, `LANG`, `LC_ALL`, and `LOG_LEVEL`; secrets must stay in `secrets.env`.
+Run parameters never modify `compose.yml`, `vars.env`, or `secrets.env`, and
+arguments may be visible in host process listings, so they must never contain
+secrets. See the [one-off run reference](REFERENCE.md) for the full contract,
+limits, and output handling, and the [API tokens guide](API_TOKENS.md#run-once-with-parameters) for
+the HTTP request shape and an example.
+
 For end-to-end tutorials (pushing images, Drizzle migrations, and deploying
 from GitHub Actions via the registry or via direct image copy), see the
 [recipes guide](RECIPES.md).
@@ -135,7 +145,12 @@ hostnames, application IDs, paths, and GitHub variables before running examples.
   secrets, and Compose configuration, leaving dependencies untouched.
 - Run a managed service once as a one-off task (for example a database
   migration) with `docker compose run --rm` semantics; the container is
-  removed afterwards and secrets stay on the server.
+  removed afterwards and secrets stay on the server. A run may include ordered
+  arguments and allowlisted environment overrides without changing the service
+  definition. Captured stdout, stderr, the real exit code, duration, and
+  truncation state are available in the web UI, HTTP API, and MCP. Output is
+  redacted, bounded to 64 KiB per stream (128 KiB total), and retained in
+  memory for one hour.
 - Keep regular settings in `vars.env` and secrets in `secrets.env`.
 - Generate secrets in the Add/Edit secret dialog with a configurable length
   of 16–1024 characters (default: 16). Generation uses Web Crypto's

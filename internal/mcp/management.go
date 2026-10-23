@@ -108,8 +108,8 @@ func (c *apiClient) managementRequest(ctx context.Context, method, path string, 
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusAccepted {
 		return nil, fmt.Errorf("Redlaunch API returned HTTP %d", response.StatusCode)
 	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if err != nil || len(content) > 65536 {
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxAPIClientResponseBytes+1))
+	if err != nil || len(content) > maxAPIClientResponseBytes {
 		return nil, errors.New("invalid or oversized Redlaunch API response")
 	}
 	var result struct {
@@ -127,8 +127,8 @@ func (c *apiClient) managementRequest(ctx context.Context, method, path string, 
 		}
 	case "complete":
 	case "failed":
-		// Discard upstream error text, just as the run client does.
-		result.Result = nil
+		// Keep a sanitized result when present (a failed one-off run returns
+		// captured output). Do not decode or forward generic error text.
 	default:
 		return nil, errors.New("invalid management job status")
 	}

@@ -210,6 +210,7 @@ type serviceActionService interface {
 	StopService(context.Context, int64, string) error
 	RestartService(context.Context, int64, string) error
 	RunServiceOnce(context.Context, int64, string) error
+	RunServiceOnceWithParameters(context.Context, int64, string, application.OneOffRunParameters) (application.OneOffRunResult, error)
 	UpdatePostgreSQLCredentials(context.Context, int64, string, application.PostgreSQLCredentialsInput) (application.Service, error)
 }
 
@@ -342,6 +343,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"serviceLogLines":             serviceLogLines,
 		"proxyLogLines":               proxyLogLines,
 		"serviceActionPresentTense":   serviceActionPresentTense,
+		"oneOffRunEnvironmentKeys":    application.OneOffRunEnvironmentKeys,
 		"routingHost":                 routingHost,
 		"environmentSensitive":        environmentSensitive,
 		"dashboardPercent":            dashboardPercent,
@@ -860,6 +862,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /applications/{id}/services/{service}/stop", h.stopService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/restart", h.restartService)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/run", h.runServiceOnce)
+	mux.HandleFunc("POST /applications/{id}/services/{service}/run-with-parameters", h.runServiceWithParameters)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/action/output", h.serviceActionOutput)
+	mux.HandleFunc("GET /applications/{id}/services/{service}/action/output/dialog", h.serviceActionOutputDialog)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/credentials", h.updatePostgresCredentials)
 	mux.HandleFunc("POST /applications/{id}/services/{service}/delete", h.deleteService)
 	mux.HandleFunc("GET /applications/{id}/services/{service}/delete/volumes", h.serviceDeletionVolumes)
@@ -2779,6 +2784,209 @@ func (h *Handler) runServiceOnce(w http.ResponseWriter, r *http.Request) {
 	h.serviceAction(w, r, "run")
 }
 
+// runServiceWithParameters starts a one-off run with ordered positional
+// arguments and allowlisted environment overrides. The values live only on the
+// in-memory job; they never modify the service's Compose definition.
+func (h *Handler) runServiceWithParameters(w http.ResponseWriter, r *http.Request) {
+	needsSetup, err := h.setupManager.NeedsSetup()
+	if err != nil {
+		h.logger.Error("inspect setup state", "error", err)
+		http.Error(w, "The setup state could not be read.", http.StatusInternalServerError)
+		return
+	}
+	if needsSetup {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.Error(w, "The service name is invalid.", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, application.MaxOneOffRunRequestBytes)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The run parameters request was invalid or too large.", http.StatusBadRequest)
+		return
+	}
+	if !h.validRequestCSRF(r) {
+		http.Error(w, "This run parameters page expired. Submit the refreshed page to continue.", http.StatusForbidden)
+		return
+	}
+	confirmed := formValueOn(r.Form, "confirm_run") || formValueOn(r.Form, "confirmation") || formValueOn(r.Form, "confirm")
+	if !confirmed {
+		http.Error(w, "Confirm that you want to run the service with these parameters.", http.StatusBadRequest)
+		return
+	}
+	parameters, err := oneOffRunParametersFromForm(r.PostForm)
+	if err != nil {
+		http.Error(w, "The run parameters are invalid. "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	parameters, err = application.ValidateOneOffRunParameters(parameters)
+	if err != nil {
+		http.Error(w, "The run parameters are invalid. "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	job, created, err := h.serviceActionJobs.createUnique(id, serviceName, "run")
+	if err != nil {
+		if errors.Is(err, ErrServiceActionBusy) {
+			http.Error(w, "Another operation is already running for this service. Try again shortly.", http.StatusConflict)
+			return
+		}
+		h.logger.Error("create parameterized service action job", "application_id", id, "service", serviceName, "error", err)
+		http.Error(w, "The service operation could not be started.", http.StatusInternalServerError)
+		return
+	}
+	if created {
+		job.setParameters(parameters)
+		if err := h.startTrackedJob("service-action:"+strconv.FormatInt(id, 10)+":"+serviceName, func(ctx context.Context) {
+			h.runServiceActionJob(ctx, job)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit parameterized service action job", "application_id", id, "service", serviceName, "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	base := "/applications/" + strconv.FormatInt(id, 10)
+	if r.Form.Get("return_to") == "service-details" {
+		base = serviceDetailsPath(id, serviceName)
+	}
+	location := base + "?service_action_job=" + url.QueryEscape(job.id)
+	http.Redirect(w, r, location, http.StatusSeeOther)
+}
+
+func oneOffRunParametersFromForm(values url.Values) (application.OneOffRunParameters, error) {
+	args := make([]string, 0, len(values["arg"]))
+	for _, argument := range values["arg"] {
+		if argument == "" {
+			continue
+		}
+		args = append(args, argument)
+	}
+	keys := values["env_key"]
+	envValues := values["env_value"]
+	if len(keys) != len(envValues) {
+		return application.OneOffRunParameters{}, errors.New("Each environment value must have a matching key.")
+	}
+	env := make(map[string]string, len(keys))
+	for index, key := range keys {
+		value := envValues[index]
+		if key == "" && value == "" {
+			continue
+		}
+		if key == "" {
+			return application.OneOffRunParameters{}, errors.New("Each environment value must have a key.")
+		}
+		if _, exists := env[key]; exists {
+			return application.OneOffRunParameters{}, fmt.Errorf("Environment key %q is specified more than once.", key)
+		}
+		env[key] = value
+	}
+	return application.OneOffRunParameters{Args: args, Env: env}, nil
+}
+
+func serviceActionOutputPath(applicationID int64, serviceName, jobID string) string {
+	return "/applications/" + strconv.FormatInt(applicationID, 10) +
+		"/services/" + url.PathEscape(serviceName) +
+		"/action/output?id=" + url.QueryEscape(jobID)
+}
+
+func serviceActionOutputDialogPath(applicationID int64, serviceName, jobID string) string {
+	return "/applications/" + strconv.FormatInt(applicationID, 10) +
+		"/services/" + url.PathEscape(serviceName) +
+		"/action/output/dialog?id=" + url.QueryEscape(jobID)
+}
+
+// serviceActionOutput returns the already-redacted captured output as text.
+// The browser uses the dialog endpoint for rendering; this endpoint is suitable
+// for downloads and copy actions.
+func (h *Handler) serviceActionOutput(w http.ResponseWriter, r *http.Request) {
+	job, result, ok := h.serviceActionOutputResult(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Query().Get("download") == "1" {
+		filename := job.serviceName + "-run-output.txt"
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	}
+	_, _ = w.Write([]byte(serviceActionOutputText(result)))
+}
+
+// serviceActionOutputDialog renders the output inside the shared application
+// dialog component so stdout and stderr stay separately readable.
+func (h *Handler) serviceActionOutputDialog(w http.ResponseWriter, r *http.Request) {
+	job, result, ok := h.serviceActionOutputResult(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	h.writeTemplateStatus(w, "service-action-output.html", pageData{ServiceActionOutput: &serviceActionOutputData{
+		JobID:       job.id,
+		ServiceName: job.serviceName,
+		Result:      result,
+		DownloadURL: serviceActionOutputPath(job.applicationID, job.serviceName, job.id) + "&download=1",
+	}}, http.StatusOK)
+}
+
+func (h *Handler) serviceActionOutputResult(w http.ResponseWriter, r *http.Request) (*serviceActionJob, application.OneOffRunResult, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.NotFound(w, r)
+		return nil, application.OneOffRunResult{}, false
+	}
+	serviceName := r.PathValue("service")
+	validatedServiceName, err := application.ValidateServiceName(serviceName)
+	if err != nil || validatedServiceName != serviceName {
+		http.NotFound(w, r)
+		return nil, application.OneOffRunResult{}, false
+	}
+	jobID := r.URL.Query().Get("id")
+	if jobID == "" {
+		http.Error(w, "The service operation job ID is required.", http.StatusBadRequest)
+		return nil, application.OneOffRunResult{}, false
+	}
+	job := h.serviceActionJobs.get(id, serviceName, jobID)
+	if job == nil {
+		http.Error(w, "The service operation job was not found.", http.StatusNotFound)
+		return nil, application.OneOffRunResult{}, false
+	}
+	result, available := job.runResultSnapshot()
+	if !available {
+		http.Error(w, "The service operation has no captured output.", http.StatusNotFound)
+		return nil, application.OneOffRunResult{}, false
+	}
+	return job, result, true
+}
+
+func serviceActionOutputText(result application.OneOffRunResult) string {
+	var output strings.Builder
+	if result.Stdout != "" {
+		output.WriteString(result.Stdout)
+	}
+	if result.Stderr != "" {
+		if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+			output.WriteByte('\n')
+		}
+		if result.Stdout != "" {
+			output.WriteString("--- stderr ---\n")
+		}
+		output.WriteString(result.Stderr)
+	}
+	return output.String()
+}
+
 func (h *Handler) deleteApplication(w http.ResponseWriter, r *http.Request) {
 	needsSetup, err := h.setupManager.NeedsSetup()
 	if err != nil {
@@ -3029,6 +3237,10 @@ func (h *Handler) serviceActionProgress(applicationID int64, serviceName, jobID,
 	}
 	progress.CloseURL = closeURL
 	progress.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(serviceName) + "/action/status?id=" + url.QueryEscape(jobID) + "&close=" + url.QueryEscape(closeURL)
+	if progress.OutputAvailable {
+		progress.OutputURL = serviceActionOutputPath(applicationID, serviceName, jobID)
+		progress.OutputDialogURL = serviceActionOutputDialogPath(applicationID, serviceName, jobID)
+	}
 	return &progress, true
 }
 
@@ -3045,6 +3257,10 @@ func (h *Handler) serviceActionToastsForPage(applicationID int64, explicitJobID,
 			snapshot := job.snapshot()
 			snapshot.CloseURL = closeURL
 			snapshot.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(snapshot.ServiceName) + "/action/status?id=" + url.QueryEscape(snapshot.JobID) + "&close=" + url.QueryEscape(closeURL)
+			if snapshot.OutputAvailable {
+				snapshot.OutputURL = serviceActionOutputPath(applicationID, snapshot.ServiceName, snapshot.JobID)
+				snapshot.OutputDialogURL = serviceActionOutputDialogPath(applicationID, snapshot.ServiceName, snapshot.JobID)
+			}
 			toasts = append(toasts, &snapshot)
 			seen[snapshot.JobID] = struct{}{}
 		}
@@ -3056,6 +3272,10 @@ func (h *Handler) serviceActionToastsForPage(applicationID int64, explicitJobID,
 		}
 		snapshot.CloseURL = closeURL
 		snapshot.StatusURL = "/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(snapshot.ServiceName) + "/action/status?id=" + url.QueryEscape(snapshot.JobID) + "&close=" + url.QueryEscape(closeURL)
+		if snapshot.OutputAvailable {
+			snapshot.OutputURL = serviceActionOutputPath(applicationID, snapshot.ServiceName, snapshot.JobID)
+			snapshot.OutputDialogURL = serviceActionOutputDialogPath(applicationID, snapshot.ServiceName, snapshot.JobID)
+		}
 		toasts = append(toasts, &snapshot)
 	}
 	return toasts
@@ -4901,6 +5121,7 @@ type pageData struct {
 	SelfUpdateProgress           *selfUpdateProgressData
 	ServiceActionProgress        *serviceActionProgressData
 	ServiceActionToasts          []*serviceActionProgressData
+	ServiceActionOutput          *serviceActionOutputData
 	ApplicationVersionProgress   *applicationVersionProgressData
 	ProxyActionProgress          *proxyActionProgressData
 	ProxyActionToasts            []*proxyActionProgressData
@@ -5175,6 +5396,13 @@ type serviceActionErrorData struct {
 	Title       string
 	Message     string
 	Detail      string
+}
+
+type serviceActionOutputData struct {
+	JobID       string
+	ServiceName string
+	Result      application.OneOffRunResult
+	DownloadURL string
 }
 
 type proxyPageData struct {
@@ -5478,6 +5706,10 @@ func (noApplicationService) RestartService(context.Context, int64, string) error
 
 func (noApplicationService) RunServiceOnce(context.Context, int64, string) error {
 	return errors.New("application service is not configured")
+}
+
+func (noApplicationService) RunServiceOnceWithParameters(context.Context, int64, string, application.OneOffRunParameters) (application.OneOffRunResult, error) {
+	return application.OneOffRunResult{}, errors.New("application service is not configured")
 }
 
 func (noApplicationService) UpdatePostgreSQLCredentials(context.Context, int64, string, application.PostgreSQLCredentialsInput) (application.Service, error) {

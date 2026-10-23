@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -49,29 +50,52 @@ func newAPIClient(baseURL, token string) (*apiClient, error) {
 }
 
 type runResponse struct {
-	Status string `json:"status"`
-	JobID  string `json:"job_id,omitempty"`
+	Status   string     `json:"status"`
+	JobID    string     `json:"job_id,omitempty"`
+	ExitCode *int       `json:"exit_code,omitempty"`
+	Output   *runOutput `json:"output,omitempty"`
+}
+
+type runOutput struct {
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Truncated bool   `json:"truncated"`
 }
 
 func runPath(applicationID int64, serviceName string) string {
 	return "/api/v1/applications/" + strconv.FormatInt(applicationID, 10) + "/services/" + url.PathEscape(serviceName) + "/run"
 }
 
-func (c *apiClient) run(ctx context.Context, applicationID int64, serviceName string) (runResponse, error) {
-	return c.request(ctx, http.MethodPost, runPath(applicationID, serviceName), http.StatusAccepted)
+func (c *apiClient) run(ctx context.Context, applicationID int64, serviceName string, parameters *application.OneOffRunParameters) (runResponse, error) {
+	var body []byte
+	if parameters != nil {
+		payload, err := json.Marshal(struct {
+			Parameters application.OneOffRunParameters `json:"parameters"`
+		}{Parameters: *parameters})
+		if err != nil {
+			return runResponse{}, errors.New("could not encode Redlaunch run parameters")
+		}
+		body = payload
+	}
+	return c.request(ctx, http.MethodPost, runPath(applicationID, serviceName), body, http.StatusAccepted)
 }
 
 func (c *apiClient) status(ctx context.Context, applicationID int64, serviceName, jobID string) (runResponse, error) {
-	return c.request(ctx, http.MethodGet, runPath(applicationID, serviceName)+"/status?id="+url.QueryEscape(jobID), http.StatusOK)
+	return c.request(ctx, http.MethodGet, runPath(applicationID, serviceName)+"/status?id="+url.QueryEscape(jobID), nil, http.StatusOK)
 }
 
-func (c *apiClient) request(ctx context.Context, method, path string, expectedStatus int) (runResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+const maxAPIClientResponseBytes = 1 << 20
+
+func (c *apiClient) request(ctx context.Context, method, path string, body []byte, expectedStatus int) (runResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return runResponse{}, errors.New("could not construct Redlaunch API request")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	response, err := c.http.Do(req)
 	if err != nil {
 		return runResponse{}, errors.New("Redlaunch API request failed; check connectivity or timeout")
@@ -82,9 +106,12 @@ func (c *apiClient) request(ctx context.Context, method, path string, expectedSt
 		// include credentials, HTML, or sensitive service output.
 		return runResponse{}, fmt.Errorf("Redlaunch API returned HTTP %d; see the api-tokens guide for status codes", response.StatusCode)
 	}
-	content, err := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if err != nil || len(content) > 65536 {
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxAPIClientResponseBytes+1))
+	if err != nil || len(content) > maxAPIClientResponseBytes {
 		return runResponse{}, errors.New("invalid or oversized Redlaunch API response")
+	}
+	if bytes.Contains(content, []byte(c.token)) {
+		return runResponse{}, errors.New("invalid Redlaunch API response")
 	}
 	var result runResponse
 	if json.Unmarshal(content, &result) != nil {
@@ -101,6 +128,9 @@ func (c *apiClient) request(ctx context.Context, method, path string, expectedSt
 		}
 	} else {
 		result.JobID = ""
+	}
+	if result.Output != nil && result.ExitCode == nil {
+		return runResponse{}, errors.New("invalid Redlaunch run output")
 	}
 	return result, nil
 }

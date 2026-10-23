@@ -80,15 +80,19 @@ func TestCommandRunnerRunOneOffUsesExplicitComposeArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "migrate"); err != nil {
+	result, err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "migrate", OneOffRunParameters{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("RunOneOff() exit code = %d, want 0", result.ExitCode)
 	}
 	contents, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	want := expectedComposeArguments(projectDir, "run", "--rm", "--quiet-pull", "-T", "migrate")
+	want := expectedComposeArguments(projectDir, "--ansi", "never", "run", "--rm", "--quiet-pull", "-T", "migrate")
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("Compose arguments = %#v, want %#v", got, want)
 	}
@@ -101,7 +105,7 @@ func TestCommandRunnerRunOneOffRequiresServiceName(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "missing-docker")
-	if err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "  "); err == nil {
+	if _, err := (CommandRunner{Binary: binary}).RunOneOff(context.Background(), projectDir, "  ", OneOffRunParameters{}); err == nil {
 		t.Fatal("RunOneOff() error = nil, want service name required")
 	}
 }
