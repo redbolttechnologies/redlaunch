@@ -191,6 +191,35 @@ func remoteToolPayload(t *testing.T, w *httptest.ResponseRecorder) map[string]js
 	return payload
 }
 
+func TestMCPRemoteServiceActionForwardsArgsAndEnvironment(t *testing.T) {
+	f := newOAuthHandlerFixture(t)
+	t.Cleanup(func() { _ = f.web.Shutdown(context.Background()) })
+	token := remoteOAuthToken(t, f, oauthHandlerOrigin+"/mcp/manage")
+	applicationID := f.apps.applications[0].ID
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"service_action","arguments":{"application_id":%d,"service_name":"migrate","action":"run","parameters":{"args":["--database-name","example","--confirm"],"env":{"NODE_ENV":"development"}}}}}`, applicationID)
+	dispatch := remoteToolPayload(t, mcpRequest(f, "/mcp/manage", token, body, ""))
+	var id string
+	if json.Unmarshal(dispatch["job_id"], &id) != nil || id == "" {
+		t.Fatal("service_action did not return a job ID")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		statusBody := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_management_job","arguments":{"job_id":%q}}}`, id)
+		result := remoteToolPayload(t, mcpRequest(f, "/mcp/manage", token, statusBody, ""))
+		if string(result["status"]) == `"complete"` {
+			if got := strings.Join(f.apps.serviceActionParameters.Args, "\x00"); got != "--database-name\x00example\x00--confirm" {
+				t.Fatalf("service action arguments = %q, want ordered values", got)
+			}
+			if f.apps.serviceActionParameters.Env["NODE_ENV"] != "development" {
+				t.Fatalf("service action environment = %#v, want NODE_ENV=development", f.apps.serviceActionParameters.Env)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("remote service_action job timed out")
+}
+
 func TestMCPMutationUsesExistingManagementJobs(t *testing.T) {
 	f := newOAuthHandlerFixture(t)
 	t.Cleanup(func() { _ = f.web.Shutdown(context.Background()) })

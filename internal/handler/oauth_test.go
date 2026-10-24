@@ -25,6 +25,7 @@ const (
 
 type oauthHandlerFixture struct {
 	web      *Handler
+	apps     *fakeApplicationService
 	session  *http.Cookie
 	csrf     *http.Cookie
 	clientID string
@@ -60,7 +61,8 @@ func newOAuthHandlerFixture(t *testing.T) oauthHandlerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	web, err := New(nil, &fakeApplicationService{applications: []application.Application{item}}, users, authentication, oauth, apiTokens)
+	apps := &fakeApplicationService{applications: []application.Application{item}, services: []application.Service{{ID: 1, ApplicationID: item.ID, Name: "migrate"}}}
+	web, err := New(nil, apps, users, authentication, oauth, apiTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +76,7 @@ func newOAuthHandlerFixture(t *testing.T) oauthHandlerFixture {
 	}
 	fixture := oauthHandlerFixture{
 		web:     web,
+		apps:    apps,
 		session: &http.Cookie{Name: sessionCookieName, Value: value},
 		csrf:    &http.Cookie{Name: csrfCookieName, Value: strings.Repeat("a", 64)},
 	}

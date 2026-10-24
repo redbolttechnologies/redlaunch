@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,6 +76,48 @@ func TestManagementClientReturnsFailedRunOutput(t *testing.T) {
 	encoded, _ := json.Marshal(result)
 	if !strings.Contains(string(encoded), "exit_code") || !strings.Contains(string(encoded), strings.Repeat("a", 1024)) {
 		t.Fatal("failed run output was not returned")
+	}
+}
+
+func TestManagementServiceActionForwardsArgsAndEnvironment(t *testing.T) {
+	var body []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/management/service_action" || r.Method != http.MethodPost {
+			t.Error("unexpected management request")
+			w.WriteHeader(404)
+			return
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"status":"running","job_id":"job-1"}`)
+	}))
+	defer upstream.Close()
+	server, err := NewWithManagement(upstream.URL, "", testToken(), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, rpcErr := server.call(t.Context(), "service_action", json.RawMessage(`{"application_id":7,"service_name":"migrate","action":"run","parameters":{"args":["--database-name","example","--confirm"],"env":{"NODE_ENV":"development"}}}`))
+	if rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
+	encoded, _ := json.Marshal(result)
+	if !strings.Contains(string(encoded), "job-1") {
+		t.Fatalf("dispatch result = %s", encoded)
+	}
+	var arguments struct {
+		Parameters struct {
+			Args []string          `json:"args"`
+			Env  map[string]string `json:"env"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(body, &arguments); err != nil {
+		t.Fatalf("forwarded body = %q: %v", body, err)
+	}
+	if strings.Join(arguments.Parameters.Args, "\x00") != "--database-name\x00example\x00--confirm" {
+		t.Fatalf("forwarded args = %#v, want ordered values", arguments.Parameters.Args)
+	}
+	if arguments.Parameters.Env["NODE_ENV"] != "development" {
+		t.Fatalf("forwarded env = %#v, want NODE_ENV=development", arguments.Parameters.Env)
 	}
 }
 

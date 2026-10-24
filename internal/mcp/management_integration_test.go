@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -77,6 +79,40 @@ func waitManagementTool(t *testing.T, s *mcp.Server, result map[string]json.RawM
 	}
 	t.Fatal("management job timed out")
 	return nil
+}
+
+func TestManagementMCPStdioForwardsServiceActionArgs(t *testing.T) {
+	var body []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/management/service_action" {
+			w.WriteHeader(404)
+			return
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"status":"running","job_id":"job-1"}`)
+	}))
+	defer upstream.Close()
+	s, err := mcp.NewWithManagement(upstream.URL, "", "rlr_"+strings.Repeat("a", 64), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managementToolResult(t, s, "service_action", `{"application_id":7,"service_name":"migrate","action":"run","parameters":{"args":["--database-name","example","--confirm"],"env":{"NODE_ENV":"development"}}}`)
+	var forwarded struct {
+		Parameters struct {
+			Args []string          `json:"args"`
+			Env  map[string]string `json:"env"`
+		} `json:"parameters"`
+	}
+	if err := json.Unmarshal(body, &forwarded); err != nil {
+		t.Fatalf("forwarded body = %q: %v", body, err)
+	}
+	if strings.Join(forwarded.Parameters.Args, "\x00") != "--database-name\x00example\x00--confirm" {
+		t.Fatalf("forwarded args = %#v", forwarded.Parameters.Args)
+	}
+	if forwarded.Parameters.Env["NODE_ENV"] != "development" {
+		t.Fatalf("forwarded env = %#v", forwarded.Parameters.Env)
+	}
 }
 
 func TestManagementMCPThroughRealHTTPServices(t *testing.T) {
