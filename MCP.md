@@ -363,8 +363,9 @@ application and the shared database cluster. Existing application run tokens
 cannot call the management API, and management tokens cannot call the separate
 application-run API.
 
-Management credentials alone expose inventory and job polling. Enable mutations
-with `redlaunch mcp --allow-manage` (client arguments `["mcp", "--allow-manage"]`).
+Management credentials alone expose inventory, proxy policy, and job polling.
+Enable mutations with `redlaunch mcp --allow-manage` (client arguments
+`["mcp", "--allow-manage"]`).
 `REDLAUNCH_RUN_TOKEN` and `--allow-run` remain independent and optional; both
 credential types can be configured in the same subprocess.
 
@@ -391,7 +392,7 @@ credential references and mutation flag:
 
 Supply both environment variables when launching OpenCode, then run
 `opencode mcp list` to verify the connection. Remove `--allow-manage` to expose
-only management inventory and job polling.
+only management inventory, proxy policy, and job polling.
 
 | Tools | Required arguments |
 | --- | --- |
@@ -413,6 +414,10 @@ only management inventory and job polling.
 | `create_routing` | `application_id`, `domain_id`, `routing` |
 | `update_routing` | `application_id`, `domain_id`, `routing_id`, `routing` |
 | `delete_routing` | `application_id`, `domain_id`, `routing_id` |
+| `get_proxy_settings` | None |
+| `update_proxy_settings` | `settings` |
+| `get_application_proxy_settings` | `application_id` |
+| `update_application_proxy_settings` | `application_id`, `settings` |
 | `get_database_cluster`, `list_databases`, `list_database_users`, `disable_database_cluster` | None |
 | `enable_database_cluster` | `version`, `default_user`, `password`; optional `provider` (PostgreSQL only) |
 | `database_cluster_action` | `action` (`start`, `stop`, or `restart`) |
@@ -436,6 +441,25 @@ created by this tool; existing services can be listed, acted on, and deleted.
 `service_path`. IDs come from the domain and routing inventories. Resource
 metadata inside `result` retains the application's existing Go field names
 (for example `ID`, `Name`, and `ApplicationID`); tool arguments use snake case.
+
+`settings` is a proxy policy with `compression` (`gzip`, `zstandard`, `brotli`,
+`minimum_length`), `security_headers` (`content_type_options`, `frame_options`,
+`referrer_policy`, `content_security_policy`, `permissions_policy`,
+`strict_transport_security`), `body_limit` (`bytes`), `timeouts` (`dial`,
+`response_header`, `read`, `write`), and `cache_control`. Proxy read calls
+return `settings` and `effective` in the same snake_case shape; `effective` is
+the application policy after global inheritance. Updates replace the complete
+policy, so read it first and merge the category you want to change. At
+application scope, an omitted category inherits the global policy; at global
+scope, an omitted category is disabled. An included empty category disables an
+inherited category. Header values are validated like the web form: printable
+ASCII, at most 4096 bytes, without Caddy placeholders.
+
+For example, an assistant can read `get_application_proxy_settings`, merge the
+returned `settings` object, and send:
+```json
+{"application_id":7,"settings":{"security_headers":{"content_type_options":"nosniff","frame_options":"DENY","referrer_policy":"strict-origin-when-cross-origin","strict_transport_security":"max-age=31536000"}}}
+```
 
 Environment inventory returns names and file availability only, including for
 variables, since credentials may have been misplaced in `vars.env`. Writes
@@ -760,7 +784,7 @@ browser login. No model-provider account or Docker workload is used.
 | Client | Verified over loopback HTTP |
 | --- | --- |
 | OpenCode 2.0.26 | Management and application URLs: discovery, DCR, PKCE, consent/code exchange, MCP connection, refresh rotation, reconnect, rejection after revocation |
-| Codex 0.156.1 | Management and application URLs: discovery, DCR, PKCE, consent/code exchange, MCP initialization (39 management / 4 application tools), refresh rotation |
+| Codex 0.156.1 | Management and application URLs: discovery, DCR, PKCE, consent/code exchange, MCP initialization (43 management / 4 application tools), refresh rotation |
 | Claude Code | Not installed; live verification pending |
 
 Refresh tests shorten the advertised expiry and simulate an expired access

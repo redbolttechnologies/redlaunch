@@ -236,6 +236,52 @@ func TestManagementAPIDatabasesAndSafeFailures(t *testing.T) {
 	}
 }
 
+func TestManagementAPIProxySettings(t *testing.T) {
+	cache := "private, no-store"
+	fake := &fakeProxyPolicyService{
+		fakeApplicationService: fakeApplicationService{applications: []application.Application{{ID: 7, Name: "Proxy app"}}},
+		global:                 application.ProxySettings{SecurityHeaders: &application.ProxySecurityHeaders{ContentTypeOptions: "nosniff", FrameOptions: "DENY"}},
+		policy:                 application.ProxySettings{CacheControl: &cache},
+	}
+	tokens := newFakeAPITokenService()
+	tokens.authToken = application.APIToken{ID: 5, Scope: application.APITokenScopeManage}
+	web, err := New(nil, fake, tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := web.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+
+	response := managementRequest(web, "get_proxy_settings", `{}`, "valid-token")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"content_type_options":"nosniff"`) || !strings.Contains(response.Body.String(), `"effective"`) {
+		t.Fatalf("global proxy settings = %d %s", response.Code, response.Body)
+	}
+	response = managementRequest(web, "get_application_proxy_settings", `{"application_id":7}`, "valid-token")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"application_id":7`) || !strings.Contains(response.Body.String(), `"cache_control":"private, no-store"`) || !strings.Contains(response.Body.String(), `"frame_options":"DENY"`) {
+		t.Fatalf("application proxy settings = %d %s", response.Code, response.Body)
+	}
+	response = managementRequest(web, "update_proxy_settings", `{"settings":{"security_headers":{"frame_options":"ALLOWALL"}}}`, "valid-token")
+	if response.Code != http.StatusBadRequest || fake.saved != 0 {
+		t.Fatalf("invalid proxy settings = %d, saves %d", response.Code, fake.saved)
+	}
+
+	result := dispatchManagement(t, web, "update_proxy_settings", `{"settings":{"security_headers":{"content_type_options":"nosniff"}}}`)
+	if !strings.Contains(result, `"complete"`) || fake.saved != 1 || fake.savedID != 0 || fake.policy.SecurityHeaders == nil || fake.policy.SecurityHeaders.ContentTypeOptions != "nosniff" || fake.policy.CacheControl != nil {
+		t.Fatalf("global update = %s, %#v", result, fake)
+	}
+	result = dispatchManagement(t, web, "update_application_proxy_settings", `{"application_id":7,"settings":{"security_headers":{}}}`)
+	if !strings.Contains(result, `"complete"`) || fake.saved != 2 || fake.savedID != 7 || fake.policy.SecurityHeaders == nil || fake.policy.SecurityHeaders.ContentTypeOptions != "" || fake.policy.CacheControl != nil {
+		t.Fatalf("application update = %s, %#v", result, fake)
+	}
+	response = managementRequest(web, "get_application_proxy_settings", `{"application_id":7}`, "valid-token")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"security_headers":{"content_type_options":""`) {
+		t.Fatalf("disabled proxy category = %d %s", response.Code, response.Body)
+	}
+}
+
 func TestManagementAPIRejectsMalformedRequestsBeforeDispatch(t *testing.T) {
 	apps := apiApplications()
 	web, _ := managementTestHandler(t, apps, nil)

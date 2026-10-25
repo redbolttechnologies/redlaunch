@@ -448,6 +448,10 @@ Redlaunch's management interface keeps its existing policy. An unchecked
 application category inherits the global category. A checked category replaces
 all fields in that category, so an empty category can disable an inherited
 policy. Existing installations keep Caddy defaults until settings are configured.
+A server-wide management token can read and replace both scopes through the MCP
+`get_proxy_settings`, `update_proxy_settings`,
+`get_application_proxy_settings`, and `update_application_proxy_settings` tools;
+see [MCP server-wide management](MCP.md#server-wide-management).
 
 Compression supports gzip, Zstandard, and Brotli, negotiated using the client's
 `Accept-Encoding` header, with Zstandard preferred, then Brotli, then gzip.

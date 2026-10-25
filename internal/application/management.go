@@ -41,6 +41,7 @@ type ManagementArguments struct {
 	Tag           string                  `json:"tag"`
 	Digest        string                  `json:"digest"`
 	Parameters    *OneOffRunParameters    `json:"parameters"`
+	Settings      ProxySettingsInput      `json:"settings"`
 }
 
 // ManagementOperations lists only operations supported by the service layer.
@@ -55,6 +56,7 @@ func ManagementOperations() []ManagementOperation {
 		"databases":     map[string]any{"type": "array", "items": str},
 		"configuration": managementStructSchema(reflect.TypeFor[ApplicationServiceInput]()),
 		"routing":       managementStructSchema(reflect.TypeFor[RoutingInput]()),
+		"settings":      managementStructSchema(reflect.TypeFor[ProxySettingsInput]()),
 		"action":        map[string]any{"type": "string", "enum": []string{"start", "stop", "restart", "run"}},
 		"parameters": map[string]any{
 			"type":                 "object",
@@ -99,6 +101,10 @@ func ManagementOperations() []ManagementOperation {
 	add("create_routing", "Create domain routing to an application service.", false, []string{"application_id", "domain_id", "routing"})
 	add("update_routing", "Replace a domain routing.", false, []string{"application_id", "domain_id", "routing_id", "routing"})
 	add("delete_routing", "Delete a domain routing.", false, []string{"application_id", "domain_id", "routing_id"})
+	add("get_proxy_settings", "Read the global proxy policy.", true, nil)
+	add("update_proxy_settings", "Replace the global proxy policy. Omitted or empty categories are disabled. Read the policy first to preserve categories you are not changing.", false, []string{"settings"})
+	add("get_application_proxy_settings", "Read an application's stored proxy overrides and the effective policy after global inheritance.", true, []string{"application_id"})
+	add("update_application_proxy_settings", "Replace an application's proxy overrides. Omitted categories inherit the global policy; an included empty category disables an inherited category. Read the policy first to preserve overrides you are not changing.", false, []string{"application_id", "settings"})
 	add("get_database_cluster", "Read managed database cluster metadata.", true, nil)
 	add("enable_database_cluster", "Enable the managed PostgreSQL cluster.", false, []string{"version", "default_user", "password"}, "provider")
 	add("disable_database_cluster", "Disable the managed database cluster.", false, nil)
@@ -184,6 +190,11 @@ func DecodeManagementArguments(op ManagementOperation, raw []byte) (ManagementAr
 		}
 		args.Parameters = &validated
 	}
+	if _, ok := fields["settings"]; ok {
+		if err := ProxySettingsFromInput(args.Settings).Validate(); err != nil {
+			return args, invalid
+		}
+	}
 	return args, nil
 }
 
@@ -193,15 +204,24 @@ func managementStructSchema(t reflect.Type) map[string]any {
 		return map[string]any{"type": "string"}
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
-	case reflect.Int:
+	case reflect.Int, reflect.Int64:
 		return map[string]any{"type": "integer"}
 	case reflect.Slice:
 		return map[string]any{"type": "array", "items": managementStructSchema(t.Elem())}
+	case reflect.Ptr:
+		return managementStructSchema(t.Elem())
 	default:
 		props := map[string]any{}
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-			props[f.Tag.Get("json")] = managementStructSchema(f.Type)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if name == "" {
+				name = f.Name
+			}
+			if name == "-" {
+				continue
+			}
+			props[name] = managementStructSchema(f.Type)
 		}
 		return map[string]any{"type": "object", "properties": props, "additionalProperties": false}
 	}

@@ -165,6 +165,13 @@ can be added if parameters are required.
 object. Parameters are rejected for `start`, `stop`, and `restart`. The
 completed management job result is the captured `OneOffRunResult`.
 
+`get_proxy_settings`, `update_proxy_settings`,
+`get_application_proxy_settings`, and `update_application_proxy_settings` read
+and replace proxy policies. Updates replace the complete policy; omitted
+categories inherit globally for applications and are disabled at global scope.
+See the [MCP management catalog](MCP.md#server-wide-management) for the
+`settings` shape.
+
 ## Security boundaries
 
 - Parameters are untrusted input.

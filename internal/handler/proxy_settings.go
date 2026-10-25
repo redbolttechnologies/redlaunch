@@ -223,3 +223,14 @@ func (h *Handler) proxySettingsPage(w http.ResponseWriter, r *http.Request) {
 	page.ProxyActionToasts = h.proxyActionToastsForPage(r.URL.Query().Get("proxy_action_job"))
 	h.writeTemplateStatus(w, "proxy-settings.html", page, status)
 }
+
+func managementProxySettingsResult(applicationID int64, settings, effective application.ProxySettings) map[string]any {
+	result := map[string]any{
+		"settings":  application.ProxySettingsInputFrom(settings),
+		"effective": application.ProxySettingsInputFrom(effective),
+	}
+	if applicationID > 0 {
+		result["application_id"] = applicationID
+	}
+	return result
+}

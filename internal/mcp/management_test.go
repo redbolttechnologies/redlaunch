@@ -121,6 +121,45 @@ func TestManagementServiceActionForwardsArgsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestManagementProxySettingsForwardsSnakeCaseSettings(t *testing.T) {
+	var body []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/management/update_application_proxy_settings" || r.Method != http.MethodPost {
+			t.Error("unexpected management request")
+			w.WriteHeader(404)
+			return
+		}
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, `{"status":"running","job_id":"job-1"}`)
+	}))
+	defer upstream.Close()
+	server, err := NewWithManagement(upstream.URL, "", testToken(), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, rpcErr := server.call(t.Context(), "update_application_proxy_settings", json.RawMessage(`{"application_id":7,"settings":{"security_headers":{"content_type_options":"nosniff","strict_transport_security":"max-age=31536000"}}}`)); rpcErr != nil {
+		t.Fatal(rpcErr)
+	} else if encoded, _ := json.Marshal(result); !strings.Contains(string(encoded), "job-1") {
+		t.Fatalf("dispatch result = %s", encoded)
+	}
+	var forwarded struct {
+		ApplicationID int64 `json:"application_id"`
+		Settings      struct {
+			SecurityHeaders struct {
+				ContentTypeOptions      string `json:"content_type_options"`
+				StrictTransportSecurity string `json:"strict_transport_security"`
+			} `json:"security_headers"`
+		} `json:"settings"`
+	}
+	if err := json.Unmarshal(body, &forwarded); err != nil {
+		t.Fatalf("forwarded body = %q: %v", body, err)
+	}
+	if forwarded.ApplicationID != 7 || forwarded.Settings.SecurityHeaders.ContentTypeOptions != "nosniff" || forwarded.Settings.SecurityHeaders.StrictTransportSecurity != "max-age=31536000" {
+		t.Fatalf("forwarded settings = %#v", forwarded)
+	}
+}
+
 func TestManagementTransportRejectsSensitiveErrorsAndRedirects(t *testing.T) {
 	var contacted bool
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { contacted = true }))

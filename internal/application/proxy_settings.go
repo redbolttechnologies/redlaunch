@@ -40,6 +40,120 @@ type ProxyTimeouts struct {
 	Write          string
 }
 
+// ProxySettingsInput is the machine API and MCP representation of a proxy
+// policy. An omitted category inherits the global policy for an application or
+// disables the category at global scope. An included empty category explicitly
+// disables an inherited category. It intentionally has its own JSON field
+// names so the persisted internal representation can remain unchanged.
+type ProxySettingsInput struct {
+	Compression     *ProxyCompressionInput     `json:"compression,omitempty"`
+	SecurityHeaders *ProxySecurityHeadersInput `json:"security_headers,omitempty"`
+	BodyLimit       *ProxyBodyLimitInput       `json:"body_limit,omitempty"`
+	Timeouts        *ProxyTimeoutsInput        `json:"timeouts,omitempty"`
+	CacheControl    *string                    `json:"cache_control,omitempty"`
+}
+type ProxyCompressionInput struct {
+	Gzip          bool `json:"gzip"`
+	Zstandard     bool `json:"zstandard"`
+	Brotli        bool `json:"brotli"`
+	MinimumLength int  `json:"minimum_length"`
+}
+type ProxySecurityHeadersInput struct {
+	ContentTypeOptions      string `json:"content_type_options"`
+	FrameOptions            string `json:"frame_options"`
+	ReferrerPolicy          string `json:"referrer_policy"`
+	ContentSecurityPolicy   string `json:"content_security_policy"`
+	PermissionsPolicy       string `json:"permissions_policy"`
+	StrictTransportSecurity string `json:"strict_transport_security"`
+}
+type ProxyBodyLimitInput struct {
+	Bytes int64 `json:"bytes"`
+}
+type ProxyTimeoutsInput struct {
+	Dial           string `json:"dial"`
+	ResponseHeader string `json:"response_header"`
+	Read           string `json:"read"`
+	Write          string `json:"write"`
+}
+
+// ProxySettingsFromInput converts a machine API policy into the domain type.
+func ProxySettingsFromInput(p ProxySettingsInput) ProxySettings {
+	result := ProxySettings{}
+	if p.Compression != nil {
+		result.Compression = &ProxyCompression{
+			Gzip:          p.Compression.Gzip,
+			Zstandard:     p.Compression.Zstandard,
+			Brotli:        p.Compression.Brotli,
+			MinimumLength: p.Compression.MinimumLength,
+		}
+	}
+	if p.SecurityHeaders != nil {
+		result.SecurityHeaders = &ProxySecurityHeaders{
+			ContentTypeOptions:      p.SecurityHeaders.ContentTypeOptions,
+			FrameOptions:            p.SecurityHeaders.FrameOptions,
+			ReferrerPolicy:          p.SecurityHeaders.ReferrerPolicy,
+			ContentSecurityPolicy:   p.SecurityHeaders.ContentSecurityPolicy,
+			PermissionsPolicy:       p.SecurityHeaders.PermissionsPolicy,
+			StrictTransportSecurity: p.SecurityHeaders.StrictTransportSecurity,
+		}
+	}
+	if p.BodyLimit != nil {
+		result.BodyLimit = &ProxyBodyLimit{Bytes: p.BodyLimit.Bytes}
+	}
+	if p.Timeouts != nil {
+		result.Timeouts = &ProxyTimeouts{
+			Dial:           p.Timeouts.Dial,
+			ResponseHeader: p.Timeouts.ResponseHeader,
+			Read:           p.Timeouts.Read,
+			Write:          p.Timeouts.Write,
+		}
+	}
+	if p.CacheControl != nil {
+		value := *p.CacheControl
+		result.CacheControl = &value
+	}
+	return result
+}
+
+// ProxySettingsInputFrom converts a domain policy into its machine API shape.
+func ProxySettingsInputFrom(p ProxySettings) ProxySettingsInput {
+	result := ProxySettingsInput{}
+	if p.Compression != nil {
+		result.Compression = &ProxyCompressionInput{
+			Gzip:          p.Compression.Gzip,
+			Zstandard:     p.Compression.Zstandard,
+			Brotli:        p.Compression.Brotli,
+			MinimumLength: p.Compression.MinimumLength,
+		}
+	}
+	if p.SecurityHeaders != nil {
+		result.SecurityHeaders = &ProxySecurityHeadersInput{
+			ContentTypeOptions:      p.SecurityHeaders.ContentTypeOptions,
+			FrameOptions:            p.SecurityHeaders.FrameOptions,
+			ReferrerPolicy:          p.SecurityHeaders.ReferrerPolicy,
+			ContentSecurityPolicy:   p.SecurityHeaders.ContentSecurityPolicy,
+			PermissionsPolicy:       p.SecurityHeaders.PermissionsPolicy,
+			StrictTransportSecurity: p.SecurityHeaders.StrictTransportSecurity,
+		}
+	}
+	if p.BodyLimit != nil {
+		result.BodyLimit = &ProxyBodyLimitInput{Bytes: p.BodyLimit.Bytes}
+	}
+	if p.Timeouts != nil {
+		result.Timeouts = &ProxyTimeoutsInput{
+			Dial:           p.Timeouts.Dial,
+			ResponseHeader: p.Timeouts.ResponseHeader,
+			Read:           p.Timeouts.Read,
+			Write:          p.Timeouts.Write,
+		}
+	}
+	if p.CacheControl != nil {
+		value := *p.CacheControl
+		result.CacheControl = &value
+	}
+	return result
+}
+
 func (p ProxySettings) Resolve(global ProxySettings) ProxySettings {
 	if p.Compression == nil {
 		p.Compression = global.Compression

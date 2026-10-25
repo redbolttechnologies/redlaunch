@@ -316,6 +316,21 @@ func (h *Handler) executeManagement(ctx context.Context, op string, a applicatio
 		if h.applicationRoutings != nil {
 			return success, h.applicationRoutings.DeleteRouting(ctx, a.ApplicationID, a.DomainID, a.RoutingID)
 		}
+	case "get_proxy_settings", "update_proxy_settings", "get_application_proxy_settings", "update_application_proxy_settings":
+		if manager, ok := h.applicationDetails.(proxySettingsService); ok {
+			id := int64(0)
+			if op == "get_application_proxy_settings" || op == "update_application_proxy_settings" {
+				id = a.ApplicationID
+			}
+			if op == "update_proxy_settings" || op == "update_application_proxy_settings" {
+				return success, manager.SaveProxySettings(ctx, id, application.ProxySettingsFromInput(a.Settings))
+			}
+			settings, global, err := manager.GetProxySettings(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return managementProxySettingsResult(id, settings, settings.Resolve(global)), nil
+		}
 	}
 	if h.managedDatabases != nil {
 		db := h.managedDatabases

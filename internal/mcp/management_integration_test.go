@@ -153,6 +153,14 @@ func TestManagementMCPThroughRealHTTPServices(t *testing.T) {
 	if !strings.Contains(string(inventory["result"]), "Test app") {
 		t.Fatal("application not listed")
 	}
+	proxySettings := managementToolResult(t, s, "get_application_proxy_settings", fmt.Sprintf(`{"application_id":%d}`, app.ID))
+	if !strings.Contains(string(proxySettings["result"]), `"effective"`) || !strings.Contains(string(proxySettings["result"]), `"settings"`) {
+		t.Fatalf("application proxy settings = %s", proxySettings["result"])
+	}
+	globalSettings := managementToolResult(t, s, "get_proxy_settings", `{}`)
+	if !strings.Contains(string(globalSettings["result"]), `"effective"`) || !strings.Contains(string(globalSettings["result"]), `"settings"`) {
+		t.Fatalf("global proxy settings = %s", globalSettings["result"])
+	}
 	for _, kind := range []string{"variable", "secret"} {
 		waitManagementTool(t, s, managementToolResult(t, s, "add_"+kind, fmt.Sprintf(`{"application_id":%d,"name":"TEST_%s","value":"synthetic-value"}`, app.ID, strings.ToUpper(kind))))
 		waitManagementTool(t, s, managementToolResult(t, s, "update_"+kind, fmt.Sprintf(`{"application_id":%d,"original_name":"TEST_%s","name":"RENAMED_%s","value":""}`, app.ID, strings.ToUpper(kind), strings.ToUpper(kind))))
