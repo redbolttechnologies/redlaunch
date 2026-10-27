@@ -175,6 +175,7 @@ var guides = []guide{
 	{"redlaunch://guides/recipes", "recipes", "GitHub Actions workflows: publish images, migrate, deploy via registry or direct image copy; managed Compose identity and container-side file checks.", "text/markdown", "RECIPES.md"},
 	{"redlaunch://guides/ssh-keys", "ssh-keys", "SSH transport, permissions, known hosts, and key rotation.", "text/markdown", "SSH_KEYS.md"},
 	{"redlaunch://guides/installation", "installation", "VPS installation and management endpoint reachability.", "text/markdown", "INSTALL.md"},
+	{"redlaunch://guides/dependencies", "dependencies", "Host and local-development dependencies: Git, wget, make, Docker, and Go.", "text/markdown", "DEPENDENCIES.md"},
 	{"redlaunch://guides/reference", "reference", "Configuration and managed resource layout.", "text/markdown", "README.md"},
 	{"redlaunch://guides/mcp", "mcp", "MCP configuration and tool usage.", "text/markdown", "MCP.md"},
 }

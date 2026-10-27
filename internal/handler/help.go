@@ -48,6 +48,7 @@ type helpPageData struct {
 
 var helpGuides = []helpGuide{
 	{Slug: "installation", Title: "Installation", Description: "Prepare a VPS, create your login, and complete setup.", File: "INSTALL.md"},
+	{Slug: "dependencies", Title: "Host dependencies", Description: "Install Git, wget, make, Docker, Go, and other prerequisites.", File: "DEPENDENCIES.md"},
 	{Slug: "reference", Title: "Redlaunch reference", Description: "Features, configuration, project layout, and local development.", File: "README.md"},
 	{Slug: "recipes", Title: "Deployment recipes", Description: "Complete GitHub Actions workflows for images, migrations, and deployments.", File: "RECIPES.md"},
 	{Slug: "ssh-keys", Title: "Server SSH keys", Description: "Create, use, rotate, and revoke automation keys.", File: "SSH_KEYS.md"},
@@ -58,6 +59,7 @@ var helpGuides = []helpGuide{
 
 var helpSections = []helpSection{
 	{ID: "getting-started", Title: "Getting started", Description: "Install Redlaunch and connect to your server.", Links: []helpLink{
+		{"Install host dependencies", "Install Git, wget, make, Docker, and other host tools.", "/help/dependencies"},
 		{"Install on Ubuntu or Debian", "Docker prerequisites, local login, and optional Google OAuth.", "/help/installation"},
 		{"Choose your login method", "Use an email and password, with optional Google sign-in.", "/help/installation#1-choose-your-login-method"},
 		{"Complete first-run setup", "Choose Caddy, a local registry, or both.", "/help/installation#complete-first-run-setup"},
@@ -79,14 +81,14 @@ var helpSections = []helpSection{
 		{"How to run with parameters", "Pass ordered arguments and allowlisted environment overrides, then inspect captured output.", "/help/run-reference"},
 		{"How to use Redlaunch MCP", "Check prerequisites and connect Codex, OpenCode, or Claude Code step by step.", "/help/mcp#before-you-start"},
 		{"How to connect MCP to your VPS", "Set up a server connection to check task progress and optionally run services.", "/help/mcp#step-4-connect-to-your-vps-when-needed"},
-		{"How to update Redlaunch", "Use make update or the Update action in Settings.", "/help/reference#installation"},
+		{"How to update Redlaunch", "Use make update or the Update action in Settings.", "/help/reference#updating-redlaunch"},
 	}},
 	{ID: "operations", Title: "Operations & troubleshooting", Description: "Maintain the installation and diagnose common problems.", Links: []helpLink{
 		{"Back up before a resource migration", "Preserve the database, project files, proxy configuration, and backup schedules.", "/help/installation#before-a-managed-resource-migration"},
 		{"Recover interrupted operations", "Understand backup leases and resumable application deletion.", "/help/installation#interrupted-backups-and-deletion-recovery"},
 		{"Troubleshoot installation and login", "Resolve OAuth errors, proxy routing, and Docker or systemd issues.", "/help/installation#troubleshooting"},
 		{"Troubleshoot CI deployments", "Check SSH access, registry tunnels, Compose identity, and migration runs.", "/help/recipes#troubleshooting-quick-reference"},
-		{"Configuration reference", "Review listener, storage, authentication, and metrics settings.", "/help/reference#local-development"},
+		{"Configuration reference", "Review listener, storage, authentication, and metrics settings.", "/help/reference#configuration"},
 	}},
 }
 

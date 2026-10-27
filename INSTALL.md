@@ -12,12 +12,12 @@ You need:
   access.
 - Docker Engine with the Docker Compose plugin, running and accessible to
   your SSH user.
-- `wget`, `git`, `make`, `bash`, and `openssl` installed on the server.
+- The host tools listed in [Installing dependencies](DEPENDENCIES.md).
 - Optionally, a Google OAuth client and an authorized Google email address
   if you want Google sign-in (see the next section).
 
-The installer does **not** install Docker or these host tools. If they are
-missing, use [the troubleshooting steps below](#missing-host-tools-or-docker).
+The installer does **not** install Docker or these host tools. Follow
+[Installing dependencies](DEPENDENCIES.md) before you continue.
 Scheduled PostgreSQL backups also require `systemd` on the host.
 
 Redlaunch has host-level access through Docker. Allow only trusted
@@ -294,33 +294,10 @@ stated otherwise. Avoid sharing configuration files or logs containing secrets.
 
 ### Missing host tools or Docker
 
-Install the host tools:
-
-```sh
-sudo apt update
-sudo apt install -y ca-certificates curl wget git make bash openssl
-```
-
-Install Docker Engine and the Compose plugin using the official instructions
-for [Ubuntu](https://docs.docker.com/engine/install/ubuntu/) or
-[Debian](https://docs.docker.com/engine/install/debian/). Check the listed
-conflicting packages if Docker is already installed.
-
-Allow your SSH user to run Docker:
-
-```sh
-sudo usermod -aG docker "$USER"
-```
-
-The `docker` group grants root-equivalent access. Add only trusted users.
-Log out and reconnect, then check:
-
-```sh
-docker info
-docker compose version
-```
-
-Once both commands succeed, run the installer.
+Follow [Installing dependencies](DEPENDENCIES.md) to install the host tools,
+Docker Engine, and the Compose plugin, and to grant your SSH user access to
+Docker. Once `docker info` and `docker compose version` succeed, run the
+installer.
 
 ### Manual installation if the installer fails
 

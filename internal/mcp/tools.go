@@ -41,7 +41,7 @@ func (s *Server) tools() []tool {
 		return props
 	}
 	tools := []tool{
-		{"read_guide", "Read a bundled Redlaunch integration guide. Use recipes for complete GHA image publishing, migration, and SSH deployment workflows; api-tokens for the machine API contract; run-reference for parameterized one-off runs and captured output. " + sshWorkflowGuidance, schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"api-tokens", "run-reference", "recipes", "ssh-keys", "installation", "reference", "mcp"}}}, "topic"), local},
+		{"read_guide", "Read a bundled Redlaunch integration guide. Use recipes for complete GHA image publishing, migration, and SSH deployment workflows; api-tokens for the machine API contract; run-reference for parameterized one-off runs and captured output. " + sshWorkflowGuidance, schema(map[string]any{"topic": map[string]any{"type": "string", "enum": []string{"api-tokens", "run-reference", "recipes", "ssh-keys", "installation", "dependencies", "reference", "mcp"}}}, "topic"), local},
 		{"generate_run_workflow", "Generate a manual GitHub Actions workflow to run a registered service and poll completion. Uses vars.REDLAUNCH_URL and secrets.REDLAUNCH_RUN_TOKEN; does not dispatch anything. For SSH deployments read recipes. " + sshWorkflowGuidance, schema(serviceProperties(), "application_id", "service_name"), local},
 	}
 	if s.client != nil {
