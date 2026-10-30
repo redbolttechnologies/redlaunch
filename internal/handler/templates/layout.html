@@ -15,7 +15,7 @@
   {{if or .DashboardPage .ApplicationDetailsPage .ServiceDetailsPage .DatabaseWorkspacePage}}<script src="/static/htmx.min.js" defer></script>{{end}}
   {{if .DatabaseWorkspacePage}}<script src="/static/database-workspace.js" defer></script>{{end}}
   {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .ApplicationVersionProgress .BackupProgress .ManagedDatabasesProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
-  {{if or .ServiceActionToasts .ProxyActionToasts $notice}}<script src="/static/toasts.js" defer></script>{{end}}
+  {{if or .ServiceActionToasts .ProxyActionToasts .RegistryMaintenanceToasts $notice}}<script src="/static/toasts.js" defer></script>{{end}}
   {{if .ApplicationsPage}}<script src="/static/applications.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ProxyPage .ProxySettingsPage .ServiceDetailsPage .SettingsPage .DatabasesPage}}<script src="/static/application-tabs.js" defer></script>{{end}}
   {{if or .ApplicationDetailsPage .ServiceDetailsPage}}<script src="/static/service-menu.js" defer></script>{{end}}
@@ -217,13 +217,16 @@
       {{if .SelfUpdateProgress}}
       {{template "selfupdate-progress.html" .}}
       {{end}}
-      {{if or .ServiceActionToasts .ProxyActionToasts $notice}}
+      {{if or .ServiceActionToasts .ProxyActionToasts .RegistryMaintenanceToasts $notice}}
       <div class="toast-stack" aria-live="polite" aria-label="Operation progress">
         {{range .ServiceActionToasts}}
         {{template "service-action-toast-item" .}}
         {{end}}
         {{range .ProxyActionToasts}}
         {{template "proxy-action-toast-item" .}}
+        {{end}}
+        {{range .RegistryMaintenanceToasts}}
+        {{template "registry-maintenance-toast-item" .}}
         {{end}}
         {{if $notice}}{{template "success-toast-item" $notice}}{{end}}
       </div>

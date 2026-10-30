@@ -3,13 +3,12 @@
 package application
 
 import (
-	"sort"
 	"strings"
 )
 
 // RegistryRetentionPolicy is the per-repository keep setting. KeepCount 0
 // means unlimited for that repository; otherwise 1..MaxRegistryKeepCount
-// images are kept.
+// distinct image versions are kept.
 type RegistryRetentionPolicy struct {
 	Repository string
 	KeepCount  int
@@ -137,55 +136,4 @@ func EffectiveRegistryKeep(defaultKeep int, policies map[string]int, repository 
 		}
 	}
 	return defaultKeep
-}
-
-// PlanRegistryPurge splits one repository's images into kept and purge
-// candidates. Images are ordered newest first by PushedAt; images without a
-// timestamp sort oldest with a lexical tie-break. Protected references (for
-// example currently deployed tags) are always kept and do not consume the
-// keep quota. A keep of 0 means unlimited and purges nothing.
-func PlanRegistryPurge(images []RegistryImage, keep int, protected map[string]bool) (kept, purge []RegistryImage, err error) {
-	if _, err := ValidateRegistryKeepCount(keep); err != nil {
-		return nil, nil, err
-	}
-	sorted := append([]RegistryImage(nil), images...)
-	sort.Slice(sorted, func(left, right int) bool {
-		leftZero := sorted[left].PushedAt.IsZero()
-		rightZero := sorted[right].PushedAt.IsZero()
-		if leftZero != rightZero {
-			return rightZero
-		}
-		if !sorted[left].PushedAt.Equal(sorted[right].PushedAt) {
-			return sorted[left].PushedAt.After(sorted[right].PushedAt)
-		}
-		if sorted[left].Tag != sorted[right].Tag {
-			return sorted[left].Tag < sorted[right].Tag
-		}
-		return sorted[left].Digest < sorted[right].Digest
-	})
-	if keep == 0 {
-		return sorted, nil, nil
-	}
-	kept = make([]RegistryImage, 0, len(sorted))
-	purge = make([]RegistryImage, 0)
-	keptUnprotected := 0
-	for _, image := range sorted {
-		if protected[RegistryImageKey(image.Repository, image.Tag)] {
-			kept = append(kept, image)
-			continue
-		}
-		if keptUnprotected < keep {
-			kept = append(kept, image)
-			keptUnprotected++
-			continue
-		}
-		purge = append(purge, image)
-	}
-	if kept == nil {
-		kept = []RegistryImage{}
-	}
-	if purge == nil {
-		purge = []RegistryImage{}
-	}
-	return kept, purge, nil
 }

@@ -490,38 +490,38 @@ func (s *Store) ReleaseBackupLease(ctx context.Context, serviceID int64, token s
 	return nil
 }
 
-// GetRegistryDefaultKeep returns the global keep count for registry
-// retention. Zero means unlimited. Missing settings fall back to the
-// application default so older databases keep working.
-func (s *Store) GetRegistryDefaultKeep(ctx context.Context) (int, error) {
+// GetRegistryRetentionKeep returns the global keep count shared by automatic
+// registry retention and manual purge. Zero means unlimited. Missing or
+// invalid values fall back to the application default.
+func (s *Store) GetRegistryRetentionKeep(ctx context.Context) (int, error) {
 	var keep int
-	err := s.db.QueryRowContext(ctx, `SELECT registry_default_keep FROM redlaunch_settings WHERE id = 1`).Scan(&keep)
+	err := s.db.QueryRowContext(ctx, `SELECT registry_retention_keep FROM redlaunch_settings WHERE id = 1`).Scan(&keep)
 	if errors.Is(err, sql.ErrNoRows) {
-		return application.DefaultRegistryKeepCount, nil
+		return application.DefaultRegistryRetentionKeep, nil
 	}
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such column") {
-			return application.DefaultRegistryKeepCount, nil
+			return application.DefaultRegistryRetentionKeep, nil
 		}
-		return 0, fmt.Errorf("get registry default keep: %w", err)
+		return 0, fmt.Errorf("get registry retention keep: %w", err)
 	}
 	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return application.DefaultRegistryKeepCount, nil
+		return application.DefaultRegistryRetentionKeep, nil
 	}
 	return keep, nil
 }
 
-// SetRegistryDefaultKeep persists the global keep count for registry
-// retention. Zero means unlimited.
-func (s *Store) SetRegistryDefaultKeep(ctx context.Context, keep int) error {
+// SetRegistryRetentionKeep persists the global keep count shared by automatic
+// registry retention and manual purge. Zero means unlimited.
+func (s *Store) SetRegistryRetentionKeep(ctx context.Context, keep int) error {
 	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO redlaunch_settings (id) VALUES (1)`); err != nil {
 		return fmt.Errorf("initialize Redlaunch settings: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE redlaunch_settings SET registry_default_keep = ? WHERE id = 1`, keep); err != nil {
-		return fmt.Errorf("save registry default keep: %w", err)
+	if _, err := s.db.ExecContext(ctx, `UPDATE redlaunch_settings SET registry_retention_keep = ? WHERE id = 1`, keep); err != nil {
+		return fmt.Errorf("save registry retention keep: %w", err)
 	}
 	return nil
 }
@@ -2285,6 +2285,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("migrate service deletion volumes: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (27, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	var registryRetentionKeepApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 28`).Scan(&registryRetentionKeepApplied); err != nil {
+		return err
+	}
+	if registryRetentionKeepApplied == 0 {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE redlaunch_settings ADD COLUMN registry_retention_keep INTEGER NOT NULL DEFAULT 2`); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				return fmt.Errorf("add registry retention keep: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (28, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
 	}

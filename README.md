@@ -223,12 +223,14 @@ container does not remove the database.
 
 - **Local registry.** Optionally run a local Docker registry and list the images
   previously pushed to it from the Registry page.
-- **Automatic retention.** Retain the two newest distinct image digests per
-  local-registry repository, including untagged versions. See
-  [registry retention](#registry-retention) for the full behavior.
-- **Manual cleanup.** Purge older tags per repository with a keep count (keep
-  the N most recent images, 0 for unlimited, maximum 100). Deployed tags are
-  always kept.
+- **Automatic retention and garbage collection.** Retain the configured number
+  of newest distinct image versions per local-registry repository (default 2),
+  then reclaim unreferenced blobs. See
+  [registry retention](#registry-retention-and-garbage-collection) for the full behavior.
+- **Manual cleanup.** Configure a global retention count plus per-repository
+  overrides, then purge older versions from all repositories with one action.
+  A manual garbage-collection action reclaims unused blob storage. Deployed and
+  running images are always kept.
 - **Service versions.** Open a service's Versions list to see the pushed images
   of its repository grouped by digest with their tags, including untagged
   images retained in the registry. Pushed times come from manifest revisions
@@ -428,20 +430,41 @@ list to resume an interrupted operation; the original volume selections are
 saved and cannot be changed on retry. Existing API deletion calls retain volume
 data for new operations.
 
-### Registry retention
+### Registry retention and garbage collection
 
-Automatically retain the two newest distinct image digests per local-registry
-repository, including untagged versions. Cleanup runs at server startup and
-hourly. Multiple tags on one digest count as one version; multi-platform child
-manifests are preserved with their image. Older deployed or configured versions
-are also kept, so a repository can retain more than two versions. Cleanup skips
-deletion when inspection fails, the inventory exceeds 1,000 entries, or
-manifest dependencies are incomplete; versions with unknown push times are
-kept. Failures are recorded in the server log.
+One retention policy controls both automatic cleanup and the manual **Purge
+images** action:
 
-Removed versions lose their tags and manifest revision links. Shared blobs
-remain on disk until an operator runs offline registry garbage collection with
-registry writes stopped; automatic retention does not run live blob GC.
+- The global default keep count is 2. Configure it on the Registry page, with
+  optional per-repository overrides. `0` means unlimited; the maximum is 100.
+- Keep the newest distinct image versions per repository, including untagged
+  versions. Multiple tags on one digest count as one version.
+- Always keep versions used by running containers, configured or pinned service
+  images, and versions with unknown push times. These do not consume the keep
+  quota.
+- Preserve multi-platform child manifests of every retained image.
+- Remove tags and manifest revision links for obsolete versions, deleting
+  parent indexes before their children.
+- Cleanup skips deletion when inspection fails, the inventory exceeds 1,000
+  entries, or manifest dependencies are incomplete. Failures are recorded in
+  the server log.
+
+Automatic retention and garbage collection run at startup and are each due at
+most once every 24 hours. When both are due they share one read-only
+maintenance window. The manual **Run garbage collection** action runs
+collection immediately. The maintenance window puts the registry in read-only
+mode: pulls remain available except during brief restarts, while pushes and
+uploads fail until it finishes. Garbage collection removes only blobs no
+manifest references, so retained untagged versions remain available for
+rollback and version switching.
+
+Recovery state for an interrupted maintenance window is stored under
+`core/registry/.maintenance` so Redlaunch can restore the original
+configuration and writable registry mode after a crash. If recovery fails,
+maintenance actions stay blocked and the Registry page reports the problem.
+Registry configurations that mount the config file from the host, rely on
+`REGISTRY_*` environment overrides, or do not use the managed filesystem
+storage layout are rejected rather than modified.
 
 ### Backups and recovery
 

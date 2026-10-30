@@ -411,8 +411,4 @@ func TestApplicationsListServiceVersionsIncludesUntaggedImages(t *testing.T) {
 	if err != nil || len(images) != 1 || images[0].Tag != "development" {
 		t.Fatalf("Registry page images = %#v, %v, want only tagged image", images, err)
 	}
-	kept, purge, err := registry.PlanRepositoryPurge(t.Context(), "acme-app", 1, nil)
-	if err != nil || len(kept) != 1 || len(purge) != 0 {
-		t.Fatalf("tag retention = %#v, %#v, %v, want only tagged image kept", kept, purge, err)
-	}
 }

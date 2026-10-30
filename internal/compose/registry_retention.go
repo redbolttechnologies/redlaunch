@@ -69,9 +69,8 @@ func (r CommandRunner) RegistryManifestReferences(ctx context.Context, container
 }
 
 // DeleteRegistryVersion removes a manifest revision and its current tags.
-// Re-reading tags at deletion time avoids deleting tags that moved since the
-// retention snapshot. Blobs are deliberately left for offline garbage collection;
-// deleting shared layers while the registry accepts pushes is unsafe.
+// Deletions are performed while the registry is read-only. Blobs are left for the
+// garbage collector, which runs in the same read-only maintenance window.
 func (r CommandRunner) DeleteRegistryVersion(ctx context.Context, container, repository, digest string) error {
 	if err := validateRegistryVersion(container, repository, digest); err != nil {
 		return err

@@ -507,6 +507,7 @@ type Applications struct {
 	backupLeases           applicationBackupLeaseRepository
 	scheduleDisabler       applicationDeletionScheduleDisabler
 	versionRegistry        versionRegistryOperations
+	registryMaintenance    registryMaintenanceService
 	applicationsDir        string
 	proxyDirectory         string
 	managementPort         int

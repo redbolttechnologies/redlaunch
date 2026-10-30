@@ -11,118 +11,90 @@ import (
 	"time"
 
 	"redlaunch/internal/application"
-	"redlaunch/internal/compose"
 )
 
-type retentionRunner struct {
-	stubRegistryContentLister
-	refs          map[string][]string
-	inspectErr    error
-	deleteErr     error
-	deleted       []string
-	deletedNotify chan struct{}
+type fakeRegistryMaintenance struct {
+	calls  []RegistryMaintenanceOptions
+	result RegistryMaintenanceResult
+	err    error
+	notify chan struct{}
 }
 
-func (r *retentionRunner) RegistryManifestReferences(_ context.Context, _, _, digest string) ([]string, error) {
-	return r.refs[digest], r.inspectErr
+func (f *fakeRegistryMaintenance) ApplyMaintenance(_ context.Context, options RegistryMaintenanceOptions) (RegistryMaintenanceResult, error) {
+	f.calls = append(f.calls, options)
+	if f.notify != nil {
+		f.notify <- struct{}{}
+	}
+	return f.result, f.err
 }
-func (r *retentionRunner) DeleteRegistryVersion(_ context.Context, _, repository, digest string) error {
-	if r.deleteErr != nil {
-		return r.deleteErr
-	}
-	r.deleted = append(r.deleted, repository+"@"+digest)
-	remaining := make([]compose.RegistryContent, 0, len(r.contents))
-	for _, content := range r.contents {
-		if content.Repository != repository || content.Digest != digest {
-			remaining = append(remaining, content)
-		}
-	}
-	r.contents = remaining
-	if r.deletedNotify != nil {
-		r.deletedNotify <- struct{}{}
-	}
-	return nil
-}
+
 func retentionDigest(c string) string { return "sha256:" + strings.Repeat(c, 64) }
-func retentionImage(repo, tag, c string, age int) compose.RegistryContent {
-	return compose.RegistryContent{Repository: repo, Tag: tag, Digest: retentionDigest(c), ManifestPushedAt: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC).Add(-time.Duration(age) * time.Hour)}
-}
-func retentionService(t *testing.T, runner *retentionRunner) *RegistryService {
-	t.Helper()
-	registry, err := NewRegistryService(RegistryContainerName, runner)
+
+func TestApplicationsRetentionUsesFullProtectionAndManualOptions(t *testing.T) {
+	apps, _, runner, _ := versionTestService(t, "localhost:5000/app:production")
+	runner.runningDigest = retentionDigest("d")
+	maintenance := &fakeRegistryMaintenance{result: RegistryMaintenanceResult{DeletedVersions: 2, RetentionCompleted: true}}
+	apps.SetRegistryMaintenance(maintenance)
+
+	result, err := apps.RetainRegistryVersions(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return registry
-}
-func TestRetentionKeepsTwoDistinctVersionsPerRepository(t *testing.T) {
-	r := &retentionRunner{}
-	r.contents = []compose.RegistryContent{
-		retentionImage("app", "latest", "a", 0), retentionImage("app", "build1", "a", 0),
-		retentionImage("app", "", "b", 1), retentionImage("app", "old", "c", 2),
-		retentionImage("other", "", "d", 0), retentionImage("other", "", "e", 1), retentionImage("other", "", "f", 2),
+	if result.DeletedVersions != 2 || len(maintenance.calls) != 1 {
+		t.Fatalf("result = %#v, calls = %#v", result, maintenance.calls)
 	}
-	n, err := retentionService(t, r).RetainVersions(t.Context(), nil)
-	want := []string{"app@" + retentionDigest("c"), "other@" + retentionDigest("f")}
-	if err != nil || n != 2 || !reflect.DeepEqual(r.deleted, want) {
-		t.Fatalf("retention = %d, %v, %v; want %v", n, err, r.deleted, want)
+	options := maintenance.calls[0]
+	if !options.Retention || options.GarbageCollection || options.Scheduled {
+		t.Fatalf("options = %#v, want manual retention only", options)
 	}
-}
-func TestRetentionProtectsDeployedTagsDigestsAndUnknownTimes(t *testing.T) {
-	r := &retentionRunner{}
-	for i, c := range []string{"a", "b", "c", "d", "e", "f"} {
-		r.contents = append(r.contents, retentionImage("app", "tag"+c, c, i))
-	}
-	r.contents[4].ManifestPushedAt = time.Time{}
-	protected := map[string]bool{application.RegistryImageKey("app", "tagc"): true, application.RegistryImageKey("app", retentionDigest("d")): true}
-	n, err := retentionService(t, r).RetainVersions(t.Context(), protected)
-	if err != nil || n != 1 || !reflect.DeepEqual(r.deleted, []string{"app@" + retentionDigest("f")}) {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
-	}
-}
-func TestRetentionPreservesMultiPlatformDependencies(t *testing.T) {
-	r := &retentionRunner{refs: map[string][]string{retentionDigest("a"): {retentionDigest("d")}, retentionDigest("b"): {retentionDigest("e")}, retentionDigest("c"): {retentionDigest("f")}}}
-	for i, c := range []string{"a", "b", "c", "d", "e", "f"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
-	}
-	n, err := retentionService(t, r).RetainVersions(t.Context(), nil)
-	if err != nil || n != 2 || !reflect.DeepEqual(r.deleted, []string{"app@" + retentionDigest("c"), "app@" + retentionDigest("f")}) {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
-	}
-}
-func TestRetentionInspectsEverythingBeforeDeleting(t *testing.T) {
-	for _, incomplete := range []bool{false, true} {
-		r := &retentionRunner{refs: map[string][]string{}}
-		for i, c := range []string{"a", "b", "c"} {
-			r.contents = append(r.contents, retentionImage("app", "", c, i))
-		}
-		if incomplete {
-			r.refs[retentionDigest("a")] = []string{retentionDigest("d")}
-		} else {
-			r.inspectErr = errors.New("cannot inspect")
-		}
-		n, err := retentionService(t, r).RetainVersions(t.Context(), nil)
-		if err == nil || n != 0 || len(r.deleted) != 0 {
-			t.Fatalf("unsafe cleanup: %d, %v, %v", n, err, r.deleted)
+	for _, key := range []string{
+		application.RegistryImageKey("app", "production"),
+		application.RegistryImageKey("app", retentionDigest("d")),
+	} {
+		if !options.Protected[key] {
+			t.Fatalf("protected missing %q in %#v", key, options.Protected)
 		}
 	}
 }
-func TestApplicationsRetentionProtectsRunningAndPendingVersions(t *testing.T) {
-	apps, _, runner, _ := versionTestService(t, "localhost:5000/app:production")
-	runner.runningDigest = retentionDigest("d")
-	r := &retentionRunner{}
-	for i, c := range []string{"a", "b", "c", "d", "e"} {
-		tag := ""
-		if c == "c" {
-			tag = "production"
-		}
-		r.contents = append(r.contents, retentionImage("app", tag, c, i))
+
+func TestApplicationsRetentionProtectsDigestPinnedService(t *testing.T) {
+	digest := retentionDigest("c")
+	apps, _, _, _ := versionTestService(t, "localhost:5000/app@"+digest)
+	maintenance := &fakeRegistryMaintenance{}
+	apps.SetRegistryMaintenance(maintenance)
+	if _, err := apps.RetainRegistryVersions(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	n, err := apps.RetainRegistryVersions(t.Context(), retentionService(t, r))
-	if err != nil || n != 1 || !reflect.DeepEqual(r.deleted, []string{"app@" + retentionDigest("e")}) {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
+	if len(maintenance.calls) != 1 {
+		t.Fatalf("calls = %#v", maintenance.calls)
+	}
+	key := application.RegistryImageKey("app", digest)
+	if !maintenance.calls[0].Protected[key] {
+		t.Fatalf("digest-pinned service not protected: %#v", maintenance.calls[0].Protected)
 	}
 }
+
+func TestApplicationsCollectGarbageUsesManualGCOptions(t *testing.T) {
+	apps, _, _, _ := versionTestService(t, "nginx:stable")
+	maintenance := &fakeRegistryMaintenance{result: RegistryMaintenanceResult{GarbageCollectionCompleted: true, ReclaimedBytes: 1024, ReclaimedBytesKnown: true}}
+	apps.SetRegistryMaintenance(maintenance)
+
+	result, err := apps.CollectRegistryGarbage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.GarbageCollectionCompleted || result.ReclaimedBytes != 1024 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(maintenance.calls) != 1 {
+		t.Fatalf("calls = %#v", maintenance.calls)
+	}
+	options := maintenance.calls[0]
+	if options.Retention || !options.GarbageCollection || options.Scheduled {
+		t.Fatalf("options = %#v, want manual GC only", options)
+	}
+}
+
 func TestApplicationsRetentionFailsClosedOnInspectionErrors(t *testing.T) {
 	for _, resolverError := range []bool{false, true} {
 		apps, _, runner, _ := versionTestService(t, "localhost:5000/app:production")
@@ -131,71 +103,22 @@ func TestApplicationsRetentionFailsClosedOnInspectionErrors(t *testing.T) {
 		} else {
 			runner.digestErr = errors.New("docker unavailable")
 		}
-		r := &retentionRunner{}
-		for i, c := range []string{"a", "b", "c"} {
-			r.contents = append(r.contents, retentionImage("app", "", c, i))
+		maintenance := &fakeRegistryMaintenance{}
+		apps.SetRegistryMaintenance(maintenance)
+		if _, err := apps.RetainRegistryVersions(t.Context()); err == nil {
+			t.Fatal("expected inspection error")
 		}
-		n, err := apps.RetainRegistryVersions(t.Context(), retentionService(t, r))
-		if err == nil || n != 0 || len(r.deleted) != 0 {
-			t.Fatalf("unsafe cleanup = %d, %v, %v", n, err, r.deleted)
+		if len(maintenance.calls) != 0 {
+			t.Fatal("maintenance ran with incomplete runtime protection")
 		}
-	}
-}
-func TestApplicationsRetentionProtectsDigestPinnedService(t *testing.T) {
-	apps, _, _, _ := versionTestService(t, "localhost:5000/app@"+retentionDigest("c"))
-	r := &retentionRunner{}
-	for i, c := range []string{"a", "b", "c", "d"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
-	}
-	n, err := apps.RetainRegistryVersions(t.Context(), retentionService(t, r))
-	if err != nil || n != 1 || !reflect.DeepEqual(r.deleted, []string{"app@" + retentionDigest("d")}) {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
-	}
-}
-
-func TestRetentionDeletesObsoleteIndexBeforeNewerChild(t *testing.T) {
-	r := &retentionRunner{refs: map[string][]string{retentionDigest("c"): {retentionDigest("d")}}}
-	r.contents = []compose.RegistryContent{
-		retentionImage("app", "v1", "a", 0), retentionImage("app", "v2", "b", 1),
-		retentionImage("app", "", "d", 2), retentionImage("app", "v0", "c", 3),
-	}
-	n, err := retentionService(t, r).RetainVersions(t.Context(), nil)
-	want := []string{"app@" + retentionDigest("c"), "app@" + retentionDigest("d")}
-	if err != nil || n != 2 || !reflect.DeepEqual(r.deleted, want) {
-		t.Fatalf("retention = %d, %v, %v; want %v", n, err, r.deleted, want)
-	}
-}
-
-func TestRetentionStopsAfterDeleteFailure(t *testing.T) {
-	r := &retentionRunner{deleteErr: errors.New("storage unavailable")}
-	for i, c := range []string{"a", "b", "c", "d"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
-	}
-	n, err := retentionService(t, r).RetainVersions(t.Context(), nil)
-	if err == nil || n != 0 || len(r.deleted) != 0 {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
-	}
-}
-
-func TestApplicationsRetentionProtectsRuntimeImageAfterConfigurationChanges(t *testing.T) {
-	apps, _, runner, _ := versionTestService(t, "nginx:stable")
-	runner.runningDigest = retentionDigest("c")
-	runner.runtime[0].Image = "localhost:5000/app:production"
-	r := &retentionRunner{}
-	for i, c := range []string{"a", "b", "c", "d"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
-	}
-	n, err := apps.RetainRegistryVersions(t.Context(), retentionService(t, r))
-	if err != nil || n != 1 || !reflect.DeepEqual(r.deleted, []string{"app@" + retentionDigest("d")}) {
-		t.Fatalf("retention = %d, %v, %v", n, err, r.deleted)
 	}
 }
 
 func TestApplicationsRetentionReleasesLeasesAfterFailure(t *testing.T) {
 	apps, _, runner, _ := versionTestService(t, "localhost:5000/app:production")
 	runner.resolveErr = errors.New("cannot resolve image")
-	r := &retentionRunner{}
-	if _, err := apps.RetainRegistryVersions(t.Context(), retentionService(t, r)); err == nil {
+	apps.SetRegistryMaintenance(&fakeRegistryMaintenance{})
+	if _, err := apps.RetainRegistryVersions(t.Context()); err == nil {
 		t.Fatal("expected inspection error")
 	}
 	lease, err := apps.tryAcquireApplicationProject(1)
@@ -205,55 +128,183 @@ func TestApplicationsRetentionReleasesLeasesAfterFailure(t *testing.T) {
 	lease.release()
 }
 
-func TestRegistryRetentionWorkerRunsAtStartupAndStopsOnCancellation(t *testing.T) {
-	apps, _, runner, _ := versionTestService(t, "localhost:5000/app:production")
-	runner.runningDigest = retentionDigest("a")
-	r := &retentionRunner{deletedNotify: make(chan struct{}, 1)}
-	for i, c := range []string{"a", "b", "c"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
+func TestRegistryMaintenanceWorkerRunsAtStartupAndStopsOnCancellation(t *testing.T) {
+	apps, _, _, _ := versionTestService(t, "nginx:stable")
+	maintenance := &fakeRegistryMaintenance{
+		result: RegistryMaintenanceResult{RetentionCompleted: true, GarbageCollectionCompleted: true},
+		notify: make(chan struct{}, 1),
 	}
-	registry := retentionService(t, r)
+	apps.SetRegistryMaintenance(maintenance)
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		apps.RunRegistryRetention(ctx, registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		apps.RunRegistryMaintenanceWorker(ctx, registry, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 	select {
-	case <-r.deletedNotify:
+	case <-maintenance.notify:
 	case <-time.After(5 * time.Second):
-		t.Fatal("startup cleanup did not run")
+		t.Fatal("startup maintenance did not run")
 	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("retention worker did not stop")
+		t.Fatal("maintenance worker did not stop")
 	}
-	if len(r.deleted) != 1 {
-		t.Fatalf("deleted = %v, want one startup pass", r.deleted)
+	if len(maintenance.calls) != 1 {
+		t.Fatalf("calls = %#v, want one startup pass", maintenance.calls)
 	}
-	lease, err := apps.tryAcquireApplicationProject(1)
-	if err != nil {
-		t.Fatalf("retention left project locked: %v", err)
+	if !maintenance.calls[0].Scheduled || !maintenance.calls[0].Retention || !maintenance.calls[0].GarbageCollection {
+		t.Fatalf("startup options = %#v", maintenance.calls[0])
 	}
-	lease.release()
 }
 
-func TestRegistryRetentionIsIdempotent(t *testing.T) {
-	r := &retentionRunner{}
-	for i, c := range []string{"a", "b", "c"} {
-		r.contents = append(r.contents, retentionImage("app", "", c, i))
+func TestRegistryMaintenanceWorkerSkipsWhenTimestampsAreRecent(t *testing.T) {
+	apps, _, _, _ := versionTestService(t, "nginx:stable")
+	maintenance := &fakeRegistryMaintenance{notify: make(chan struct{}, 1)}
+	apps.SetRegistryMaintenance(maintenance)
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	registry := retentionService(t, r)
-	if n, err := registry.RetainVersions(t.Context(), nil); err != nil || n != 1 {
-		t.Fatalf("first pass = %d, %v", n, err)
+	now := time.Now()
+	registry.scheduleMu.Lock()
+	registry.lastRetention = now
+	registry.lastGarbage = now
+	registry.scheduleMu.Unlock()
+	retentionDue, garbageDue := registry.maintenanceDue(now)
+	if retentionDue || garbageDue {
+		t.Fatalf("due = (%v, %v), want false, false", retentionDue, garbageDue)
 	}
-	if n, err := registry.RetainVersions(t.Context(), nil); err != nil || n != 0 {
-		t.Fatalf("second pass = %d, %v", n, err)
+}
+
+func TestRegistryMaintenanceDueAfterInterval(t *testing.T) {
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(r.contents) != 2 {
-		t.Fatalf("retained %d versions, want 2", len(r.contents))
+	now := time.Now()
+	registry.scheduleMu.Lock()
+	registry.lastRetention = now.Add(-RegistryMaintenanceInterval - time.Minute)
+	registry.lastGarbage = now.Add(-RegistryMaintenanceInterval - time.Minute)
+	registry.scheduleMu.Unlock()
+	retentionDue, garbageDue := registry.maintenanceDue(now)
+	if !retentionDue || !garbageDue {
+		t.Fatalf("due = (%v, %v), want true, true", retentionDue, garbageDue)
+	}
+}
+
+func TestRegistryMaintenanceBusyReturnsSentinel(t *testing.T) {
+	registry, err := NewRegistryService(RegistryContainerName, &stubRegistryContentLister{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNoMaintenanceBackend(t, registry)
+	registry.mutations.Lock()
+	defer registry.mutations.Unlock()
+	_, err = registry.ApplyMaintenance(t.Context(), RegistryMaintenanceOptions{Retention: true})
+	if !errors.Is(err, application.ErrRegistryBusy) {
+		t.Fatalf("ApplyMaintenance() error = %v, want busy", err)
+	}
+}
+
+func requireNoMaintenanceBackend(t *testing.T, registry *RegistryService) {
+	t.Helper()
+	if _, err := registry.maintenanceBackend(); err == nil {
+		t.Fatal("test runner unexpectedly implements maintenance backend")
+	}
+}
+
+func TestRetentionPlannerProtectionDoesNotConsumeQuota(t *testing.T) {
+	versions := []application.RegistryVersion{
+		{Digest: retentionDigest("a"), Tags: []string{"newest"}, PushedAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)},
+		{Digest: retentionDigest("b"), Tags: []string{"deployed"}, PushedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+		{Digest: retentionDigest("c"), Tags: []string{"third"}, PushedAt: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)},
+		{Digest: retentionDigest("d"), Tags: []string{"oldest"}, PushedAt: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)},
+	}
+	protected := map[string]bool{application.RegistryImageKey("app", "deployed"): true}
+	plan, err := application.PlanRegistryRetention(versions, "app", 1, protected, map[string][]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, version := range plan.Kept {
+		kept = append(kept, version.Digest)
+	}
+	want := []string{retentionDigest("a"), retentionDigest("b")}
+	if !reflect.DeepEqual(kept, want) {
+		t.Fatalf("kept = %v, want %v", kept, want)
+	}
+	if len(plan.DeleteOrder) != 2 {
+		t.Fatalf("delete order = %#v, want two purged versions", plan.DeleteOrder)
+	}
+}
+
+func TestRetentionPlannerKeepsUnknownTimesWithoutQuota(t *testing.T) {
+	versions := []application.RegistryVersion{
+		{Digest: retentionDigest("a"), Tags: []string{"newest"}, PushedAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)},
+		{Digest: retentionDigest("b"), Tags: []string{"unknown"}},
+		{Digest: retentionDigest("c"), Tags: []string{"oldest"}, PushedAt: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)},
+	}
+	plan, err := application.PlanRegistryRetention(versions, "app", 1, nil, map[string][]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DeleteOrder) != 1 || plan.DeleteOrder[0].Digest != retentionDigest("c") {
+		t.Fatalf("delete order = %#v, want only known oldest version", plan.DeleteOrder)
+	}
+}
+
+func TestRetentionPlannerPreservesIndexChildren(t *testing.T) {
+	parent := retentionDigest("a")
+	child := retentionDigest("b")
+	old := retentionDigest("c")
+	versions := []application.RegistryVersion{
+		{Digest: parent, Tags: []string{"multi"}, PushedAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)},
+		{Digest: child, PushedAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)},
+		{Digest: old, Tags: []string{"old"}, PushedAt: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)},
+	}
+	references := map[string][]string{parent: {child}, child: nil, old: nil}
+	plan, err := application.PlanRegistryRetention(versions, "app", 1, nil, references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DeleteOrder) != 1 || plan.DeleteOrder[0].Digest != old {
+		t.Fatalf("delete order = %#v, want only old version", plan.DeleteOrder)
+	}
+}
+
+func TestRetentionPlannerDeletesParentIndexBeforeChild(t *testing.T) {
+	newest := retentionDigest("a")
+	parent := retentionDigest("b")
+	child := retentionDigest("c")
+	versions := []application.RegistryVersion{
+		{Digest: newest, Tags: []string{"newest"}, PushedAt: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)},
+		{Digest: parent, Tags: []string{"multi"}, PushedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+		{Digest: child, PushedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+	}
+	references := map[string][]string{newest: nil, parent: {child}, child: nil}
+	plan, err := application.PlanRegistryRetention(versions, "app", 1, nil, references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.DeleteOrder) != 2 || plan.DeleteOrder[0].Digest != parent || plan.DeleteOrder[1].Digest != child {
+		t.Fatalf("delete order = %#v, want parent then child", plan.DeleteOrder)
+	}
+	if plan.PurgedVersions != 1 {
+		t.Fatalf("purged versions = %d, want one user-facing version", plan.PurgedVersions)
+	}
+}
+
+func TestRetentionPlannerRejectsIncompleteGraph(t *testing.T) {
+	versions := []application.RegistryVersion{{Digest: retentionDigest("a"), Tags: []string{"v1"}}}
+	references := map[string][]string{retentionDigest("a"): {retentionDigest("b")}}
+	if _, err := application.PlanRegistryRetention(versions, "app", 2, nil, references); err == nil {
+		t.Fatal("incomplete graph accepted")
 	}
 }

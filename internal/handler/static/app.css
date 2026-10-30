@@ -3731,17 +3731,6 @@ h1 {
   border-top: 1px solid hsl(var(--border));
 }
 
-.registry-repository-actions {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.registry-purge-button {
-  padding: var(--space-1) var(--space-3);
-  font-size: 0.75rem;
-  line-height: 1.5;
-}
-
 .registry-images-table td code {
   overflow-wrap: anywhere;
 }
@@ -5062,11 +5051,6 @@ h1 {
 
   .registry-summary-badges {
     flex: 1 1 100%;
-  }
-
-  .registry-repository-actions {
-    flex: 1 1 100%;
-    margin-left: 0;
   }
 
   .registry-digest-cell {

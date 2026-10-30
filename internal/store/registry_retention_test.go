@@ -16,41 +16,41 @@ func openRetentionTestStore(t *testing.T) *Store {
 	return database
 }
 
-func TestStoreRegistryDefaultKeepDefaultsToFive(t *testing.T) {
+func TestStoreRegistryRetentionKeepDefaultsToTwo(t *testing.T) {
 	database := openRetentionTestStore(t)
-	got, err := database.GetRegistryDefaultKeep(t.Context())
+	got, err := database.GetRegistryRetentionKeep(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != application.DefaultRegistryKeepCount {
-		t.Fatalf("GetRegistryDefaultKeep() = %d, want %d", got, application.DefaultRegistryKeepCount)
+	if got != application.DefaultRegistryRetentionKeep {
+		t.Fatalf("GetRegistryRetentionKeep() = %d, want %d", got, application.DefaultRegistryRetentionKeep)
 	}
 }
 
-func TestStoreRegistryDefaultKeepRoundTrip(t *testing.T) {
+func TestStoreRegistryRetentionKeepRoundTrip(t *testing.T) {
 	database := openRetentionTestStore(t)
-	if err := database.SetRegistryDefaultKeep(t.Context(), 3); err != nil {
+	if err := database.SetRegistryRetentionKeep(t.Context(), 3); err != nil {
 		t.Fatal(err)
 	}
-	got, err := database.GetRegistryDefaultKeep(t.Context())
+	got, err := database.GetRegistryRetentionKeep(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 3 {
-		t.Fatalf("GetRegistryDefaultKeep() = %d, want 3", got)
+		t.Fatalf("GetRegistryRetentionKeep() = %d, want 3", got)
 	}
-	if err := database.SetRegistryDefaultKeep(t.Context(), 0); err != nil {
+	if err := database.SetRegistryRetentionKeep(t.Context(), 0); err != nil {
 		t.Fatal(err)
 	}
-	got, err = database.GetRegistryDefaultKeep(t.Context())
+	got, err = database.GetRegistryRetentionKeep(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != 0 {
-		t.Fatalf("GetRegistryDefaultKeep() = %d, want 0 unlimited", got)
+		t.Fatalf("GetRegistryRetentionKeep() = %d, want 0 unlimited", got)
 	}
-	if err := database.SetRegistryDefaultKeep(t.Context(), 101); err == nil {
-		t.Fatal("SetRegistryDefaultKeep(101) error = nil, want invalid")
+	if err := database.SetRegistryRetentionKeep(t.Context(), 101); err == nil {
+		t.Fatal("SetRegistryRetentionKeep(101) error = nil, want invalid")
 	}
 }
 

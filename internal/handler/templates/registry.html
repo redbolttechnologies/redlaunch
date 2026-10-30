@@ -7,7 +7,14 @@
   <header class="page-heading">
     <div class="page-heading-copy">
       <h1 id="page-title">Registry</h1>
+      <p>Inspect pushed images, configure retention, and reclaim unused registry storage.</p>
     </div>
+    {{if not .RegistryPage.Unavailable}}
+    <div class="service-details-actions" role="group" aria-label="Registry maintenance">
+      <button class="button button-secondary" type="button" data-registry-gc-open aria-controls="registry-gc-dialog" aria-haspopup="dialog" aria-expanded="false"{{if not .RegistryPage.GarbageCollectionAvailable}} disabled{{end}}>Run garbage collection</button>
+      <button class="button button-destructive" type="button" data-registry-purge-open aria-controls="registry-purge-dialog" aria-haspopup="dialog" aria-expanded="false"{{if not .RegistryPage.PurgeAvailable}} disabled{{end}}>Purge images</button>
+    </div>
+    {{end}}
   </header>
 
   {{if .RegistryPage.Error}}
@@ -19,11 +26,17 @@
     <span>{{.RegistryPage.Error}}</span>
   </div>
   {{end}}
+  {{if .RegistryPage.MaintenanceError}}
+  <div class="application-alert" role="alert">
+    <span>{{.RegistryPage.MaintenanceError}}</span>
+  </div>
+  {{end}}
   {{if .RegistryPage.Notice}}
   <div class="application-notice" role="status">
     <span>{{.RegistryPage.Notice}}</span>
   </div>
   {{end}}
+
   {{if .RegistryPage.Unavailable}}
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
@@ -47,6 +60,29 @@
     </div>
   </section>
   {{else}}
+  <section class="service-widget registry-retention-widget" aria-labelledby="registry-retention-title">
+    <header class="service-widget-header">
+      <div class="service-widget-heading">
+        <h2 id="registry-retention-title">Retention</h2>
+        <p>Keep the most recent image versions per repository. Applies to automatic retention and the Purge images action.</p>
+      </div>
+    </header>
+    <div class="service-widget-body">
+      {{if .RegistryPage.RetentionError}}<div class="application-alert" role="alert"><span>{{.RegistryPage.RetentionError}}</span></div>{{end}}
+      {{if .RegistryPage.RetentionAvailable}}
+      <form class="service-form-inline" method="post" action="/registry/retention/default">
+        <input type="hidden" name="csrf_token" value="{{.RegistryPage.CSRFToken}}">
+        <label for="registry-default-keep">Default keep count</label>
+        <input id="registry-default-keep" name="keep_count" type="number" min="0" max="100" step="1" value="{{.RegistryPage.DefaultKeep}}" inputmode="numeric" required>
+        <button type="submit" class="button button-secondary">Save default</button>
+      </form>
+      <p class="field-help">Use 0 for unlimited, maximum 100. Deployed and running images are always kept and do not count toward this number. Multiple tags on the same image count as one version; untagged retained versions also count. Automatic retention and garbage collection run at startup and every 24 hours.</p>
+      {{else}}
+      <p class="service-widget-hint">Retention settings are not available right now.</p>
+      {{end}}
+    </div>
+  </section>
+
   <section class="service-widget registry-images-widget" aria-labelledby="registry-images-title">
     <header class="service-widget-header">
       <div class="service-widget-heading-with-icon">
@@ -74,6 +110,7 @@
           <code class="registry-repository-name" title="{{$group.Repository}}">{{$group.Repository}}</code>
           <span class="registry-summary-badges">
             <span class="registry-meta-badge">{{len $group.Images}} {{if eq (len $group.Images) 1}}tag{{else}}tags{{end}}</span>
+            {{if $.RegistryPage.RetentionAvailable}}<span class="registry-meta-badge">Keep {{if eq $group.EffectiveKeep 0}}unlimited{{else}}{{$group.EffectiveKeep}}{{end}}</span>{{end}}
             <span class="registry-meta-badge registry-meta-badge-pushed">
               <svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="9"></circle>
@@ -82,13 +119,24 @@
               <span>Last pushed <time{{if registryTimeISO $group.LatestPushedAt}} datetime="{{registryTimeISO $group.LatestPushedAt}}" title="{{registryTimeTitle $group.LatestPushedAt}}"{{end}}>{{registryTime $group.LatestPushedAt}}</time></span>
             </span>
           </span>
-          <span class="registry-repository-actions">
-            <button class="button button-secondary registry-purge-button" type="button" data-registry-purge-open aria-controls="registry-purge-dialog-{{$index}}" aria-haspopup="dialog" aria-expanded="false">Purge</button>
-          </span>
         </summary>
         <div class="registry-repository-details">
-        {{if $group.PurgeCandidates}}
-        <p class="service-widget-hint">{{len $group.PurgeCandidates}} older {{if eq (len $group.PurgeCandidates) 1}}image{{else}}images{{end}} would be purged: {{range $tagIndex, $image := $group.PurgeCandidates}}{{if $tagIndex}}, {{end}}<code>{{$image.Tag}}</code>{{end}}.</p>
+        {{if $.RegistryPage.RetentionAvailable}}
+        <form class="service-form-inline" method="post" action="/registry/retention/repository">
+          <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
+          <input type="hidden" name="repository" value="{{$group.Repository}}">
+          <label for="registry-keep-{{$index}}">Keep for this repository</label>
+          <input id="registry-keep-{{$index}}" name="keep_count" type="number" min="0" max="100" step="1" value="{{if $group.HasOverride}}{{$group.OverrideKeep}}{{else}}{{$group.EffectiveKeep}}{{end}}" inputmode="numeric" required>
+          <button type="submit" class="button button-secondary">Save</button>
+          {{if $group.HasOverride}}<button type="submit" name="reset" value="1" class="button button-secondary">Use default</button>{{end}}
+        </form>
+        {{end}}
+        {{if $group.PurgeVersions}}
+        <p class="service-widget-hint">Up to {{len $group.PurgeVersions}} older {{if eq (len $group.PurgeVersions) 1}}version{{else}}versions{{end}} would be removed:
+          {{range $versionIndex, $version := $group.PurgeVersions}}{{if $versionIndex}}; {{end}}{{if $version.Tags}}{{range $tagIndex, $tag := $version.Tags}}{{if $tagIndex}}, {{end}}<code>{{$tag}}</code>{{end}}{{else}}<code>{{$version.Digest}}</code>{{end}}{{end}}.
+        </p>
+        {{else}}
+        <p class="service-widget-hint">Nothing to purge. The newest versions and deployed images are kept.</p>
         {{end}}
         {{if $group.Images}}
         <div class="service-environment-table-wrap">
@@ -118,42 +166,6 @@
         {{end}}
         </div>
       </details>
-      <dialog class="application-dialog registry-purge-dialog" id="registry-purge-dialog-{{$index}}" data-registry-purge-dialog{{with $.RegistryPage.PurgeDialog}}{{if and .Open (eq .Repository $group.Repository)}} data-registry-purge-open-dialog{{end}}{{end}} aria-modal="true" aria-labelledby="registry-purge-dialog-title-{{$index}}" aria-describedby="registry-purge-dialog-description-{{$index}}">
-        <div class="application-dialog-panel">
-          <header class="application-dialog-header">
-            <div>
-              <h2 id="registry-purge-dialog-title-{{$index}}">Purge images</h2>
-              <p id="registry-purge-dialog-description-{{$index}}">Remove older tags from <code>{{$group.Repository}}</code>. Deployed tags are always kept.</p>
-            </div>
-            <button class="icon-button" type="button" data-registry-purge-close aria-label="Close purge images dialog">
-              <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 6 12 12M18 6 6 18"></path>
-              </svg>
-            </button>
-          </header>
-
-          <form class="application-form" method="post" action="/registry/purge">
-            <input type="hidden" name="csrf_token" value="{{$.RegistryPage.CSRFToken}}">
-            <input type="hidden" name="repository" value="{{$group.Repository}}">
-            {{with $.RegistryPage.PurgeDialog}}
-            {{if and .Open (eq .Repository $group.Repository)}}
-            {{if .Error}}
-            <div class="application-alert application-dialog-alert" role="alert"><span>{{.Error}}</span></div>
-            {{end}}
-            {{end}}
-            {{end}}
-            <div class="field">
-              <label for="registry-purge-keep-{{$index}}">Keep the N recent images</label>
-              <input id="registry-purge-keep-{{$index}}" name="keep_count" type="number" min="0" max="100" step="1" value="{{with $.RegistryPage.PurgeDialog}}{{if and .Open (eq .Repository $group.Repository)}}{{.Keep}}{{else}}5{{end}}{{else}}5{{end}}" inputmode="numeric" required data-registry-purge-keep>
-              <span class="field-help">Keep the most recent images. Use 0 for unlimited. Maximum 100. Run registry garbage-collect on the server to reclaim blob space.</span>
-            </div>
-            <footer class="application-form-actions">
-              <button class="button button-secondary" type="button" data-registry-purge-close>Cancel</button>
-              <button class="button button-destructive" type="submit" data-registry-purge-submit>Purge images</button>
-            </footer>
-          </form>
-        </div>
-      </dialog>
       {{end}}
       </div>
       {{else if .RegistryPage.Images}}
@@ -187,6 +199,55 @@
       {{end}}
     </div>
   </section>
+
+  <dialog class="application-dialog registry-purge-dialog" id="registry-purge-dialog" data-registry-purge-dialog aria-modal="true" aria-labelledby="registry-purge-dialog-title" aria-describedby="registry-purge-dialog-description">
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header">
+        <div>
+          <h2 id="registry-purge-dialog-title">Purge older image versions?</h2>
+          <p id="registry-purge-dialog-description">Remove older versions from all repositories using each repository’s retention setting. The registry will be read-only during the operation; pushes and uploads fail until it finishes. Pulls remain available except during brief restarts. Deployed and running images are always kept. Application deployments are paused while maintenance runs.</p>
+        </div>
+        <button class="icon-button" type="button" data-registry-purge-close aria-label="Close purge images dialog">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+        </button>
+      </header>
+      {{if .RegistryPage.PurgeVersionCount}}
+      <p class="field-help">Up to {{.RegistryPage.PurgeVersionCount}} older {{if eq .RegistryPage.PurgeVersionCount 1}}version{{else}}versions{{end}} across {{.RegistryPage.PurgeRepositoryCount}} {{if eq .RegistryPage.PurgeRepositoryCount 1}}repository{{else}}repositories{{end}} will be removed.</p>
+      {{else}}
+      <p class="field-help">No older tagged versions are current candidates. Retained untagged versions may still be removed.</p>
+      {{end}}
+      <form class="application-form" method="post" action="/registry/purge">
+        <input type="hidden" name="csrf_token" value="{{.RegistryPage.CSRFToken}}">
+        <input type="hidden" name="confirmation" value="purge-all">
+        <footer class="application-form-actions">
+          <button class="button button-secondary" type="button" data-registry-purge-close>Cancel</button>
+          <button class="button button-destructive" type="submit" data-registry-purge-submit>Purge images</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog class="application-dialog registry-gc-dialog" id="registry-gc-dialog" data-registry-gc-dialog aria-modal="true" aria-labelledby="registry-gc-dialog-title" aria-describedby="registry-gc-dialog-description">
+    <div class="application-dialog-panel">
+      <header class="application-dialog-header">
+        <div>
+          <h2 id="registry-gc-dialog-title">Run garbage collection?</h2>
+          <p id="registry-gc-dialog-description">Unused image data will be removed permanently. The registry will restart in read-only mode: pulls remain available except during brief restarts, but pushes and uploads fail until collection finishes. Application deployments are paused while maintenance runs.</p>
+        </div>
+        <button class="icon-button" type="button" data-registry-gc-close aria-label="Close garbage collection dialog">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+        </button>
+      </header>
+      <form class="application-form" method="post" action="/registry/garbage-collect">
+        <input type="hidden" name="csrf_token" value="{{.RegistryPage.CSRFToken}}">
+        <input type="hidden" name="confirmation" value="garbage-collect">
+        <footer class="application-form-actions">
+          <button class="button button-secondary" type="button" data-registry-gc-close>Cancel</button>
+          <button class="button button-destructive" type="submit" data-registry-gc-submit>Run garbage collection</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
   {{end}}
 </section>
 {{end}}

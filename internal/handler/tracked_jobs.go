@@ -113,13 +113,20 @@ func (r *trackedJobRuntime) acquire(key string) (*trackedJobLease, error) {
 }
 
 func (l *trackedJobLease) start(run func(context.Context)) {
+	l.startWithTimeout(run, 0)
+}
+
+func (l *trackedJobLease) startWithTimeout(run func(context.Context), timeout time.Duration) {
 	if run == nil {
 		l.cancel()
 		return
 	}
+	if timeout <= 0 {
+		timeout = l.runtime.timeout
+	}
 	go func() {
 		defer l.release()
-		ctx, cancel := context.WithTimeout(l.runtime.ctx, l.runtime.timeout)
+		ctx, cancel := context.WithTimeout(l.runtime.ctx, timeout)
 		defer cancel()
 		run(ctx)
 	}()
@@ -187,6 +194,10 @@ func (r *trackedJobRuntime) shutdown(ctx context.Context) error {
 }
 
 func (h *Handler) startTrackedJob(key string, run func(context.Context)) error {
+	return h.startTrackedJobWithTimeout(key, 0, run)
+}
+
+func (h *Handler) startTrackedJobWithTimeout(key string, timeout time.Duration, run func(context.Context)) error {
 	if h.jobs == nil {
 		return errors.New("operation runtime is not configured")
 	}
@@ -194,7 +205,7 @@ func (h *Handler) startTrackedJob(key string, run func(context.Context)) error {
 	if err != nil {
 		return err
 	}
-	lease.start(run)
+	lease.startWithTimeout(run, timeout)
 	return nil
 }
 

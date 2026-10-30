@@ -66,6 +66,7 @@ type Handler struct {
 	proxyManager                   proxyDetailsService
 	proxyActions                   proxyActionService
 	registryImages                 registryImageService
+	registryMaintenanceJobs        *registryMaintenanceJobStore
 	dashboardMetrics               dashboardMetricsService
 	dashboardDocker                dashboardDockerService
 	authentication                 authenticationService
@@ -276,6 +277,23 @@ type proxyLogStreamService interface {
 
 type registryImageService interface {
 	ListRegistryImages(context.Context) ([]application.RegistryImage, error)
+}
+
+type registryRetentionSettingsService interface {
+	GetRetentionKeep(context.Context) (int, error)
+	SetRetentionKeep(context.Context, int) error
+	ListRetentionPolicies(context.Context) ([]application.RegistryRetentionPolicy, error)
+	SetRepositoryRetention(context.Context, string, int) error
+	DeleteRepositoryRetention(context.Context, string) error
+}
+
+type registryMaintenanceStateService interface {
+	MaintenanceError() error
+}
+
+type registryMaintenanceRunner interface {
+	RetainRegistryVersions(context.Context) (service.RegistryMaintenanceResult, error)
+	CollectRegistryGarbage(context.Context) (service.RegistryMaintenanceResult, error)
 }
 
 type applicationContainerInputValidator interface {
@@ -695,6 +713,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	serviceActionJobs := newServiceActionJobStore()
 	applicationVersionJobs := newApplicationVersionJobStore()
 	proxyActionJobs := newProxyActionJobStore()
+	registryMaintenanceJobs := newRegistryMaintenanceJobStore()
 	jobs := newTrackedJobRuntime(context.Background(), defaultTrackedJobWorkers, defaultTrackedJobTimeout)
 	jobs.registerCleanup(setupJobs.expire)
 	jobs.registerCleanup(postgresJobs.expire)
@@ -710,6 +729,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	jobs.registerCleanup(serviceActionJobs.expire)
 	jobs.registerCleanup(applicationVersionJobs.expire)
 	jobs.registerCleanup(proxyActionJobs.expire)
+	jobs.registerCleanup(registryMaintenanceJobs.expire)
 	return &Handler{
 		templates:                      templates,
 		logger:                         logger,
@@ -745,6 +765,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		proxyManager:                   proxy,
 		proxyActions:                   proxyActions,
 		registryImages:                 registryImages,
+		registryMaintenanceJobs:        registryMaintenanceJobs,
 		dashboardMetrics:               dashboardMetrics,
 		dashboardDocker:                dashboardDocker,
 		authentication:                 authentication,
@@ -796,7 +817,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /proxy/action/status", h.proxyActionStatus)
 	mux.HandleFunc("GET /proxy/logs/download", h.downloadProxyLogs)
 	mux.HandleFunc("GET /registry", h.registryPage)
-	mux.HandleFunc("POST /registry/purge", h.purgeRegistryRepository)
+	mux.HandleFunc("POST /registry/retention/default", h.setRegistryDefaultRetention)
+	mux.HandleFunc("POST /registry/retention/repository", h.setRegistryRepositoryRetention)
+	mux.HandleFunc("POST /registry/purge", h.purgeRegistryImages)
+	mux.HandleFunc("POST /registry/garbage-collect", h.garbageCollectRegistry)
+	mux.HandleFunc("GET /registry/maintenance/status", h.registryMaintenanceStatus)
 	mux.HandleFunc("GET /databases", h.databasesPage)
 	mux.HandleFunc("POST /databases/enable", h.enableManagedDatabases)
 	mux.HandleFunc("GET /databases/enable/status", h.managedDatabasesEnableStatus)
@@ -5125,6 +5150,7 @@ type pageData struct {
 	ApplicationVersionProgress   *applicationVersionProgressData
 	ProxyActionProgress          *proxyActionProgressData
 	ProxyActionToasts            []*proxyActionProgressData
+	RegistryMaintenanceToasts    []*registryMaintenanceProgressData
 	ApplicationsPage             *applicationPageData
 	ApplicationDetailsPage       *applicationDetailsPageData
 	ApplicationRoutingPage       *applicationRoutingPageData
@@ -5419,30 +5445,31 @@ type registryPageData struct {
 	Notice      string
 	CSRFToken   string
 	Groups      []registryRepositoryGroup
-	// PurgeDialog reopens one repository purge dialog with a validation
-	// error after a failed purge request.
-	PurgeDialog *registryPurgeDialogData
+
+	DefaultKeep                int
+	RetentionAvailable         bool
+	RetentionError             string
+	Policies                   map[string]int
+	PurgeAvailable             bool
+	PurgeVersionCount          int
+	PurgeRepositoryCount       int
+	GarbageCollectionAvailable bool
+	MaintenanceRunning         bool
+	MaintenanceError           string
 }
 
 // registryRepositoryGroup is one repository section on the Registry page.
-// LatestPushedAt is the newest tag push time in Images and renders the
-// repository summary row. PurgeCandidates is a display-only preview computed
-// with the default keep count; the actual purge uses the keep count entered
-// in the purge dialog.
+// PurgeVersions is an advisory preview; execution re-plans with the full
+// manifest graph and runtime protection.
 type registryRepositoryGroup struct {
-	Repository      string
-	Images          []application.RegistryImage
-	ProtectedTags   map[string]bool
-	LatestPushedAt  time.Time
-	PurgeCandidates []application.RegistryImage
-}
-
-// registryPurgeDialogData carries the state for one repository purge dialog.
-type registryPurgeDialogData struct {
-	Open       bool
-	Repository string
-	Keep       int
-	Error      string
+	Repository     string
+	Images         []application.RegistryImage
+	ProtectedTags  map[string]bool
+	LatestPushedAt time.Time
+	EffectiveKeep  int
+	HasOverride    bool
+	OverrideKeep   int
+	PurgeVersions  []application.RegistryVersion
 }
 
 type settingsPageData struct {

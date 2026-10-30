@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -218,7 +219,16 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create registry service: %w", err)
 	}
+	registry.SetRetentionStore(database)
+	stateDir, err := filepath.Abs(filepath.Join(cfg.ProjectsRoot, "core", "registry", ".maintenance"))
+	if err != nil {
+		return fmt.Errorf("resolve registry maintenance state directory: %w", err)
+	}
+	if err := registry.SetMaintenanceStateDir(stateDir); err != nil {
+		return fmt.Errorf("configure registry maintenance state: %w", err)
+	}
 	applications.SetVersionRegistryOperations(registry, registry, registry)
+	applications.SetRegistryMaintenance(registry)
 
 	serverSSHKeys, err := service.NewServerSSHKeyService(
 		cfg.ProjectsRoot,
@@ -310,13 +320,19 @@ func run(ctx context.Context) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	retentionCtx, cancelRetention := context.WithCancel(ctx)
-	retentionDone := make(chan struct{})
+	recoveryCtx, cancelRecovery := context.WithTimeout(ctx, 2*time.Minute)
+	if err := registry.RecoverRegistryMaintenance(recoveryCtx); err != nil {
+		logger.Error("recover registry maintenance", "error", err)
+	}
+	cancelRecovery()
+
+	maintenanceCtx, cancelMaintenance := context.WithCancel(ctx)
+	maintenanceDone := make(chan struct{})
 	go func() {
-		defer close(retentionDone)
-		applications.RunRegistryRetention(retentionCtx, registry, logger)
+		defer close(maintenanceDone)
+		applications.RunRegistryMaintenanceWorker(maintenanceCtx, registry, logger)
 	}()
-	defer func() { cancelRetention(); <-retentionDone }()
+	defer func() { cancelMaintenance(); <-maintenanceDone }()
 
 	serverErr := make(chan error, 1)
 	go func() {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"redlaunch/internal/application"
 	"redlaunch/internal/compose"
@@ -42,6 +43,24 @@ type RegistryService struct {
 	runner    RegistryContentLister
 	deleter   RegistryTagDeleter
 	mover     RegistryTagMover
+
+	retentionStore RegistryRetentionStore
+	stateDir       string
+
+	scheduleMu     sync.Mutex
+	lastRetention  time.Time
+	lastGarbage    time.Time
+	maintenanceErr error
+}
+
+// RegistryRetentionStore persists the shared automatic/manual retention
+// policy. Zero means unlimited.
+type RegistryRetentionStore interface {
+	GetRegistryRetentionKeep(context.Context) (int, error)
+	SetRegistryRetentionKeep(context.Context, int) error
+	ListRegistryRetentionPolicies(context.Context) ([]application.RegistryRetentionPolicy, error)
+	SetRegistryRetentionPolicy(context.Context, string, int) error
+	DeleteRegistryRetentionPolicy(context.Context, string) error
 }
 
 // NewRegistryService constructs a registry service for the given managed
@@ -130,66 +149,6 @@ func (s *RegistryService) listRegistryImages(ctx context.Context, includeUntagge
 		return images[left].Digest < images[right].Digest
 	})
 	return images, nil
-}
-
-// PlanRepositoryPurge lists one repository's images and splits them into kept
-// and purge candidates without deleting anything. The keep count is supplied
-// per purge request: keep the N most recent images, 0 for unlimited.
-// Protected references (for example currently deployed tags) are always kept
-// and do not consume the keep quota.
-func (s *RegistryService) PlanRepositoryPurge(ctx context.Context, repository string, keep int, protected map[string]bool) (kept, purge []application.RegistryImage, err error) {
-	repository, err = application.ValidateRegistryRepository(repository)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return nil, nil, err
-	}
-	images, err := s.ListRegistryImages(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	repositoryImages := make([]application.RegistryImage, 0)
-	for _, image := range images {
-		if image.Repository == repository {
-			repositoryImages = append(repositoryImages, image)
-		}
-	}
-	kept, purge, err = application.PlanRegistryPurge(repositoryImages, keep, protected)
-	if err != nil {
-		return nil, nil, err
-	}
-	return kept, purge, nil
-}
-
-// PurgeRepository deletes a repository's purge candidates as computed by
-// PlanRepositoryPurge for the supplied keep count. Protected references are
-// never deleted. It returns the deleted tags in purge order.
-func (s *RegistryService) PurgeRepository(ctx context.Context, repository string, keep int, protected map[string]bool) ([]application.RegistryImage, error) {
-	s.mutations.Lock()
-	defer s.mutations.Unlock()
-	repository, err := application.ValidateRegistryRepository(repository)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := application.ValidateRegistryKeepCount(keep); err != nil {
-		return nil, err
-	}
-	if s.deleter == nil {
-		return nil, errors.New("registry delete adapter is not configured")
-	}
-	_, purge, err := s.PlanRepositoryPurge(ctx, repository, keep, protected)
-	if err != nil {
-		return nil, err
-	}
-	purged := make([]application.RegistryImage, 0, len(purge))
-	for _, image := range purge {
-		if err := s.deleter.DeleteRegistryTag(ctx, s.container, image.Repository, image.Tag); err != nil {
-			return purged, fmt.Errorf("delete registry tag %s:%s: %w", image.Repository, image.Tag, err)
-		}
-		purged = append(purged, image)
-	}
-	return purged, nil
 }
 
 // MoveTag assigns one repository tag to the given manifest digest and

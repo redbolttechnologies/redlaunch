@@ -273,17 +273,19 @@ Notes:
   GitHub secrets, then revoke the old key. To revoke, use **Revoke key** in
   Redlaunch, then remove the GitHub variables/secrets separately.
 
-### 1.4 Purge registry images per repository
+### 1.4 Purge registry images
 
-- On the **Registry** page, click **Purge images** in line with a repository row.
-- In the dialog, enter how many recent images to keep (default 5).
-  Use `0` for unlimited, maximum `100`.
-- Tags are ordered by push time (newest first); deployed tags
-  (`localhost:5000/<repository>:<tag>` currently used by a managed service)
-  are always kept and do not count toward the keep number.
-- Confirm the purge. Only tag metadata is removed; run
-  `docker exec redbolt-registry registry garbage-collect
-  /etc/docker/registry/config.yml` on the server to reclaim blob space.
+- On the **Registry** page, set the global **Default keep count** (default `2`).
+  Use `0` for unlimited, maximum `100`. Per-repository overrides are available
+  inside each repository row.
+- Click **Purge images** once to clean up all repositories. The dialog shows how
+  many older image versions are candidates. Deployed and running images are
+  always kept and do not count toward the keep number.
+- The purge runs in a read-only registry window. Pushes and uploads fail until
+  it finishes; pulls remain available except during brief restarts.
+- Click **Run garbage collection** to reclaim the disk space of removed
+  versions. Automatic retention and garbage collection also run at startup and
+  every 24 hours.
 
 ---
 

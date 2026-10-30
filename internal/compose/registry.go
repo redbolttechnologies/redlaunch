@@ -101,8 +101,8 @@ func isRegistryPathNotFound(err error) bool {
 
 // DeleteRegistryTag removes one tag directory from the managed registry
 // container through the Docker daemon. Only the tag link tree is removed;
-// content-addressable blobs remain until the operator runs
-// `registry garbage-collect`. Repository and tag are strictly validated so a
+// content-addressable blobs remain until the managed read-only garbage
+// collection window reclaims them. Repository and tag are strictly validated so a
 // user-controlled value cannot escape the repositories tree. Arguments are
 // passed exec-style without a shell.
 func (r CommandRunner) DeleteRegistryTag(ctx context.Context, containerName, repository, tag string) error {

@@ -13,40 +13,40 @@ import (
 )
 
 const (
-	MaxNameLength             = 64
-	MaxFolderNameLength       = 64
-	MaxServiceNameLength      = 64
-	MaxImageNameLength        = 255
-	MaxPostgresVersionLength  = 64
-	MaxRedisVersionLength     = 64
-	MaxDatabaseNameLength     = 63
-	MaxDatabaseUserLength     = 63
-	MaxDatabasePasswordLength = 256
-	MaxRedisPortLength        = 5
-	MaxRedisPasswordLength    = 256
-	MaxDomainNameLength       = 253
-	MaxRoutingSubdomainLength = 253
-	MaxRoutingPathLength      = 2048
-	MaxBackupFileNameLength   = 255
-	MaxEmailLength            = 320
-	MaxBackupRetentionDays    = 3650
-	MaxRegistryKeepCount      = 100
-	DefaultRegistryKeepCount  = 5
-	MaxComposeFileSize        = 4 << 20
-	MaxEnvironmentFileSize    = 1 << 20
-	LocalRegistryAddress      = "localhost:5000"
-	ServiceTypeApplication    = "application"
-	ServiceTypePostgreSQL     = "postgresql"
-	ServiceTypeRedis          = "redis"
-	BackupScheduleHourly      = "hourly"
-	BackupScheduleDaily       = "daily"
-	BackupScheduleWeekly      = "weekly"
-	BackupDefaultHour         = 3
-	BackupDefaultMinute       = 0
-	BackupDefaultRetention    = 14
-	LogLineLimit              = 1000
-	ProxyLogLineLimit         = LogLineLimit
-	ServiceLogLineLimit       = LogLineLimit
+	MaxNameLength                = 64
+	MaxFolderNameLength          = 64
+	MaxServiceNameLength         = 64
+	MaxImageNameLength           = 255
+	MaxPostgresVersionLength     = 64
+	MaxRedisVersionLength        = 64
+	MaxDatabaseNameLength        = 63
+	MaxDatabaseUserLength        = 63
+	MaxDatabasePasswordLength    = 256
+	MaxRedisPortLength           = 5
+	MaxRedisPasswordLength       = 256
+	MaxDomainNameLength          = 253
+	MaxRoutingSubdomainLength    = 253
+	MaxRoutingPathLength         = 2048
+	MaxBackupFileNameLength      = 255
+	MaxEmailLength               = 320
+	MaxBackupRetentionDays       = 3650
+	MaxRegistryKeepCount         = 100
+	DefaultRegistryRetentionKeep = 2
+	MaxComposeFileSize           = 4 << 20
+	MaxEnvironmentFileSize       = 1 << 20
+	LocalRegistryAddress         = "localhost:5000"
+	ServiceTypeApplication       = "application"
+	ServiceTypePostgreSQL        = "postgresql"
+	ServiceTypeRedis             = "redis"
+	BackupScheduleHourly         = "hourly"
+	BackupScheduleDaily          = "daily"
+	BackupScheduleWeekly         = "weekly"
+	BackupDefaultHour            = 3
+	BackupDefaultMinute          = 0
+	BackupDefaultRetention       = 14
+	LogLineLimit                 = 1000
+	ProxyLogLineLimit            = LogLineLimit
+	ServiceLogLineLimit          = LogLineLimit
 )
 
 const (
@@ -154,6 +154,7 @@ var (
 	ErrComposeProjectHasNoServices      = errors.New("Docker Compose file does not define any services")
 	ErrComposeServicesAlreadyExist      = errors.New("application already has services")
 	ErrRegistryUnavailable              = errors.New("local image registry is unavailable")
+	ErrRegistryBusy                     = errors.New("registry maintenance is already running")
 )
 
 var (

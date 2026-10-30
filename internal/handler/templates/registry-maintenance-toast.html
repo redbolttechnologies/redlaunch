@@ -1,0 +1,17 @@
+{{define "registry-maintenance-toast-item"}}
+<div class="toast toast-{{.State}}" data-toast-job data-state="{{.State}}" data-status-url="{{.StatusURL}}" data-close-url="{{.CloseURL}}"{{if eq .State "complete"}} data-output-available="true"{{end}} role="status" aria-live="polite">
+  <span class="toast-icon" aria-hidden="true">{{if eq .State "complete"}}✓{{else if eq .State "failed"}}!{{else}}…{{end}}</span>
+  <div class="toast-copy">
+    <strong class="toast-title">{{.Title}}</strong>
+    {{if .Detail}}<p class="toast-detail">{{.Detail}}</p>{{end}}
+  </div>
+  <button class="toast-close" type="button" data-toast-close aria-label="Dismiss and refresh">×</button>
+  <div class="toast-error" data-toast-refresh-error hidden role="alert">
+    <p>Progress refresh failed.</p>
+  </div>
+</div>
+{{end}}
+
+{{define "registry-maintenance-toast.html"}}
+{{range .RegistryMaintenanceToasts}}{{template "registry-maintenance-toast-item" .}}{{end}}
+{{end}}

@@ -161,14 +161,72 @@ func (s *fakeProxyService) setProxyAction(action string) {
 }
 
 type fakeRegistryService struct {
-	images []application.RegistryImage
-	err    error
-	calls  int
+	images          []application.RegistryImage
+	err             error
+	calls           int
+	defaultKeep     int
+	defaultKeepSet  bool
+	policies        []application.RegistryRetentionPolicy
+	retentionErr    error
+	maintenanceErr  error
+	setKeep         int
+	setKeepErr      error
+	setRepository   string
+	setRepoKeep     int
+	resetRepository string
 }
 
 func (s *fakeRegistryService) ListRegistryImages(context.Context) ([]application.RegistryImage, error) {
 	s.calls++
 	return s.images, s.err
+}
+
+func (s *fakeRegistryService) GetRetentionKeep(context.Context) (int, error) {
+	if s.retentionErr != nil {
+		return 0, s.retentionErr
+	}
+	if s.defaultKeepSet {
+		return s.defaultKeep, nil
+	}
+	return application.DefaultRegistryRetentionKeep, nil
+}
+
+func (s *fakeRegistryService) SetRetentionKeep(_ context.Context, keep int) error {
+	if s.setKeepErr != nil {
+		return s.setKeepErr
+	}
+	s.setKeep = keep
+	s.defaultKeep = keep
+	s.defaultKeepSet = true
+	return nil
+}
+
+func (s *fakeRegistryService) ListRetentionPolicies(context.Context) ([]application.RegistryRetentionPolicy, error) {
+	if s.retentionErr != nil {
+		return nil, s.retentionErr
+	}
+	return s.policies, nil
+}
+
+func (s *fakeRegistryService) SetRepositoryRetention(_ context.Context, repository string, keep int) error {
+	if s.setKeepErr != nil {
+		return s.setKeepErr
+	}
+	s.setRepository = repository
+	s.setRepoKeep = keep
+	return nil
+}
+
+func (s *fakeRegistryService) DeleteRepositoryRetention(_ context.Context, repository string) error {
+	if s.setKeepErr != nil {
+		return s.setKeepErr
+	}
+	s.resetRepository = repository
+	return nil
+}
+
+func (s *fakeRegistryService) MaintenanceError() error {
+	return s.maintenanceErr
 }
 
 type fakeApplicationService struct {
@@ -327,6 +385,12 @@ type fakeApplicationService struct {
 	serviceDeleteDoneOnce           sync.Once
 	applicationDeleteStartOnce      sync.Once
 	applicationDeleteDoneOnce       sync.Once
+	registryRetentionCalls          int
+	registryRetentionResult         service.RegistryMaintenanceResult
+	registryRetentionErr            error
+	registryGCCalls                 int
+	registryGCResult                service.RegistryMaintenanceResult
+	registryGCErr                   error
 }
 
 type fakeApplicationDeletionRecovery struct {
@@ -343,6 +407,16 @@ func (s *fakeApplicationService) List(context.Context) ([]application.Applicatio
 		return nil, s.listErr
 	}
 	return s.applications, nil
+}
+
+func (s *fakeApplicationService) RetainRegistryVersions(context.Context) (service.RegistryMaintenanceResult, error) {
+	s.registryRetentionCalls++
+	return s.registryRetentionResult, s.registryRetentionErr
+}
+
+func (s *fakeApplicationService) CollectRegistryGarbage(context.Context) (service.RegistryMaintenanceResult, error) {
+	s.registryGCCalls++
+	return s.registryGCResult, s.registryGCErr
 }
 
 func (s *fakeApplicationService) Create(_ context.Context, name, folderName string) (application.Application, error) {
@@ -6333,7 +6407,9 @@ func TestRegistryRendersMenuAndPushedImages(t *testing.T) {
 		`registry-repository-group`,
 		`registry-repository-summary`,
 		`registry-meta-badge`,
-		`>Purge</button>`,
+		`>Purge images</button>`,
+		`Run garbage collection`,
+		`id="registry-retention-title">Retention</h2>`,
 		`Last pushed`,
 		`>Tag</th>`,
 		`>Digest</th>`,

@@ -1,115 +1,76 @@
 (() => {
-  const openButtons = document.querySelectorAll("[data-registry-purge-open]");
-  if (!openButtons.length) {
-    return;
-  }
-
-  const dialogs = new Map();
-
-  const cleanup = (dialog, openButton, returnFocus) => {
-    document.body.classList.remove("dialog-open");
-    if (openButton) {
-      openButton.setAttribute("aria-expanded", "false");
-    }
-    if (returnFocus && document.body.contains(returnFocus)) {
-      returnFocus.focus();
-    }
-  };
-
-  const closeDialog = (dialog) => {
-    const state = dialogs.get(dialog);
-    if (typeof dialog.close === "function" && dialog.open) {
-      dialog.close();
-    } else {
-      dialog.removeAttribute("open");
-      if (state) {
-        cleanup(dialog, state.openButton, state.returnFocus);
-        state.returnFocus = null;
+  const bindDialog = ({dialog, openSelector, closeSelector, submitSelector, busyText}) => {
+    if (!dialog) return;
+    let trigger = null;
+    const cleanup = () => {
+      document.body.classList.remove("dialog-open");
+      if (trigger && trigger.isConnected) {
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.focus();
       }
-    }
-  };
-
-  const openDialog = (dialog, openButton) => {
-    let state = dialogs.get(dialog);
-    if (!state) {
-      return;
-    }
-    state.returnFocus = openButton;
-    if (typeof dialog.showModal === "function") {
-      if (!dialog.open) {
-        dialog.showModal();
+    };
+    const close = () => {
+      if (typeof dialog.close === "function" && dialog.open) {
+        dialog.close();
+      } else {
+        dialog.removeAttribute("open");
+        cleanup();
       }
-    } else {
-      dialog.setAttribute("open", "");
-    }
-    document.body.classList.add("dialog-open");
-    if (openButton) {
-      openButton.setAttribute("aria-expanded", "true");
-    }
-    const keepInput = dialog.querySelector("[data-registry-purge-keep]");
-    if (keepInput) {
-      keepInput.focus();
-      keepInput.select();
-    }
-  };
+    };
+    const open = (opener) => {
+      trigger = opener;
+      if (trigger) trigger.setAttribute("aria-expanded", "true");
+      if (typeof dialog.showModal === "function") {
+        if (!dialog.open) dialog.showModal();
+      } else {
+        dialog.setAttribute("open", "");
+      }
+      document.body.classList.add("dialog-open");
+      const cancel = dialog.querySelector(closeSelector);
+      if (cancel) cancel.focus();
+    };
 
-  document.querySelectorAll("[data-registry-purge-dialog]").forEach((dialog) => {
-    const closeButtons = dialog.querySelectorAll("[data-registry-purge-close]");
-    const form = dialog.querySelector("form");
-    const submitButton = dialog.querySelector("[data-registry-purge-submit]");
-    dialogs.set(dialog, {openButton: null, returnFocus: null});
-
-    closeButtons.forEach((button) => {
-      button.addEventListener("click", () => closeDialog(dialog));
+    document.querySelectorAll(openSelector).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        open(button);
+      });
+    });
+    dialog.querySelectorAll(closeSelector).forEach((button) => {
+      button.addEventListener("click", () => close());
     });
     dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) {
-        closeDialog(dialog);
-      }
+      if (event.target === dialog) close();
     });
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
-      closeDialog(dialog);
+      close();
     });
-    dialog.addEventListener("close", () => {
-      const state = dialogs.get(dialog);
-      if (state) {
-        cleanup(dialog, state.openButton, state.returnFocus);
-        state.returnFocus = null;
-      }
-    });
+    dialog.addEventListener("close", cleanup);
+    const form = dialog.querySelector("form");
+    const submit = dialog.querySelector(submitSelector);
     if (form) {
       form.addEventListener("submit", () => {
-        if (submitButton) {
-          submitButton.disabled = true;
-          submitButton.textContent = "Purging images…";
+        if (submit) {
+          submit.disabled = true;
+          submit.textContent = busyText;
         }
       });
     }
-  });
+  };
 
-  openButtons.forEach((openButton) => {
-    const dialogID = openButton.getAttribute("aria-controls");
-    const dialog = dialogID ? document.getElementById(dialogID) : null;
-    if (!dialog || !dialogs.has(dialog)) {
-      return;
-    }
-    dialogs.get(dialog).openButton = openButton;
-    openButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openDialog(dialog, openButton);
-    });
+  bindDialog({
+    dialog: document.querySelector("[data-registry-purge-dialog]"),
+    openSelector: "[data-registry-purge-open]",
+    closeSelector: "[data-registry-purge-close]",
+    submitSelector: "[data-registry-purge-submit]",
+    busyText: "Purging versions…",
   });
-
-  // Reopen the dialog that failed validation so the server-side error stays
-  // visible inside the modal.
-  const errorDialog = document.querySelector("[data-registry-purge-dialog][data-registry-purge-open-dialog]");
-  if (errorDialog && dialogs.has(errorDialog)) {
-    const state = dialogs.get(errorDialog);
-    if (errorDialog.hasAttribute("open")) {
-      errorDialog.removeAttribute("open");
-    }
-    openDialog(errorDialog, state.openButton);
-  }
+  bindDialog({
+    dialog: document.querySelector("[data-registry-gc-dialog]"),
+    openSelector: "[data-registry-gc-open]",
+    closeSelector: "[data-registry-gc-close]",
+    submitSelector: "[data-registry-gc-submit]",
+    busyText: "Starting garbage collection…",
+  });
 })();
