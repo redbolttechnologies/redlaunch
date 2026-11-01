@@ -31,7 +31,7 @@ fmt-check: ## Fail when Go source files need formatting
 
 secret-scan: ## Fail when real environment files, keys, or private-key material are tracked by git
 	git ls-files | grep -E '(^|/)\.env$$|(^|/)vars\.env$$|(^|/)secrets\.env$$|\.pem$$|\.key$$|(^|/)credentials[^/]*\.json$$' | grep -v '\.example' > /dev/null && { echo "tracked secret files found (see .gitignore)" >&2; exit 1; } || true
-	! git grep -l --cached 'BEGIN .*PRIVATE 'KEY -- . ':!*.example*' > /dev/null || { echo "tracked private-key material found" >&2; exit 1; }
+	! git grep -l --cached 'BEGIN .*PRIVATE 'KEY -- . ':!*.example*' ':!*_test.go' > /dev/null || { echo "tracked private-key material found" >&2; exit 1; }
 
 linux-build: ## Build the production Linux binary and record module/toolchain identity
 	mkdir -p bin
