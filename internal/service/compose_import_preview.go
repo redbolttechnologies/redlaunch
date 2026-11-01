@@ -112,7 +112,7 @@ func importedServiceCommand(block []string) string {
 	if trimmed := strings.TrimSpace(importedYAMLValueWithoutComment(value)); trimmed != "" {
 		return trimmed
 	}
-	entries := importedServiceListEntries(block[fieldIndex+1:fieldEnd])
+	entries := importedServiceListEntries(block[fieldIndex+1 : fieldEnd])
 	if len(entries) == 0 {
 		return ""
 	}
