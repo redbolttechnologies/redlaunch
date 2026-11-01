@@ -104,6 +104,55 @@ refused until it finishes. If stale updater containers from an older release
 remain, remove them once with
 `docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)`.
 
+### Prebuilt release artifacts
+
+Pushing a `v*` tag runs the **Release artifacts** GitHub Actions workflow. It
+tests the tagged commit, builds Linux amd64 and arm64 binaries plus an amd64
+container image, and publishes them as GitHub Release assets. Running the
+workflow manually from the **Actions** tab produces the same files as workflow
+artifacts without creating a release.
+
+Create a release by pushing a version tag:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Release assets:
+
+- `redlaunch-linux-amd64.tar.gz`
+- `redlaunch-linux-arm64.tar.gz`
+- `redlaunch-image-linux-amd64.tar.gz`
+- `redlaunch-image.identity`
+- `SHA256SUMS`
+
+The binary archives contain the `redlaunch` executable, its `go version -m`
+build information, and the MIT license. The image archive loads as
+`redlaunch:local` and includes the license in the image filesystem.
+
+To update a Docker installation from a downloaded image without compiling on
+the VPS:
+
+```sh
+gunzip -c redlaunch-image-linux-amd64.tar.gz | docker load
+cd /opt/redlaunch
+git pull --ff-only
+docker compose up -d --no-build
+```
+
+The image tag must match `REDLAUNCH_IMAGE` in the installation `.env`. If you
+use a custom image name, retag it and set `REDLAUNCH_IMAGE` to the same value
+before starting Compose:
+
+```sh
+docker tag redlaunch:local ghcr.io/example/redlaunch:local
+# REDLAUNCH_IMAGE=ghcr.io/example/redlaunch:local
+```
+
+Release assets are built by GitHub Actions from the tagged commit. Verify them
+with `sha256sum -c SHA256SUMS` after downloading all files into one directory.
+
 ### Shell access
 
 To open a shell inside the running Redlaunch container

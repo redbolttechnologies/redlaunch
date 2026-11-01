@@ -240,6 +240,21 @@ Replace `/opt/redlaunch` if you chose another directory. This pulls the latest
 code and rebuilds and restarts Redlaunch. You can also use **Settings → Update
 Redlaunch** in the web interface; refresh the page after the restart.
 
+If rebuilding on the host is too heavy for the VPS, use the prebuilt image from
+the latest GitHub Release instead:
+
+```sh
+gunzip -c redlaunch-image-linux-amd64.tar.gz | docker load
+cd /opt/redlaunch
+git pull --ff-only
+docker compose up -d --no-build
+```
+
+Tagged releases include Linux amd64 and arm64 binaries, an amd64 container
+image, image identity metadata, and `SHA256SUMS`. See
+[Prebuilt release artifacts](README.md#prebuilt-release-artifacts) for the
+complete list and custom `REDLAUNCH_IMAGE` handling.
+
 Back up your data before an update that changes managed resources, and follow
 any release-specific migration instructions. Older installations that lack the
 Settings SSH keys setup need the one-time host configuration in

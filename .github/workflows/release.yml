@@ -1,0 +1,119 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: make test
+
+      - name: Lint
+        run: make lint
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Scan tracked files for secrets
+        run: make secret-scan
+
+      - name: Validate Compose configuration
+        run: make compose-config
+
+      - name: Build Linux amd64 binary
+        run: make linux-build LINUX_ARCH=amd64
+
+      - name: Build Linux arm64 binary
+        run: make linux-build LINUX_ARCH=arm64
+
+      - name: Build production image
+        run: make docker-build
+
+      - name: Record image identity
+        run: |
+          docker image inspect --format \
+            'image_id={{.Id}} repo_digests={{json .RepoDigests}} go_version={{index .Config.Labels "io.redlaunch.build.go-version"}}' \
+            redlaunch:local > bin/redlaunch-image.identity
+
+      - name: Package binaries and image
+        run: |
+          tar --owner=0 --group=0 --numeric-owner -czf \
+            bin/redlaunch-linux-amd64.tar.gz \
+            -C bin redlaunch-linux-amd64 redlaunch-linux-amd64.buildinfo \
+            -C .. LICENSE
+          tar --owner=0 --group=0 --numeric-owner -czf \
+            bin/redlaunch-linux-arm64.tar.gz \
+            -C bin redlaunch-linux-arm64 redlaunch-linux-arm64.buildinfo \
+            -C .. LICENSE
+          docker save redlaunch:local | gzip -9 > bin/redlaunch-image-linux-amd64.tar.gz
+          gzip -t bin/redlaunch-image-linux-amd64.tar.gz
+          cd bin
+          sha256sum \
+            redlaunch-linux-amd64.tar.gz \
+            redlaunch-linux-arm64.tar.gz \
+            redlaunch-image-linux-amd64.tar.gz \
+            redlaunch-image.identity > SHA256SUMS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: redlaunch-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            bin/redlaunch-linux-amd64.tar.gz
+            bin/redlaunch-linux-arm64.tar.gz
+            bin/redlaunch-image-linux-amd64.tar.gz
+            bin/redlaunch-image.identity
+            bin/SHA256SUMS
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: redlaunch-${{ github.sha }}
+          path: release
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes
+          fi
