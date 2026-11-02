@@ -275,7 +275,7 @@ func TestQueueUpdateReplacesExitedHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerCalls, _ := readSelfUpdateCalls(t, "docker")
-	for _, expected := range []string{"inspect", "rm -f redbolt-redlaunch-updater", "docker run --rm -d"} {
+	for _, expected := range []string{"inspect", "rm redbolt-redlaunch-updater", "docker run --rm -d"} {
 		if !strings.Contains(dockerCalls, expected) {
 			t.Fatalf("docker invocations = %q, want them to contain %q", dockerCalls, expected)
 		}

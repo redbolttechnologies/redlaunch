@@ -204,14 +204,13 @@
         <header class="service-widget-header">
           <div class="service-widget-heading">
             <h2 id="update-title">Update Redlaunch</h2>
-            <p>Pull the latest Redlaunch version from GitHub and rebuild the Redlaunch container. This runs <code>git pull</code> followed by <code>docker compose up -d --build</code>, the same steps as <code>make update</code>. The rebuild runs in the background and restarts Redlaunch.</p>
+            <p>Check GitHub Releases for a newer Redlaunch version. Updating downloads the verified release image and recreates the Redlaunch container without compiling on this server.</p>
           </div>
         </header>
         <div class="service-widget-body">
-          <form method="post" action="/settings/update">
-            <input type="hidden" name="csrf_token" value="{{.SettingsPage.CSRFToken}}">
-            <button class="button button-primary" type="submit">Update</button>
-          </form>
+          <div hx-get="/settings/update/check" hx-trigger="load" hx-swap="innerHTML">
+            {{template "settings-update.html" .}}
+          </div>
         </div>
       </section>
     </section>

@@ -49,6 +49,7 @@ type SelfUpdateService struct {
 	dockerBinary  string
 	dockerSocket  string
 	updaterImage  string
+	admit         func(context.Context) error
 }
 
 // SelfUpdateOptions configures a SelfUpdateService beyond the basic
@@ -122,6 +123,9 @@ func NewSelfUpdateServiceWithOptions(options SelfUpdateOptions) (*SelfUpdateServ
 	projectsRoot := strings.TrimSpace(options.ProjectsRoot)
 	if projectsRoot == "" {
 		projectsRoot = filepath.Join(cleaned, "projects")
+	}
+	if absolute, err := filepath.Abs(projectsRoot); err == nil {
+		projectsRoot = absolute
 	}
 	return &SelfUpdateService{
 		projectsRoot: filepath.Clean(projectsRoot),
@@ -208,6 +212,9 @@ func (s *SelfUpdateService) QueueUpdateWithProgress(ctx context.Context, progres
 	defer s.mu.Unlock()
 	if s.restartQueued {
 		return errors.New("a Redlaunch access-mode restart is already queued")
+	}
+	if updateOperationLocked(s.projectsRoot) {
+		return errors.New("a Redlaunch release update is already running")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -374,8 +381,9 @@ func (s *SelfUpdateService) startDetachedRebuild(ctx context.Context, directory 
 		return "", errors.New("a Redlaunch rebuild is already running; inspect it with `docker logs " + selfUpdateHelperName + "`")
 	}
 	// Best effort: drop a previous exited helper so the fixed name is free.
-	// A running helper is refused above and never removed here.
-	remove := exec.CommandContext(ctx, s.dockerBinary, "rm", "-f", selfUpdateHelperName)
+	// A running helper is refused above and never removed here. Never
+	// force-remove: a concurrent release-update helper must not be killed.
+	remove := exec.CommandContext(ctx, s.dockerBinary, "rm", selfUpdateHelperName)
 	remove.Dir = directory
 	remove.Env = os.Environ()
 	removeOutput := newSelfUpdateTailBuffer(selfUpdateMaxCommandOutput)

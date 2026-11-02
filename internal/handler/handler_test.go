@@ -5590,6 +5590,13 @@ func TestHealth(t *testing.T) {
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok\n" {
 		t.Fatalf("GET /healthz = (%d, %q), want (200, %q)", recorder.Code, recorder.Body.String(), "ok\n")
 	}
+	jsonRecorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	request.Header.Set("Accept", "application/json")
+	web.Routes().ServeHTTP(jsonRecorder, request)
+	if jsonRecorder.Code != http.StatusOK || !strings.Contains(jsonRecorder.Body.String(), `"status":"ok"`) || !strings.Contains(jsonRecorder.Body.String(), `"version"`) {
+		t.Fatalf("GET /healthz JSON = (%d, %q)", jsonRecorder.Code, jsonRecorder.Body.String())
+	}
 }
 
 func TestAuthenticationRedirectsToLoginAndRendersGoogleButton(t *testing.T) {

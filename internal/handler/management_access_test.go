@@ -13,7 +13,6 @@ import (
 )
 
 type fakeManagementAccess struct {
-	selfUpdateService
 	calls int
 	mode  string
 	err   error
@@ -29,7 +28,7 @@ func managementAccessFixture(t *testing.T) (oauthHandlerFixture, *fakeManagement
 	t.Helper()
 	f := newOAuthHandlerFixture(t)
 	s := &fakeManagementAccess{}
-	f.web.selfUpdater = s
+	f.web.managementAccess = s
 	f.web.redlaunchDomains = &fakeApplicationService{redlaunchDomains: []application.RedlaunchDomain{{Name: "manager.example.com"}}}
 	return f, s
 }
@@ -113,7 +112,7 @@ func TestManagementAccessRejectsMissingDomainAndHidesServiceErrors(t *testing.T)
 	if w.Code != 500 || strings.Contains(w.Body.String(), "TEST_ONLY_INTERNAL_DETAIL") || !strings.Contains(w.Body.String(), "could not be confirmed") {
 		t.Fatal("service failure was not safely rendered")
 	}
-	f.web.selfUpdater = nil
+	f.web.managementAccess = nil
 	w = oauthHandlerRequest(f.web, "GET", oauthHandlerOrigin+"/settings", nil, "", f.session)
 	if !strings.Contains(w.Body.String(), `name="access_mode" aria-describedby="management-access-help" disabled`) || !strings.Contains(w.Body.String(), "restart service is not configured") {
 		t.Fatal("unavailable state missing")

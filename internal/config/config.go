@@ -17,26 +17,27 @@ const (
 
 // Config contains the application runtime configuration.
 type Config struct {
-	HTTPAddr              string
-	DatabasePath          string
-	ProjectsRoot          string
-	BackupRoot            string
-	RedlaunchDir          string
-	SystemdUnitDirectory  string
-	SystemdBinary         string
-	SystemdScope          string
-	BackupContainerName   string
-	BackupDockerBinary    string
-	RedlaunchImage        string
-	GoogleClientID        string
-	GoogleClientSecret    string
-	GoogleRedirectURL     string
-	AuthSessionSecret     string
-	AuthCookieSecure      bool
-	ManagementAccessMode  string
-	MetricsScope          string
-	MetricsProcRoot       string
-	MetricsFilesystemRoot string
+	HTTPAddr               string
+	DatabasePath           string
+	ProjectsRoot           string
+	BackupRoot             string
+	RedlaunchDir           string
+	SystemdUnitDirectory   string
+	SystemdBinary          string
+	SystemdScope           string
+	BackupContainerName    string
+	BackupDockerBinary     string
+	RedlaunchImage         string
+	RedlaunchContainerName string
+	GoogleClientID         string
+	GoogleClientSecret     string
+	GoogleRedirectURL      string
+	AuthSessionSecret      string
+	AuthCookieSecure       bool
+	ManagementAccessMode   string
+	MetricsScope           string
+	MetricsProcRoot        string
+	MetricsFilesystemRoot  string
 }
 
 // Load reads configuration from the process environment and an optional dotenv
@@ -49,25 +50,26 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:              valueOrDefault(environment, "HTTP_ADDR", "127.0.0.1:8080"),
-		DatabasePath:          valueOrDefault(environment, "DB_PATH", "./data/redlaunch.db"),
-		ProjectsRoot:          valueOrDefault(environment, "PROJECTS_ROOT", "./projects"),
-		BackupRoot:            valueOrDefault(environment, "BACKUP_ROOT", "/var/backups/redlaunch"),
-		RedlaunchDir:          valueOrDefault(environment, "REDLAUNCH_DIR", "."),
-		SystemdUnitDirectory:  valueOrDefault(environment, "SYSTEMD_UNIT_DIR", "/etc/systemd/system"),
-		SystemdBinary:         valueOrDefault(environment, "SYSTEMD_BINARY", "systemctl"),
-		SystemdScope:          valueOrDefault(environment, "SYSTEMD_SCOPE", "system"),
-		BackupContainerName:   valueOrDefault(environment, "BACKUP_CONTAINER_NAME", ""),
-		BackupDockerBinary:    valueOrDefault(environment, "BACKUP_DOCKER_BINARY", "/usr/bin/docker"),
-		RedlaunchImage:        strings.TrimSpace(valueOrDefault(environment, "REDLAUNCH_IMAGE", "redlaunch:local")),
-		GoogleClientID:        strings.TrimSpace(valueOrDefault(environment, "GOOGLE_CLIENT_ID", "")),
-		GoogleClientSecret:    valueOrDefault(environment, "GOOGLE_CLIENT_SECRET", ""),
-		GoogleRedirectURL:     strings.TrimSpace(valueOrDefault(environment, "GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/google/callback")),
-		AuthSessionSecret:     valueOrDefault(environment, "AUTH_SESSION_SECRET", ""),
-		ManagementAccessMode:  strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "MANAGEMENT_ACCESS_MODE", AccessModeSSHOnly))),
-		MetricsScope:          strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "METRICS_SCOPE", MetricsScopeManager))),
-		MetricsProcRoot:       strings.TrimSpace(valueOrDefault(environment, "METRICS_PROC_ROOT", "")),
-		MetricsFilesystemRoot: strings.TrimSpace(valueOrDefault(environment, "METRICS_FILESYSTEM_ROOT", "")),
+		HTTPAddr:               valueOrDefault(environment, "HTTP_ADDR", "127.0.0.1:8080"),
+		DatabasePath:           valueOrDefault(environment, "DB_PATH", "./data/redlaunch.db"),
+		ProjectsRoot:           valueOrDefault(environment, "PROJECTS_ROOT", "./projects"),
+		BackupRoot:             valueOrDefault(environment, "BACKUP_ROOT", "/var/backups/redlaunch"),
+		RedlaunchDir:           valueOrDefault(environment, "REDLAUNCH_DIR", "."),
+		SystemdUnitDirectory:   valueOrDefault(environment, "SYSTEMD_UNIT_DIR", "/etc/systemd/system"),
+		SystemdBinary:          valueOrDefault(environment, "SYSTEMD_BINARY", "systemctl"),
+		SystemdScope:           valueOrDefault(environment, "SYSTEMD_SCOPE", "system"),
+		BackupContainerName:    valueOrDefault(environment, "BACKUP_CONTAINER_NAME", ""),
+		BackupDockerBinary:     valueOrDefault(environment, "BACKUP_DOCKER_BINARY", "/usr/bin/docker"),
+		RedlaunchImage:         strings.TrimSpace(valueOrDefault(environment, "REDLAUNCH_IMAGE", "redlaunch:local")),
+		RedlaunchContainerName: strings.TrimSpace(valueOrDefault(environment, "REDLAUNCH_CONTAINER_NAME", "redbolt-redlaunch")),
+		GoogleClientID:         strings.TrimSpace(valueOrDefault(environment, "GOOGLE_CLIENT_ID", "")),
+		GoogleClientSecret:     valueOrDefault(environment, "GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:      strings.TrimSpace(valueOrDefault(environment, "GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/google/callback")),
+		AuthSessionSecret:      valueOrDefault(environment, "AUTH_SESSION_SECRET", ""),
+		ManagementAccessMode:   strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "MANAGEMENT_ACCESS_MODE", AccessModeSSHOnly))),
+		MetricsScope:           strings.ToLower(strings.TrimSpace(valueOrDefault(environment, "METRICS_SCOPE", MetricsScopeManager))),
+		MetricsProcRoot:        strings.TrimSpace(valueOrDefault(environment, "METRICS_PROC_ROOT", "")),
+		MetricsFilesystemRoot:  strings.TrimSpace(valueOrDefault(environment, "METRICS_FILESYSTEM_ROOT", "")),
 	}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
@@ -102,6 +104,9 @@ func Load() (Config, error) {
 	}
 	if cfg.RedlaunchImage == "" || !validImageReference(cfg.RedlaunchImage) {
 		return Config{}, errors.New("REDLAUNCH_IMAGE is invalid")
+	}
+	if cfg.RedlaunchContainerName == "" || !validContainerName(cfg.RedlaunchContainerName) {
+		return Config{}, errors.New("REDLAUNCH_CONTAINER_NAME is invalid")
 	}
 	if cfg.ManagementAccessMode != AccessModeSSHOnly && cfg.ManagementAccessMode != AccessModeManagedHTTPS {
 		return Config{}, errors.New("MANAGEMENT_ACCESS_MODE must be ssh-only or managed-https")

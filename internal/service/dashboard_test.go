@@ -17,6 +17,7 @@ type dashboardDockerFake struct {
 	disk       compose.DashboardDisk
 	stats      compose.DashboardStats
 	calls      int
+	pruneCalls int
 	statsIDs   chan string
 	failed     bool
 }
@@ -40,14 +41,18 @@ func (f *dashboardDockerFake) DashboardDiskUsage(context.Context) (compose.Dashb
 	}
 	return f.disk, nil
 }
-func (f *dashboardDockerFake) PruneUnusedImages(context.Context) (uint64, error) { return 4096, nil }
+func (f *dashboardDockerFake) PruneUnusedImages(context.Context) (uint64, error) {
+	f.pruneCalls++
+	return 4096, nil
+}
 
 func TestDashboardContainersAreIndividualManagedServicesCoreFirst(t *testing.T) {
+	root := t.TempDir()
 	container := func(id, name, dir, state string) compose.DashboardContainer {
 		return compose.DashboardContainer{ID: strings.Repeat(id, 64), Names: []string{"/" + name}, State: state, Status: "Up 2 hours", Labels: map[string]string{"redlaunch.managed": "true", "com.docker.compose.project.working_dir": dir}}
 	}
 	fake := &dashboardDockerFake{statsIDs: make(chan string, 16), containers: []compose.DashboardContainer{
-		container("a", "aaa-app", "/projects/applications/app", "running"), container("b", "redbolt-proxy", "/projects/core/proxy", "running"), container("c", "redbolt-databases", "/projects/core/databases", "exited"), container("d", "redbolt-redlaunch", "/manager", "running"), container("e", "not-core", "/projects/core-other", "running"),
+		container("a", "aaa-app", root+"/applications/app", "running"), container("b", "redbolt-proxy", root+"/core/proxy", "running"), container("c", "redbolt-databases", root+"/core/databases", "exited"), container("d", "redbolt-redlaunch", "/manager", "running"), container("e", "not-core", root+"/core-other", "running"),
 		{Names: []string{"/unmanaged"}, State: "running"},
 	}}
 	fake.stats.CPUStats.CPUUsage.TotalUsage = 200
@@ -57,7 +62,7 @@ func TestDashboardContainersAreIndividualManagedServicesCoreFirst(t *testing.T) 
 	fake.stats.CPUStats.OnlineCPUs = 4
 	fake.stats.MemoryStats.Usage = 1024
 	fake.stats.MemoryStats.Stats = map[string]uint64{"inactive_file": 256}
-	svc := NewDashboardService(fake, "/projects", nil)
+	svc := NewDashboardService(fake, root, nil)
 	got, err := svc.CollectDockerDashboard(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -187,5 +192,31 @@ func TestDashboardCatalogFailurePreservesDockerMetrics(t *testing.T) {
 	got, err := NewDashboardService(fake, "/projects", dashboardCatalogFake{err: errors.New("catalog unavailable")}).CollectDockerDashboard(context.Background())
 	if err != nil || !got.ApplicationsUnavailable || got.ContainersUnavailable || got.DiskUnavailable || got.ImageBytes != 4096 || got.Containers[0].ApplicationName != "Unavailable" {
 		t.Fatal(got, err)
+	}
+}
+
+func TestDashboardPruneWaitsForStartupReconciliation(t *testing.T) {
+	fake := &dashboardDockerFake{}
+	svc := NewDashboardService(fake, t.TempDir(), nil)
+	admitted := false
+	admissionErr := errors.New("startup reconciliation is still running")
+	svc.SetMutationGate(func(context.Context) error {
+		if !admitted {
+			return admissionErr
+		}
+		return nil
+	})
+	if _, err := svc.PruneUnusedImages(t.Context()); !errors.Is(err, admissionErr) {
+		t.Fatalf("prune before admission error = %v", err)
+	}
+	if fake.pruneCalls != 0 {
+		t.Fatal("pruning ran before startup reconciliation completed")
+	}
+	admitted = true
+	if _, err := svc.PruneUnusedImages(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.pruneCalls != 1 {
+		t.Fatalf("prune calls = %d, want 1", fake.pruneCalls)
 	}
 }

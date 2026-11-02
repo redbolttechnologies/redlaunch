@@ -45,8 +45,8 @@ func (h *Handler) saveManagementAccess(w http.ResponseWriter, r *http.Request) {
 	case mode == accessModeManagedHTTPS && len(data.Domains) == 0:
 		data.ManagementAccessError = "Add a Redlaunch domain before enabling Managed HTTPS."
 	default:
-		manager, ok := h.selfUpdater.(managementAccessService)
-		if !ok {
+		manager := h.managementAccess
+		if manager == nil {
 			data.ManagementAccessError = "The installation restart service is not configured."
 			status = http.StatusServiceUnavailable
 		} else {

@@ -26,6 +26,7 @@ import (
 	redlaunchauth "redlaunch/internal/auth"
 	systemmetrics "redlaunch/internal/metrics"
 	"redlaunch/internal/service"
+	"redlaunch/internal/version"
 )
 
 //go:embed templates/*.html static/*
@@ -71,6 +72,7 @@ type Handler struct {
 	dashboardDocker                dashboardDockerService
 	authentication                 authenticationService
 	selfUpdater                    selfUpdateService
+	managementAccess               managementAccessService
 	setupJobs                      *setupJobStore
 	postgresJobs                   *postgresJobStore
 	redisJobs                      *redisServiceJobStore
@@ -308,7 +310,14 @@ type serverSSHKeyService interface {
 }
 
 type selfUpdateService interface {
-	QueueUpdateWithProgress(context.Context, func(stage, message string)) error
+	CurrentVersion() string
+	CheckForUpdate(context.Context) (application.UpdateStatus, error)
+	QueueReleaseUpdateWithProgress(context.Context, application.UpdateStatus, func(stage, message string)) error
+	QueueReleaseUpdateWithOperationID(context.Context, string, application.UpdateStatus, func(stage, message string)) error
+	UpdateState(context.Context) (application.UpdateState, bool, error)
+	UpdateInProgress() bool
+	HelperRunning(context.Context) (bool, error)
+	ReconcileInterruptedUpdate(context.Context) error
 }
 
 type managementAccessService interface {
@@ -433,6 +442,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 	var dashboardDocker dashboardDockerService
 	var authentication authenticationService
 	var selfUpdater selfUpdateService
+	var managementAccess managementAccessService
 	security := SecurityConfig{AccessMode: accessModeSSHOnly}
 	for _, dependency := range dependencies {
 		switch dependency := dependency.(type) {
@@ -682,6 +692,10 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 			if dependency != nil {
 				selfUpdater = dependency
 			}
+		case managementAccessService:
+			if dependency != nil {
+				managementAccess = dependency
+			}
 		case authenticationService:
 			if dependency != nil {
 				authentication = dependency
@@ -770,6 +784,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		dashboardDocker:                dashboardDocker,
 		authentication:                 authentication,
 		selfUpdater:                    selfUpdater,
+		managementAccess:               managementAccess,
 		setupJobs:                      setupJobs,
 		postgresJobs:                   postgresJobs,
 		redisJobs:                      redisJobs,
@@ -880,6 +895,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /settings/api-tokens/delete", h.revokeAPIToken)
 	mux.HandleFunc("POST /settings/mcp-connections/delete", h.revokeMCPConnection)
 	mux.HandleFunc("POST /settings/update", h.updateRedlaunch)
+	mux.HandleFunc("GET /settings/update/check", h.checkRedlaunchUpdate)
 	mux.HandleFunc("POST /settings/management-access", h.saveManagementAccess)
 	mux.HandleFunc("GET /settings/update/status", h.selfUpdateStatus)
 	mux.HandleFunc("GET /applications/{id}/services/{service}", h.serviceDetailsPage)
@@ -4123,8 +4139,18 @@ func (h *Handler) pendingApplicationDeletions(ctx context.Context) []application
 	return intents
 }
 
-func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") {
+		w.Header().Set("Content-Type", "application/json")
+		info := version.Current()
+		_ = json.NewEncoder(w).Encode(struct {
+			Status  string `json:"status"`
+			Version string `json:"version"`
+			Commit  string `json:"commit"`
+		}{Status: "ok", Version: info.Version, Commit: info.Commit})
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
 }
@@ -5523,6 +5549,11 @@ type settingsPageData struct {
 	APITokenApplicationNames map[int64]string
 	APITokenDelete           *apiTokenDeletePageData
 	APITokensActive          bool
+
+	UpdateCurrentVersion string
+	UpdateStatus         *application.UpdateStatus
+	UpdateState          *application.UpdateState
+	UpdateError          string
 }
 
 type sshKeyDeletePageData struct {

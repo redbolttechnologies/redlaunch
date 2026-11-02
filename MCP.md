@@ -796,7 +796,7 @@ tool execution against Docker remain separate deployment acceptance checks.
 To repeat installed-client checks (absent clients skip):
 
 ```sh
-REDLAUNCH_MCP_INTEROP_TEST=1 GOTOOLCHAIN=go1.26.8 go test -race -count=1 -timeout 120s -run 'TestMCP(OpenCode|Codex)Interop' ./internal/handler
+REDLAUNCH_MCP_INTEROP_TEST=1 GOTOOLCHAIN=go1.26.10 go test -race -count=1 -timeout 120s -run 'TestMCP(OpenCode|Codex)Interop' ./internal/handler
 ```
 
 ### Technical details for integrations

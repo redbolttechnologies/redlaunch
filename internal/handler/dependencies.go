@@ -27,6 +27,7 @@ type Dependencies struct {
 	DashboardDocker  dashboardDockerService
 	Authentication   authenticationService
 	SelfUpdate       selfUpdateService
+	ManagementAccess managementAccessService
 	Security         SecurityConfig
 
 	// AllowUnauthenticatedForTests permits construction without an enabled
@@ -89,6 +90,9 @@ func NewWithDependencies(logger *slog.Logger, deps Dependencies) (*Handler, erro
 	}
 	if deps.SelfUpdate != nil {
 		assembled = append(assembled, deps.SelfUpdate)
+	}
+	if deps.ManagementAccess != nil {
+		assembled = append(assembled, deps.ManagementAccess)
 	}
 	if deps.Authentication != nil {
 		assembled = append(assembled, deps.Authentication)

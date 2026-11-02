@@ -97,7 +97,7 @@ run the installer.
 ## Local development dependencies
 
 Building and running Redlaunch from source needs the host tools above plus Go.
-The Makefile pins Go 1.26.8 through `GOTOOLCHAIN`; with toolchain
+The Makefile pins Go 1.26.10 through `GOTOOLCHAIN`; with toolchain
 auto-downloads enabled, a newer Go installation fetches the pinned version
 automatically.
 
@@ -108,9 +108,9 @@ Install Go from the official downloads page:
 For a Linux `amd64` VPS, the matching archive can be installed with:
 
 ```sh
-curl -fsSLO https://go.dev/dl/go1.26.8.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.8.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
 export PATH="$PATH:/usr/local/go/bin"
 ```
 
@@ -132,6 +132,16 @@ The optional browser-logic test uses Bun. Install it from
 ```sh
 bun test ./internal/handler/testdata/application-environment.test.cjs
 ```
+
+### Vulnerability scanning
+
+Release checks run `govulncheck` against the compiled Linux artifacts. The
+scanner may list GO-2026-5932 as a module-level advisory because
+`golang.org/x/crypto` is required for Argon2 password hashing. The unmaintained
+`openpgp` package is not imported or linked. Source-mode and unstripped
+binary-mode scans report no reachable vulnerability. Release binaries retain
+the Go symbol table so binary-mode scans can distinguish reachable code from
+module metadata.
 
 ## Verify the installation
 

@@ -229,31 +229,43 @@ sign-in is enabled, also set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
 
 ## Updating Redlaunch
 
-From the installation directory, run:
+Use **Settings → Software update** in the web interface. Redlaunch checks the
+latest stable GitHub Release, downloads and verifies the matching prebuilt
+image, and recreates only the manager container. No compilation runs on the
+VPS. Refresh the page after the restart.
+
+For a manual source-build update, from the installation directory run:
 
 ```sh
 cd /opt/redlaunch
 make update
 ```
 
-Replace `/opt/redlaunch` if you chose another directory. This pulls the latest
-code and rebuilds and restarts Redlaunch. You can also use **Settings → Update
-Redlaunch** in the web interface; refresh the page after the restart.
+Replace `/opt/redlaunch` if you chose another directory. `make update` remains
+an operator fallback and is not used by the Settings update button.
 
-If rebuilding on the host is too heavy for the VPS, use the prebuilt image from
-the latest GitHub Release instead:
+Older installations that do not have the release updater yet can bootstrap from
+the latest release without building:
 
 ```sh
 gunzip -c redlaunch-image-linux-amd64.tar.gz | docker load
+docker tag redlaunch:v1.0.0 redlaunch:local
 cd /opt/redlaunch
 git pull --ff-only
-docker compose up -d --no-build
+docker compose up -d --no-build --pull never --no-deps --force-recreate app
 ```
 
-Tagged releases include Linux amd64 and arm64 binaries, an amd64 container
-image, image identity metadata, and `SHA256SUMS`. See
-[Prebuilt release artifacts](README.md#prebuilt-release-artifacts) for the
-complete list and custom `REDLAUNCH_IMAGE` handling.
+Tagged releases include Linux amd64 and arm64 binaries, amd64 and arm64
+container images, a release manifest, image identity metadata, and
+`SHA256SUMS`. See [Prebuilt release artifacts](README.md#prebuilt-release-artifacts)
+for the complete list and custom `REDLAUNCH_IMAGE` handling.
+
+The Settings updater requires outbound HTTPS access to `api.github.com` and the
+GitHub release asset hosts. It uses the public GitHub API without a token, so
+checks are cached and may be rate-limited. A development build does not offer
+release-based updates. The updater verifies the release manifest, image
+checksum, image identity, deployment contract, and the running server's
+`/healthz` version before recording success.
 
 Back up your data before an update that changes managed resources, and follow
 any release-specific migration instructions. Older installations that lack the

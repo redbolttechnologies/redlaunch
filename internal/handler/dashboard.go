@@ -86,6 +86,16 @@ func (h *Handler) dashboardPruneImages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Confirm image pruning before continuing.", http.StatusBadRequest)
 		return
 	}
+	if h.selfUpdater != nil {
+		if h.selfUpdater.UpdateInProgress() {
+			http.Error(w, "Image pruning is unavailable while a Redlaunch update is running.", http.StatusConflict)
+			return
+		}
+		if running, err := h.selfUpdater.HelperRunning(r.Context()); err != nil || running {
+			http.Error(w, "Image pruning is unavailable while a Redlaunch update is running.", http.StatusConflict)
+			return
+		}
+	}
 	if h.dashboardDocker == nil {
 		http.Error(w, "Docker image pruning is unavailable.", http.StatusServiceUnavailable)
 		return

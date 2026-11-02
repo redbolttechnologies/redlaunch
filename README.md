@@ -83,32 +83,49 @@ Public access setting, set `GOOGLE_REDIRECT_URL` to that proxy's callback URL.
 
 ### Updating Redlaunch
 
-To update an existing installation, run this from the Redlaunch directory:
+The recommended update path is **Settings → Software update**. Redlaunch checks
+the latest stable GitHub Release, downloads the image matching the server
+architecture, verifies its checksum and release manifest, loads the image, and
+recreates only the Redlaunch `app` container through a detached helper. No Go
+compilation or image build runs on the VPS. The current version is shown on the
+Settings page, and the update outcome is persisted across the manager restart.
+The updater refuses an installation whose supported layout has changed. The
+manager must keep the same `/data` named Docker volume, Docker socket,
+installation directory, and projects-root bind mounts. Replacing the database
+volume, changing a bind source, or using a volume `subpath` is reported as an
+incompatible installation instead of being applied silently.
+
+For a manual source-build update, run this from the Redlaunch directory:
 
 ```sh
 make update
 ```
 
-This pulls the latest Git changes and rebuilds and restarts the Docker Compose
-deployment. Installations from before the Settings SSH keys tab also need the
-one-time `redlaunch` user setup in the [server SSH keys guide](SSH_KEYS.md)
-before keys can be created.
+`make update` remains available for development and operator use, but it is no
+longer used by the Settings update button. Installations from before the
+Settings SSH keys tab also need the one-time `redlaunch` user setup in the
+[server SSH keys guide](SSH_KEYS.md) before keys can be created.
 
-The same operation is available in the web interface: open **Settings**, find
-**Update Redlaunch**, and click **Update**. It pulls the latest version from
-GitHub and then rebuilds with `docker compose up -d --build` in the Redlaunch
-directory. The rebuild runs in a detached helper container named
-`redbolt-redlaunch-updater` and restarts Redlaunch, so refresh the page shortly
-after the update starts. While a rebuild is running, further update requests are
-refused until it finishes. If stale updater containers from an older release
-remain, remove them once with
+If an older installation has not yet received the release updater, load the
+prebuilt image once from the release and recreate the manager without building:
+
+```sh
+gunzip -c redlaunch-image-linux-amd64.tar.gz | docker load
+docker tag redlaunch:v1.0.0 redlaunch:local
+cd /opt/redlaunch
+git pull --ff-only
+docker compose up -d --no-build --pull never --no-deps --force-recreate app
+```
+
+After that bootstrap, future updates can be installed from Settings. If a stale
+updater container remains, inspect it and remove it once with
 `docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)`.
 
 ### Prebuilt release artifacts
 
 Pushing a `v*` tag runs the **Release artifacts** GitHub Actions workflow. It
-tests the tagged commit, builds Linux amd64 and arm64 binaries plus an amd64
-container image, and publishes them as GitHub Release assets. Running the
+tests the tagged commit, builds Linux amd64 and arm64 binaries plus amd64 and
+arm64 container images, and publishes them as GitHub Release assets. Running the
 workflow manually from the **Actions** tab produces the same files as workflow
 artifacts without creating a release.
 
@@ -124,21 +141,29 @@ Release assets:
 - `redlaunch-linux-amd64.tar.gz`
 - `redlaunch-linux-arm64.tar.gz`
 - `redlaunch-image-linux-amd64.tar.gz`
-- `redlaunch-image.identity`
+- `redlaunch-image-linux-arm64.tar.gz`
+- `redlaunch-release.json`
+- `redlaunch-image-amd64.identity`
+- `redlaunch-image-arm64.identity`
+- `redlaunch-image-amd64.id`
+- `redlaunch-image-arm64.id`
 - `SHA256SUMS`
 
 The binary archives contain the `redlaunch` executable, its `go version -m`
-build information, and the MIT license. The image archive loads as
-`redlaunch:local` and includes the license in the image filesystem.
+build information, and the MIT license. The image archives load with the
+version-specific tag `redlaunch:vX.Y.Z` and include the license in the image
+filesystem. The release manifest records the deployment contract, image
+identities, architecture, and checksums used by the updater.
 
 To update a Docker installation from a downloaded image without compiling on
 the VPS:
 
 ```sh
 gunzip -c redlaunch-image-linux-amd64.tar.gz | docker load
+docker tag redlaunch:v1.0.0 redlaunch:local
 cd /opt/redlaunch
 git pull --ff-only
-docker compose up -d --no-build
+docker compose up -d --no-build --pull never --no-deps --force-recreate app
 ```
 
 The image tag must match `REDLAUNCH_IMAGE` in the installation `.env`. If you
@@ -146,12 +171,41 @@ use a custom image name, retag it and set `REDLAUNCH_IMAGE` to the same value
 before starting Compose:
 
 ```sh
-docker tag redlaunch:local ghcr.io/example/redlaunch:local
+docker tag redlaunch:v1.0.0 ghcr.io/example/redlaunch:local
 # REDLAUNCH_IMAGE=ghcr.io/example/redlaunch:local
 ```
 
 Release assets are built by GitHub Actions from the tagged commit. Verify them
 with `sha256sum -c SHA256SUMS` after downloading all files into one directory.
+
+If Settings reports an uncertain update outcome, inspect the updater helper and
+the manager container before clearing the operation:
+
+```sh
+docker ps -a --filter label=redlaunch.updater=true
+docker logs redbolt-redlaunch-updater
+docker inspect redbolt-redlaunch
+redlaunch update-state clear --operation <id> --confirm
+```
+
+Clearing state acknowledges that operation and releases its installation lock;
+it never deletes images, volumes, or application data. The record remains as
+history and will not be reopened when a later manual deployment changes the
+running image. If a helper failed before recreating the manager, Settings can
+start a new attempt without restarting the manager; an uncertain operation
+still requires inspection and explicit acknowledgement first.
+
+Startup recovery reports success only when the running container, serving
+version/commit, and configured runtime image reference all match the release.
+A missing or mismatched runtime image reference retains an uncertain outcome,
+the installation lock, and recovery artifacts. Recovery never retags an older
+image automatically.
+
+A failed access-mode restart retains the shared installation lock and writes
+`core/manager-restart/operation.json` under `PROJECTS_ROOT`. Inspect the
+`redbolt-redlaunch-updater` helper and the manager container before restarting
+Redlaunch; successful startup reconciliation clears the marker and lock when
+the requested access mode is active.
 
 ### Shell access
 
@@ -416,8 +470,9 @@ The main configuration values are:
 | `DB_PATH` | `./data/redlaunch.db` | SQLite database path |
 | `PROJECTS_ROOT` | `./projects` | Root directory for managed projects |
 | `BACKUP_ROOT` | `/var/backups/redlaunch` | PostgreSQL backup directory |
-| `REDLAUNCH_DIR` | `.` (Compose defaults to `${PWD}`) | Redlaunch checkout directory used by the Settings update action |
-| `REDLAUNCH_IMAGE` | `redlaunch:local` | Image of the Redlaunch container and its detached Settings-update helper |
+| `REDLAUNCH_DIR` | `.` (Compose defaults to `${PWD}`) | Redlaunch checkout directory used by the release updater |
+| `REDLAUNCH_IMAGE` | `redlaunch:local` | Runtime image reference updated by the Settings release updater |
+| `REDLAUNCH_CONTAINER_NAME` | `redbolt-redlaunch` | Manager container name used for deployment validation and readiness checks |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | empty | Optional Google sign-in; configure both together |
 | `AUTH_SESSION_SECRET` | empty | Required shared session signing key, at least 32 bytes |
 | `GOOGLE_REDIRECT_URL` | `http://localhost:8080/auth/google/callback` | Fallback Google OAuth callback URL for local access |
@@ -621,7 +676,7 @@ application is deleted.
 
 ## Local development
 
-Local development uses the pinned Go 1.26.8 toolchain and requires a running
+Local development uses the pinned Go 1.26.10 toolchain and requires a running
 user systemd manager. With Go toolchain auto-downloads enabled, the Make targets
 select that patch release through `GOTOOLCHAIN`.
 
@@ -649,10 +704,11 @@ make compose-config
 make docker-build
 ```
 
-To test the secret dialog's browser logic with Bun (optional):
+To test the secret dialog and update-progress browser logic with Bun (optional):
 
 ```sh
 bun test ./internal/handler/testdata/application-environment.test.cjs
+bun test ./internal/handler/testdata/selfupdate-progress.test.cjs
 ```
 
 For a release candidate, run the complete release gate:
@@ -662,11 +718,25 @@ make release-check
 ```
 
 It runs the race-enabled test suite (including migration coverage), vet, a
-gofmt check, a tracked-secret scan, then builds and scans the Linux artifact
-separately from the local host binary, validates Compose, builds the production
-image, and records binary/image identity under `bin/`. The vulnerability
-database and container base images require network access; generated release
-identity files remain excluded from Git.
+gofmt check, a tracked-secret scan, then builds and scans both Linux release
+artifacts separately from the local host binary, validates Compose, performs
+the disposable release-update acceptance run, builds the production image, and
+records binary/image identity under `bin/`. The release workflow runs the same
+binary vulnerability scans and live acceptance check before it publishes
+artifacts. The vulnerability database and container base images require network
+access; generated release identity files remain excluded from Git.
+
+For a disposable end-to-end release-update check, run:
+
+```sh
+make update-acceptance
+```
+
+It builds three disposable Redlaunch images, performs real A → B → C updates
+through the detached helper, forces a readiness failure, interrupts a helper,
+and verifies that only the manager `app` container is replaced and its data
+volume survives. It requires Docker; the explicit target fails if Docker or a
+clean helper name is unavailable.
 
 ## License
 

@@ -1,0 +1,54 @@
+{{define "settings-update.html"}}
+<div class="settings-update-content">
+  <dl class="server-info-details settings-update-versions">
+    <div class="server-info-row">
+      <dt>Current version</dt>
+      <dd><span class="server-info-value">{{if .SettingsPage.UpdateCurrentVersion}}{{.SettingsPage.UpdateCurrentVersion}}{{else}}unavailable{{end}}</span></dd>
+    </div>
+    {{with .SettingsPage.UpdateStatus}}
+    <div class="server-info-row">
+      <dt>Latest release</dt>
+      <dd>
+        {{if .LatestVersion}}
+          {{if .LatestURL}}<a href="{{.LatestURL}}" target="_blank" rel="noopener noreferrer"><span class="server-info-value">{{.LatestVersion}}</span></a>{{else}}<span class="server-info-value">{{.LatestVersion}}</span>{{end}}
+          {{if .PublishedAt}}<span class="field-help">Published {{.PublishedAt.Format "2006-01-02"}}</span>{{end}}
+        {{else}}unavailable{{end}}
+      </dd>
+    </div>
+    {{end}}
+  </dl>
+
+  {{with .SettingsPage.UpdateError}}
+  <div class="application-alert" role="alert">{{.}}</div>
+  {{end}}
+
+  {{with .SettingsPage.UpdateState}}
+  <div class="settings-update-state">
+    <p><strong>Last operation:</strong> {{.Phase}}{{with .Version}} for {{.}}{{end}}{{if .Acknowledged}} (acknowledged){{end}}</p>
+    {{if .Error}}<p class="field-help">{{.Error}}</p>{{end}}
+    {{if .FinishedAt}}<p class="field-help">Finished {{.FinishedAt.Format "2006-01-02 15:04 UTC"}}</p>{{end}}
+    {{if eq (printf "%s" .Phase) "uncertain"}}<p class="field-help">Inspect the updater helper and container state before clearing this operation from the command line.</p>{{end}}
+  </div>
+  {{end}}
+
+  {{with .SettingsPage.UpdateStatus}}
+    {{if .DevelopmentBuild}}
+      <p class="field-help">This development build does not use release-based updates.</p>
+    {{else if not .Compatible}}
+      <div class="application-alert" role="alert">This release requires a different deployment layout. Follow its release notes before updating manually.</div>
+    {{else if .UpdateAvailable}}
+      <form method="post" action="/settings/update">
+        <input type="hidden" name="csrf_token" value="{{$.SettingsPage.CSRFToken}}">
+        <button class="button button-primary" type="submit">Update to {{.LatestVersion}}</button>
+      </form>
+    {{else if .LatestVersion}}
+      <p class="field-help">Redlaunch is running the latest release.</p>
+      <button class="button button-secondary" type="button" hx-get="/settings/update/check" hx-target="closest .settings-update-content" hx-swap="outerHTML">Check again</button>
+    {{else}}
+      <button class="button button-secondary" type="button" hx-get="/settings/update/check" hx-target="closest .settings-update-content" hx-swap="outerHTML">Check for updates</button>
+    {{end}}
+  {{else}}
+    <button class="button button-secondary" type="button" hx-get="/settings/update/check" hx-target="closest .settings-update-content" hx-swap="outerHTML">Check for updates</button>
+  {{end}}
+</div>
+{{end}}

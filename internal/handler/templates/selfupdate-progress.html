@@ -1,17 +1,25 @@
 {{define "selfupdate-progress.html"}}
 <div class="setup-progress-backdrop" data-progress-dialog data-selfupdate-progress data-progress-content-selector=".settings-page" data-close-url="{{.SelfUpdateProgress.CloseURL}}" data-state="{{.SelfUpdateProgress.State}}" data-status-url="{{.SelfUpdateProgress.StatusURL}}">
-  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="selfupdate-progress-title" aria-busy="{{if eq .SelfUpdateProgress.State "running"}}true{{else}}false{{end}}" tabindex="-1">
+  <section class="setup-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="selfupdate-progress-title" aria-busy="{{if or (eq .SelfUpdateProgress.State "running") (eq .SelfUpdateProgress.State "handoff")}}true{{else}}false{{end}}" tabindex="-1">
     <div class="setup-progress-header">
       <div class="setup-progress-icon setup-progress-icon-{{.SelfUpdateProgress.State}}" aria-hidden="true">
         {{if eq .SelfUpdateProgress.State "complete"}}✓{{else if eq .SelfUpdateProgress.State "failed"}}!{{else}}…{{end}}
       </div>
       <div class="setup-progress-heading">
-        <h2 id="selfupdate-progress-title" data-progress-title>{{if eq .SelfUpdateProgress.State "complete"}}Update started{{else if eq .SelfUpdateProgress.State "failed"}}Update stopped{{else}}Updating Redlaunch{{end}}</h2>
+        <h2 id="selfupdate-progress-title" data-progress-title>{{if eq .SelfUpdateProgress.State "complete"}}Update complete{{else if eq .SelfUpdateProgress.State "failed"}}Update stopped{{else}}Updating Redlaunch{{end}}</h2>
       </div>
     </div>
 
+    {{if eq .SelfUpdateProgress.State "handoff"}}
+    <p class="setup-progress-description" role="status">The verified release image was loaded and the update helper is recreating Redlaunch. Waiting for the replacement instance to report the new version.</p>
+    {{end}}
     {{if eq .SelfUpdateProgress.State "complete"}}
-    <p class="setup-progress-description" role="status">The latest version was pulled and the container rebuild is running in the background. Redlaunch will restart shortly; refresh this page in a moment.</p>
+    <p class="setup-progress-description" role="status">The replacement Redlaunch instance reported the expected version and is ready.</p>
+    {{end}}
+    {{with .SelfUpdateProgress.UpdateState}}
+    {{if eq (printf "%s" .Phase) "uncertain"}}
+    <p class="setup-progress-description" role="status">The update outcome could not be verified. Inspect the updater helper and Redlaunch container before trying again.</p>
+    {{end}}
     {{end}}
 
     <ol class="setup-progress-steps" aria-live="polite">
@@ -33,7 +41,7 @@
     {{end}}
 
     <div class="setup-progress-error" data-progress-refresh-error hidden role="alert">
-      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser could not refresh the update progress.</p>
+      <p class="setup-progress-error-title" data-progress-refresh-error-message>The browser lost contact while Redlaunch restarts. Reconnecting automatically…</p>
     </div>
 
     <div class="setup-progress-actions">

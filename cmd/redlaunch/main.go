@@ -27,6 +27,7 @@ import (
 	"redlaunch/internal/service"
 	"redlaunch/internal/store"
 	"redlaunch/internal/systemd"
+	"redlaunch/internal/version"
 )
 
 func main() {
@@ -62,6 +63,14 @@ func dispatch(ctx context.Context, args []string) error {
 		return runManagedBackup(ctx, args[1:])
 	case "selfupdate-run":
 		return runSelfUpdate(ctx, args[1:])
+	case "apply-update":
+		return runApplyUpdate(ctx, args[1:])
+	case "update-state":
+		return runUpdateState(ctx, args[1:])
+	case "version":
+		return runVersion(args[1:], os.Stdout)
+	case "healthcheck":
+		return runHealthcheck(ctx, args[1:])
 	case "management-restart-run":
 		return runManagementRestart(ctx, args[1:])
 	case "auth-validate-password":
@@ -106,14 +115,22 @@ func runManagementRestart(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("management-restart-run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	directory := flags.String("directory", "", "installation directory")
+	projectsRoot := flags.String("projects-root", "", "managed projects root")
+	operationID := flags.String("operation-id", "", "restart operation ID")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		return errors.New("usage: management-restart-run --directory PATH")
+		return errors.New("usage: management-restart-run --directory PATH --projects-root PATH --operation-id ID")
 	}
-	updater, err := service.NewSelfUpdateService(*directory, "", "")
+	if strings.TrimSpace(*directory) == "" || strings.TrimSpace(*projectsRoot) == "" || strings.TrimSpace(*operationID) == "" {
+		return errors.New("management-restart-run requires directory, projects root, and operation ID")
+	}
+	updater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
+		Directory:    *directory,
+		ProjectsRoot: *projectsRoot,
+	})
 	if err != nil {
 		return err
 	}
-	return updater.RunManagementRestart(ctx)
+	return updater.RunManagementRestart(ctx, *operationID)
 }
 
 func runComposeProjectName(args []string, output io.Writer) error {
@@ -251,7 +268,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("create OAuth service: %w", err)
 	}
 
-	selfUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
+	managementUpdater, err := service.NewSelfUpdateServiceWithOptions(service.SelfUpdateOptions{
 		ProjectsRoot: cfg.ProjectsRoot,
 		Directory:    cfg.RedlaunchDir,
 		UpdaterImage: cfg.RedlaunchImage,
@@ -259,7 +276,19 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create self-update service: %w", err)
 	}
-
+	releaseUpdater, err := service.NewUpdateService(service.UpdateOptions{
+		ProjectsRoot:     cfg.ProjectsRoot,
+		Directory:        cfg.RedlaunchDir,
+		RuntimeImage:     cfg.RedlaunchImage,
+		ManagerContainer: cfg.RedlaunchContainerName,
+		DeferMutations:   true,
+	})
+	if err != nil {
+		return fmt.Errorf("create release updater: %w", err)
+	}
+	managementUpdater.SetMutationGate(releaseUpdater.WaitForStartup)
+	dashboard := service.NewDashboardService(compose.NewDashboardClient(), cfg.ProjectsRoot, database)
+	dashboard.SetMutationGate(releaseUpdater.WaitForStartup)
 	authentication, err := redlaunchauth.New(redlaunchauth.Config{
 		ClientID:      cfg.GoogleClientID,
 		ClientSecret:  cfg.GoogleClientSecret,
@@ -285,8 +314,9 @@ func run(ctx context.Context) error {
 		APITokens:        apiTokens,
 		OAuth:            oauthServer,
 		Registry:         registry,
-		DashboardDocker:  service.NewDashboardService(compose.NewDashboardClient(), cfg.ProjectsRoot, database),
-		SelfUpdate:       selfUpdater,
+		DashboardDocker:  dashboard,
+		SelfUpdate:       releaseUpdater,
+		ManagementAccess: managementUpdater,
 		Metrics: metrics.NewWithConfig(metrics.Config{
 			Scope:          cfg.MetricsScope,
 			ProcRoot:       cfg.MetricsProcRoot,
@@ -334,11 +364,24 @@ func run(ctx context.Context) error {
 	}()
 	defer func() { cancelMaintenance(); <-maintenanceDone }()
 
+	// Start serving first so startup reconciliation can probe the local
+	// readiness endpoint. Installation mutations stay blocked behind the
+	// updater admission gate until reconciliation finishes.
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("server listening", "addr", cfg.HTTPAddr)
 		serverErr <- server.ListenAndServe()
 	}()
+	// Allow the replacement manager's two-minute readiness probe plus startup
+	// and storage latency before abandoning startup reconciliation.
+	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, 3*time.Minute)
+	if err := managementUpdater.ReconcileManagementRestart(reconcileCtx); err != nil && !errors.Is(err, application.ErrUpdateUncertain) {
+		logger.Warn("reconcile Redlaunch management restart", "error", err)
+	}
+	if err := releaseUpdater.ReconcileUpdateState(reconcileCtx); err != nil && !errors.Is(err, application.ErrUpdateUncertain) {
+		logger.Warn("reconcile Redlaunch update state", "error", err)
+	}
+	cancelReconcile()
 
 	select {
 	case err := <-serverErr:
@@ -472,6 +515,103 @@ func runManagedBackup(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
+}
+
+func runVersion(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("redlaunch version", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jsonOutput := flags.Bool("json", false, "write build metadata as JSON")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: redlaunch version [--json]")
+	}
+	if *jsonOutput {
+		return version.WriteJSON(output)
+	}
+	return version.WriteText(output)
+}
+
+func runHealthcheck(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("redlaunch healthcheck", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	endpoint := flags.String("url", "http://127.0.0.1:8080/healthz", "health endpoint URL")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: redlaunch healthcheck [--url URL]")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, *endpoint, nil)
+	if err != nil {
+		return errors.New("healthcheck URL is invalid")
+	}
+	request.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.New("healthcheck request failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return errors.New("healthcheck returned an unsuccessful status")
+	}
+	_, err = io.Copy(os.Stdout, io.LimitReader(response.Body, 64*1024))
+	return err
+}
+
+func runApplyUpdate(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("redlaunch apply-update", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	operationID := flags.String("operation-id", "", "update operation ID")
+	statePath := flags.String("state", "", "update state path")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: redlaunch apply-update --operation-id ID [--state PATH]")
+	}
+	if strings.TrimSpace(*operationID) == "" {
+		return errors.New("update operation ID is required")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	updater, err := service.NewUpdateService(service.UpdateOptions{
+		ProjectsRoot:     cfg.ProjectsRoot,
+		Directory:        cfg.RedlaunchDir,
+		RuntimeImage:     cfg.RedlaunchImage,
+		ManagerContainer: cfg.RedlaunchContainerName,
+	})
+	if err != nil {
+		return fmt.Errorf("create release updater: %w", err)
+	}
+	applyCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	return updater.RunApplyUpdate(applyCtx, service.ApplyUpdateOptions{
+		OperationID: *operationID,
+		StatePath:   *statePath,
+	})
+}
+
+func runUpdateState(ctx context.Context, args []string) error {
+	if len(args) == 0 || args[0] != "clear" {
+		return errors.New("usage: redlaunch update-state clear --operation ID --confirm")
+	}
+	flags := flag.NewFlagSet("redlaunch update-state clear", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	operationID := flags.String("operation", "", "update operation ID")
+	confirm := flags.Bool("confirm", false, "confirm that the installation was inspected")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: redlaunch update-state clear --operation ID --confirm")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	updater, err := service.NewUpdateService(service.UpdateOptions{
+		ProjectsRoot:     cfg.ProjectsRoot,
+		Directory:        cfg.RedlaunchDir,
+		RuntimeImage:     cfg.RedlaunchImage,
+		ManagerContainer: cfg.RedlaunchContainerName,
+	})
+	if err != nil {
+		return fmt.Errorf("create release updater: %w", err)
+	}
+	return updater.ClearUpdateState(ctx, *operationID, *confirm)
 }
 
 // runSelfUpdate executes the synchronous Redlaunch update (git pull followed

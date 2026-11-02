@@ -139,6 +139,12 @@ func (h *Handler) loadSettingsPageData(ctx context.Context) (settingsPageData, e
 		}
 		data.MCPConnections = connections
 	}
+	if h.selfUpdater != nil {
+		data.UpdateCurrentVersion = h.selfUpdater.CurrentVersion()
+		if state, ok, err := h.selfUpdater.UpdateState(ctx); err == nil && ok {
+			data.UpdateState = &state
+		}
+	}
 	return data, nil
 }
 
@@ -303,7 +309,7 @@ func redlaunchDomainDeleteMessage(err error) string {
 }
 
 func (h *Handler) writeSettingsPage(w http.ResponseWriter, r *http.Request, status int, data settingsPageData, progress ...*selfUpdateProgressData) {
-	_, data.ManagementAccessAvailable = h.selfUpdater.(managementAccessService)
+	data.ManagementAccessAvailable = h.managementAccess != nil
 	// The effective mode remains the startup setting until recreation completes.
 	data.ManagementAccessMode = h.accessMode
 	data.ManagementSecureCookies = h.cookieSecure

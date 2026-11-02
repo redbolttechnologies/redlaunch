@@ -1,7 +1,13 @@
-ARG GO_VERSION=1.26.8
+ARG GO_VERSION=1.26.10
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 FROM golang:${GO_VERSION}-alpine AS build
 
 ARG GO_VERSION
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
 
 WORKDIR /src
 
@@ -26,19 +32,29 @@ COPY documentation.go README.md INSTALL.md DEPENDENCIES.md RECIPES.md SSH_KEYS.m
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     test "$(go env GOVERSION)" = "go${GO_VERSION}" \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/redlaunch ./cmd/redlaunch \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath \
+       -ldflags="-w -X redlaunch/internal/version.Version=${VERSION} -X redlaunch/internal/version.Commit=${COMMIT} -X redlaunch/internal/version.BuildDate=${BUILD_DATE}" \
+       -o /out/redlaunch ./cmd/redlaunch \
     && go version -m /out/redlaunch > /out/redlaunch.buildinfo
 
 FROM alpine:3.22
 
 ARG GO_VERSION
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 
-LABEL io.redlaunch.build.go-version="${GO_VERSION}"
+LABEL io.redlaunch.build.go-version="${GO_VERSION}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      io.redlaunch.deployment-contract="1"
 
 RUN apk add --no-cache docker-cli docker-cli-compose dbus git openssh-keygen
 
 COPY --from=build /out/redlaunch /usr/local/bin/redlaunch
 COPY --from=build /out/redlaunch.buildinfo /usr/local/share/redlaunch/buildinfo.txt
+COPY --from=build /src/LICENSE /usr/local/share/redlaunch/LICENSE
 
 ENV HTTP_ADDR=:8080
 

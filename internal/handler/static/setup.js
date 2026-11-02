@@ -53,38 +53,86 @@
     focusDialogAction(progress);
   };
 
+  const showPollingRetry = (progress) => {
+    if (!progress) {
+      return;
+    }
+    const error = progress.querySelector("[data-progress-refresh-error]");
+    if (error) {
+      error.hidden = false;
+    }
+  };
+
+  const pollable = (state) => state === "running" || state === "handoff";
+
+  let pollingFailures = 0;
+  const pollingMaxDelay = 5000;
+
+  const scheduleRetry = (progress) => {
+    if (!progress || !pollable(progress.dataset.state)) {
+      focusDialogAction(progress);
+      return;
+    }
+    // The manager restart intentionally interrupts the status endpoint.
+    // Keep polling with bounded backoff until the replacement reports its
+    // verified state or the user closes the dialog.
+    showPollingRetry(progress);
+    pollingFailures += 1;
+    const delay = Math.min(pollingDelay * 2 ** Math.min(pollingFailures, 3), pollingMaxDelay);
+    window.setTimeout(poll, delay);
+  };
+
   const poll = async () => {
     const dialog = document.querySelector(progressSelector);
-    if (!dialog || dialog.dataset.state !== "running") {
+    if (!dialog || !pollable(dialog.dataset.state)) {
       focusDialogAction(dialog);
       return;
     }
 
+    let response;
     try {
-      const response = await fetch(dialog.dataset.statusUrl, {
+      response = await fetch(dialog.dataset.statusUrl, {
         headers: {
           Accept: "text/html",
           "X-Requested-With": "XMLHttpRequest"
         },
         cache: "no-store"
       });
-      if (!response.ok) {
-        throw new Error("progress request failed");
-      }
-      dialog.outerHTML = await response.text();
-      const updatedDialog = document.querySelector(progressSelector);
-      if (updatedDialog) {
-        bindDialogControls(updatedDialog);
-      }
-      if (updatedDialog && updatedDialog.dataset.state === "running") {
-        focusProgressDialog(updatedDialog);
-        window.setTimeout(poll, pollingDelay);
+    } catch (_) {
+      scheduleRetry(document.querySelector(progressSelector));
+      return;
+    }
+    if (!response.ok) {
+      // Reverse proxies commonly answer with 502/503/504 while the manager
+      // container is being recreated. Retry those transient responses, but
+      // stop on definitive errors such as a missing operation.
+      if (response.status === 502 || response.status === 503 || response.status === 504) {
+        scheduleRetry(document.querySelector(progressSelector));
         return;
       }
-      focusDialogAction(updatedDialog);
-    } catch (_) {
       showPollingError(document.querySelector(progressSelector));
+      return;
     }
+
+    let contents;
+    try {
+      contents = await response.text();
+    } catch (_) {
+      scheduleRetry(document.querySelector(progressSelector));
+      return;
+    }
+    dialog.outerHTML = contents;
+    pollingFailures = 0;
+    const updatedDialog = document.querySelector(progressSelector);
+    if (updatedDialog) {
+      bindDialogControls(updatedDialog);
+    }
+    if (updatedDialog && pollable(updatedDialog.dataset.state)) {
+      focusProgressDialog(updatedDialog);
+      window.setTimeout(poll, pollingDelay);
+      return;
+    }
+    focusDialogAction(updatedDialog);
   };
 
   const dialog = document.querySelector(progressSelector);
@@ -104,7 +152,7 @@
     sidebar.setAttribute("inert", "");
   }
 
-  if (dialog.dataset.state === "running") {
+  if (pollable(dialog.dataset.state)) {
     focusProgressDialog(dialog);
     window.setTimeout(poll, 150);
   } else {

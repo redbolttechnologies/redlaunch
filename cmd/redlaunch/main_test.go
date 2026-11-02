@@ -113,3 +113,13 @@ func TestRunAddAuthorizedEmailPersistsNormalizedAddress(t *testing.T) {
 		t.Fatalf("authorized emails = %#v, want [admin@example.com]", emails)
 	}
 }
+
+func TestRunVersionJSON(t *testing.T) {
+	var output bytes.Buffer
+	if err := runVersion([]string{"--json"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"version"`) || !strings.Contains(output.String(), `"deployment_contract"`) {
+		t.Fatalf("version JSON = %q", output.String())
+	}
+}

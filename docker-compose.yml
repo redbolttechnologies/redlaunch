@@ -34,13 +34,15 @@ services:
       BACKUP_DOCKER_BINARY: "/usr/bin/docker"
       SYSTEMD_BINARY: "/usr/bin/dbus-send"
       # Directory containing the Redlaunch checkout on the host. The Settings
-      # update action runs `git pull` and `docker compose up -d --build` there.
-      # It is mounted at the identical host path so Compose bind mounts and the
-      # build context resolve the same way inside the container and on the host.
+      # release updater validates the installation Compose file there and
+      # recreates only `app` with `--no-build --pull never`. It is mounted at
+      # the identical host path so Compose bind mounts resolve the same way
+      # inside the container and on the host.
       REDLAUNCH_DIR: "${REDLAUNCH_DIR:-${PWD}}"
-      # Image of the detached rebuild helper spawned by the Settings update
-      # action. Keep it aligned with the service image above.
+      # Runtime image reference updated by the Settings release updater to the
+      # validated release image ID. Keep it aligned with the service image above.
       REDLAUNCH_IMAGE: "${REDLAUNCH_IMAGE:-redlaunch:local}"
+      REDLAUNCH_CONTAINER_NAME: "${REDLAUNCH_CONTAINER_NAME:-redbolt-redlaunch}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URL: "${GOOGLE_REDIRECT_URL:-http://localhost:8080/auth/google/callback}"

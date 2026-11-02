@@ -156,10 +156,21 @@ func TestManagementRestartHelperRecreatesOnlyAppAndHonorsCancellation(t *testing
 	s, _, calls := accessModeFixture(t, "managed-https", "")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := s.RunManagementRestart(ctx); !errors.Is(err, context.Canceled) {
+	operationID := "test-restart-operation"
+	if err := s.writeManagementRestartMarker(managementRestartMarker{OperationID: operationID, Mode: "managed-https", Phase: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newUpdateStateStore(s.projectsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.acquire(operationID, "management-access"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RunManagementRestart(ctx, operationID); !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled helper ran")
 	}
-	if err := s.RunManagementRestart(t.Context()); err != nil {
+	if err := s.RunManagementRestart(t.Context(), operationID); err != nil {
 		t.Fatal(err)
 	}
 	commands, _ := os.ReadFile(calls)
@@ -178,7 +189,7 @@ func TestManagementRestartProjectComposeConfig(t *testing.T) {
 	}
 	s, _, _ := accessModeFixture(t, "managed-https", "")
 	directory := filepath.Join(s.directory, "checkout $literal with spaces")
-	project, err := s.writeManagementRestartProject(directory)
+	project, err := s.writeManagementRestartProject(directory, "test-operation")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +210,15 @@ func TestManagementRestartProjectComposeConfig(t *testing.T) {
 	helper := resolved.Services["restart"]
 	// `compose config` retains escaped dollars for round-trip serialization;
 	// Compose unescapes them when creating the container.
-	if len(helper.Command) != 2 || strings.ReplaceAll(helper.Command[1], "$$", "$") != directory || strings.ReplaceAll(helper.WorkingDir, "$$", "$") != directory {
+	values := map[string]string{}
+	for index := 0; index+1 < len(helper.Command); index++ {
+		values[helper.Command[index]] = strings.ReplaceAll(helper.Command[index+1], "$$", "$")
+	}
+	if len(helper.Command) != 6 ||
+		values["--directory"] != directory ||
+		values["--projects-root"] != s.projectsRoot ||
+		values["--operation-id"] != "test-operation" ||
+		strings.ReplaceAll(helper.WorkingDir, "$$", "$") != directory {
 		t.Fatalf("Compose changed the literal helper path: command=%q working_dir=%q expected=%q", helper.Command, helper.WorkingDir, directory)
 	}
 }
@@ -236,5 +255,78 @@ func TestManagementAccessModeDoesNotOverwriteConcurrentOperatorEdits(t *testing.
 	contents, _ := os.ReadFile(path)
 	if !strings.Contains(string(contents), "OPERATOR_SETTING=keep") {
 		t.Fatal("operator edit discarded")
+	}
+}
+
+func TestManagementRestartRetainsLockUntilDetachedHelperCompletes(t *testing.T) {
+	s, _, _ := accessModeFixture(t, "managed-https", "")
+	if err := s.QueueManagementAccessMode(t.Context(), "managed-https"); err != nil {
+		t.Fatal(err)
+	}
+	marker, ok, err := s.readManagementRestartMarker()
+	if err != nil || !ok {
+		t.Fatalf("restart marker = %#v, %t, %v", marker, ok, err)
+	}
+	if !updateOperationLocked(s.projectsRoot) {
+		t.Fatal("shared installation lock released while the restart helper is active")
+	}
+	if err := s.RunManagementRestart(t.Context(), marker.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if updateOperationLocked(s.projectsRoot) {
+		t.Fatal("shared installation lock still held after restart completion")
+	}
+	if _, ok, err := s.readManagementRestartMarker(); err != nil || ok {
+		t.Fatalf("restart marker after completion = %t, %v", ok, err)
+	}
+}
+
+func TestManagementRestartRejectsWrongOperationBeforeRecreation(t *testing.T) {
+	s, _, calls := accessModeFixture(t, "managed-https", "")
+	if err := s.writeManagementRestartMarker(managementRestartMarker{OperationID: "correct-operation", Mode: "managed-https", Phase: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newUpdateStateStore(s.projectsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.acquire("correct-operation", "management-access"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RunManagementRestart(t.Context(), "wrong-operation"); err == nil {
+		t.Fatal("mismatched operation accepted")
+	}
+	commands, err := os.ReadFile(calls)
+	if err == nil && strings.Contains(string(commands), "force-recreate app") {
+		t.Fatal("manager was recreated before the operation was validated")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if operationID, owner, ok, err := store.readLock(); err != nil || !ok || operationID != "correct-operation" || owner != "management-access" {
+		t.Fatalf("ownership changed after rejection: %q %q %t %v", operationID, owner, ok, err)
+	}
+}
+
+func TestManagementAccessWaitsForStartupReconciliation(t *testing.T) {
+	s, path, _ := accessModeFixture(t, "managed-https", "")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissionErr := errors.New("startup reconciliation is still running")
+	s.SetMutationGate(func(context.Context) error { return admissionErr })
+	if err := s.QueueManagementAccessMode(t.Context(), "managed-https"); !errors.Is(err, admissionErr) {
+		t.Fatalf("access change before admission error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("access change modified configuration before startup reconciliation completed")
+	}
+	if updateOperationLocked(s.projectsRoot) {
+		t.Fatal("access change acquired the installation lock before startup reconciliation completed")
 	}
 }

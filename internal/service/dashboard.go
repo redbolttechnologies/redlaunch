@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,6 +61,7 @@ type DashboardService struct {
 	coreRoot         string
 	applicationsRoot string
 	catalog          DashboardApplicationCatalog
+	admit            func(context.Context) error
 	mu               sync.Mutex
 	cached           DockerDashboard
 	at               time.Time
@@ -71,6 +73,15 @@ func NewDashboardService(docker DashboardDocker, projectsRoot string, catalog Da
 		projectsRoot = absolute
 	}
 	return &DashboardService{docker: docker, coreRoot: filepath.Join(projectsRoot, "core"), applicationsRoot: filepath.Join(projectsRoot, "applications"), catalog: catalog, history: map[string][]UsageSample{}}
+}
+
+// SetMutationGate blocks pruning until startup reconciliation has resolved any
+// interrupted installation operation. It must be configured before requests
+// are served.
+func (s *DashboardService) SetMutationGate(gate func(context.Context) error) {
+	if s != nil {
+		s.admit = gate
+	}
 }
 func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDashboard, error) {
 	s.mu.Lock()
@@ -253,8 +264,31 @@ func (s *DashboardService) CollectDockerDashboard(ctx context.Context) (DockerDa
 	return result, nil
 }
 func (s *DashboardService) PruneUnusedImages(ctx context.Context) (uint64, error) {
+	if s.admit != nil {
+		if err := s.admit(ctx); err != nil {
+			return 0, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Share the installation lock so pruning cannot remove a newly loaded
+	// release image before the update helper references it.
+	projectsRoot := filepath.Dir(filepath.Clean(s.coreRoot))
+	store, err := newUpdateStateStore(projectsRoot)
+	if err != nil {
+		return 0, err
+	}
+	operationID, err := newUpdateOperationID()
+	if err != nil {
+		return 0, err
+	}
+	if err := store.acquire(operationID, "prune"); err != nil {
+		if errors.Is(err, application.ErrUpdateBusy) {
+			return 0, application.ErrUpdateBusy
+		}
+		return 0, err
+	}
+	defer store.release(operationID)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	reclaimed, err := s.docker.PruneUnusedImages(ctx)

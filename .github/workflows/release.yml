@@ -13,6 +13,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  GO_VERSION: "1.26.10"
+
 jobs:
   build:
     name: Build release artifacts
@@ -24,8 +27,26 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Resolve version metadata
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+            if [[ ! "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "release tags must match vMAJOR.MINOR.PATCH: ${version}" >&2
+              exit 1
+            fi
+          else
+            version="dev-${GITHUB_SHA::12}"
+          fi
+          {
+            echo "VERSION=${version}"
+            echo "COMMIT=${GITHUB_SHA}"
+            echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_ENV}"
 
       - name: Test
         run: make test
@@ -42,22 +63,62 @@ jobs:
       - name: Validate Compose configuration
         run: make compose-config
 
+      - name: Scan Linux amd64 release binary
+        run: make vulncheck-linux LINUX_ARCH=amd64
+
+      - name: Scan Linux arm64 release binary
+        run: make vulncheck-linux LINUX_ARCH=arm64
+
+      - name: Run disposable release-update acceptance
+        run: make update-acceptance
+
       - name: Build Linux amd64 binary
         run: make linux-build LINUX_ARCH=amd64
 
       - name: Build Linux arm64 binary
         run: make linux-build LINUX_ARCH=arm64
 
-      - name: Build production image
+      - name: Build production amd64 image
         run: make docker-build
 
-      - name: Record image identity
+      - name: Save amd64 image
         run: |
+          docker tag redlaunch:local "redlaunch:${VERSION}"
+          docker image rm redlaunch:local >/dev/null 2>&1 || true
           docker image inspect --format \
-            'image_id={{.Id}} repo_digests={{json .RepoDigests}} go_version={{index .Config.Labels "io.redlaunch.build.go-version"}}' \
-            redlaunch:local > bin/redlaunch-image.identity
+            'image_id={{.Id}} repo_digests={{json .RepoDigests}} go_version={{index .Config.Labels "io.redlaunch.build.go-version"}} version={{index .Config.Labels "org.opencontainers.image.version"}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}' \
+            "redlaunch:${VERSION}" > bin/redlaunch-image-amd64.identity
+          docker image inspect --format '{{.Id}}' "redlaunch:${VERSION}" > bin/redlaunch-image-amd64.id
+          docker save "redlaunch:${VERSION}" | gzip -9 > bin/redlaunch-image-linux-amd64.tar.gz
+          gzip -t bin/redlaunch-image-linux-amd64.tar.gz
 
-      - name: Package binaries and image
+      - name: Set up QEMU for arm64 image
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and save arm64 image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --sbom=false \
+            --build-arg GO_VERSION="${GO_VERSION}" \
+            --build-arg VERSION="${VERSION}" \
+            --build-arg COMMIT="${COMMIT}" \
+            --build-arg BUILD_DATE="${BUILD_DATE}" \
+            --tag "redlaunch:${VERSION}" \
+            --output type=docker,dest=bin/redlaunch-image-linux-arm64.tar \
+            .
+          gzip -9 bin/redlaunch-image-linux-arm64.tar
+          gzip -dc bin/redlaunch-image-linux-arm64.tar.gz | docker load
+          docker image inspect --format \
+            'image_id={{.Id}} repo_digests={{json .RepoDigests}} go_version={{index .Config.Labels "io.redlaunch.build.go-version"}} version={{index .Config.Labels "org.opencontainers.image.version"}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}' \
+            "redlaunch:${VERSION}" > bin/redlaunch-image-arm64.identity
+          docker image inspect --format '{{.Id}}' "redlaunch:${VERSION}" > bin/redlaunch-image-arm64.id
+
+      - name: Package binaries and release manifest
         run: |
           tar --owner=0 --group=0 --numeric-owner -czf \
             bin/redlaunch-linux-amd64.tar.gz \
@@ -67,14 +128,66 @@ jobs:
             bin/redlaunch-linux-arm64.tar.gz \
             -C bin redlaunch-linux-arm64 redlaunch-linux-arm64.buildinfo \
             -C .. LICENSE
-          docker save redlaunch:local | gzip -9 > bin/redlaunch-image-linux-amd64.tar.gz
-          gzip -t bin/redlaunch-image-linux-amd64.tar.gz
+          amd64_sha=$(sha256sum bin/redlaunch-image-linux-amd64.tar.gz | awk '{print $1}')
+          arm64_sha=$(sha256sum bin/redlaunch-image-linux-arm64.tar.gz | awk '{print $1}')
+          amd64_id=$(cat bin/redlaunch-image-amd64.id)
+          arm64_id=$(cat bin/redlaunch-image-arm64.id)
+          case "${amd64_id}" in sha256:*) ;; *) echo "amd64 image ID is not a digest: ${amd64_id}" >&2; exit 1;; esac
+          case "${arm64_id}" in sha256:*) ;; *) echo "arm64 image ID is not a digest: ${arm64_id}" >&2; exit 1;; esac
+          if [ "${#amd64_id}" -ne 71 ]; then echo "amd64 image ID has unexpected length: ${amd64_id}" >&2; exit 1; fi
+          if [ "${#arm64_id}" -ne 71 ]; then echo "arm64 image ID has unexpected length: ${arm64_id}" >&2; exit 1; fi
+          cat > bin/redlaunch-release.json <<EOF
+          {
+            "version": "${VERSION}",
+            "commit": "${COMMIT}",
+            "deployment_contract": 1,
+            "images": {
+              "amd64": {
+                "arch": "amd64",
+                "asset": "redlaunch-image-linux-amd64.tar.gz",
+                "sha256": "${amd64_sha}",
+                "image_id": "${amd64_id}",
+                "tag": "redlaunch:${VERSION}"
+              },
+              "arm64": {
+                "arch": "arm64",
+                "asset": "redlaunch-image-linux-arm64.tar.gz",
+                "sha256": "${arm64_sha}",
+                "image_id": "${arm64_id}",
+                "tag": "redlaunch:${VERSION}"
+              }
+            }
+          }
+          EOF
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          version = os.environ["VERSION"]
+          commit = os.environ["COMMIT"]
+          manifest = json.loads(Path("bin/redlaunch-release.json").read_text())
+          assert manifest["version"] == version, manifest
+          assert manifest["commit"] == commit, manifest
+          assert manifest["deployment_contract"] == 1, manifest
+          assert set(manifest["images"]) == {"amd64", "arm64"}, manifest
+          for arch in ("amd64", "arm64"):
+              image = manifest["images"][arch]
+              assert image["arch"] == arch, image
+              assert image["tag"] == f"redlaunch:{version}", image
+              assert image["image_id"].startswith("sha256:") and len(image["image_id"]) == 71, image
+              assert len(image["sha256"]) == 64, image
+          PY
           cd bin
           sha256sum \
             redlaunch-linux-amd64.tar.gz \
             redlaunch-linux-arm64.tar.gz \
             redlaunch-image-linux-amd64.tar.gz \
-            redlaunch-image.identity > SHA256SUMS
+            redlaunch-image-linux-arm64.tar.gz \
+            redlaunch-release.json \
+            redlaunch-image-amd64.identity \
+            redlaunch-image-arm64.identity \
+            redlaunch-image-amd64.id \
+            redlaunch-image-arm64.id > SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -86,7 +199,12 @@ jobs:
             bin/redlaunch-linux-amd64.tar.gz
             bin/redlaunch-linux-arm64.tar.gz
             bin/redlaunch-image-linux-amd64.tar.gz
-            bin/redlaunch-image.identity
+            bin/redlaunch-image-linux-arm64.tar.gz
+            bin/redlaunch-release.json
+            bin/redlaunch-image-amd64.identity
+            bin/redlaunch-image-arm64.identity
+            bin/redlaunch-image-amd64.id
+            bin/redlaunch-image-arm64.id
             bin/SHA256SUMS
 
   release:
@@ -103,17 +221,26 @@ jobs:
           name: redlaunch-${{ github.sha }}
           path: release
 
-      - name: Create or update release
+      - name: Create or resume draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
+          if draft=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            if [[ "${draft}" != "true" ]]; then
+              echo "release ${GITHUB_REF_NAME} is already published; refusing to replace assets" >&2
+              exit 1
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" release/* \
-              --repo "$GITHUB_REPOSITORY" \
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --draft \
               --verify-tag \
               --generate-notes
           fi
+          gh release upload "${GITHUB_REF_NAME}" release/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+          gh release edit "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
+            --latest
