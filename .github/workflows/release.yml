@@ -69,8 +69,18 @@ jobs:
       - name: Scan Linux arm64 release binary
         run: make vulncheck-linux LINUX_ARCH=arm64
 
+      # The manager and updater helper containers run as root and create 0700
+      # state under the bind-mounted projects root, which the test process reads
+      # directly. Run as root with private Go caches so the runner's own caches
+      # stay owned by the runner.
       - name: Run disposable release-update acceptance
-        run: make update-acceptance
+        run: |
+          sudo env \
+            "PATH=${PATH}" \
+            "GOCACHE=${RUNNER_TEMP}/root-go-build" \
+            "GOMODCACHE=${RUNNER_TEMP}/root-go-mod" \
+            "GOFLAGS=-modcacherw" \
+            make update-acceptance
 
       - name: Build Linux amd64 binary
         run: make linux-build LINUX_ARCH=amd64
