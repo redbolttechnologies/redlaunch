@@ -1,4 +1,4 @@
-.PHONY: build test integration update-acceptance lint fmt fmt-check secret-scan run setup update linux-build vulncheck-linux vulncheck-linux-arm64 compose-config docker-build image-identity release-check clean add-authorized-email auth-add-email
+.PHONY: build test integration update-acceptance lint fmt fmt-check secret-scan run setup update linux-build vulncheck-linux vulncheck-linux-arm64 compose-config docker-build image-identity release-check release minor-release major-release clean add-authorized-email auth-add-email
 
 BINARY := bin/redlaunch
 GO_VERSION := 1.26.11
@@ -83,6 +83,15 @@ update-acceptance: ## Run opt-in disposable A -> B -> C update checks against re
 	REDLAUNCH_UPDATE_INTEGRATION=1 $(GO) test -race -count=1 -run '^TestReleaseUpdateAcceptance$$' -v ./internal/service
 
 release-check: test integration lint fmt-check secret-scan vulncheck-linux vulncheck-linux-arm64 compose-config update-acceptance image-identity ## Run the release gate
+
+release: ## Tag and push the next patch release (e.g. v2.1.165 -> v2.1.166)
+	bash scripts/release.sh patch
+
+minor-release: ## Tag and push the next minor release (e.g. v2.1.165 -> v2.2.0)
+	bash scripts/release.sh minor
+
+major-release: ## Tag and push the next major release (e.g. v2.1.165 -> v3.0.0)
+	bash scripts/release.sh major
 
 clean: ## Remove local build output
 	rm -rf bin

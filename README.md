@@ -711,6 +711,17 @@ bun test ./internal/handler/testdata/application-environment.test.cjs
 bun test ./internal/handler/testdata/selfupdate-progress.test.cjs
 ```
 
+To publish a release, run one of these from a clean checkout of the commit to
+release. Each finds the highest `vMAJOR.MINOR.PATCH` tag, creates and pushes the
+next one, and the pushed tag triggers the release workflow. With no tags yet,
+they create `v0.0.1`, `v0.1.0` and `v1.0.0` respectively.
+
+```sh
+make release        # v2.1.165 -> v2.1.166
+make minor-release  # v2.1.165 -> v2.2.0
+make major-release  # v2.1.165 -> v3.0.0
+```
+
 For a release candidate, run the complete release gate:
 
 ```sh
