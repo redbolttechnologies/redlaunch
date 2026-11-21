@@ -290,3 +290,44 @@
     });
   });
 })();
+
+// Inline create form: show what the selected engine will do, and keep the
+// button honest while a first-use engine is being started.
+(() => {
+  const form = document.querySelector("[data-managed-create-form]");
+  if (!form) return;
+  const select = form.querySelector("[data-managed-engine-select]");
+  const note = form.querySelector("[data-managed-engine-note]");
+  const submit = form.querySelector("[data-managed-create-submit]");
+  if (select && note) {
+    select.addEventListener("change", () => {
+      note.textContent = select.selectedOptions[0]?.dataset.note || "";
+    });
+  }
+  form.addEventListener("submit", () => {
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "Creating…";
+    }
+  });
+})();
+
+// Create user dialog: a login only gets databases of its own engine.
+(() => {
+  const select = document.querySelector("[data-managed-access-engine]");
+  if (!select) return;
+  const form = select.closest("form");
+  const update = () => {
+    form.querySelectorAll("[data-managed-access-provider]").forEach((choice) => {
+      const matches = choice.dataset.managedAccessProvider === select.value;
+      choice.hidden = !matches;
+      const input = choice.querySelector("input");
+      if (input) {
+        input.disabled = !matches;
+        if (!matches) input.checked = false;
+      }
+    });
+  };
+  select.addEventListener("change", update);
+  update();
+})();

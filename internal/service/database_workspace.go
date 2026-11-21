@@ -135,7 +135,11 @@ func (s *ManagedDatabases) databaseQueryTarget(ctx context.Context, name string)
 	if err != nil {
 		return item, "", nil, err
 	}
-	directory, err := s.managedDirectory()
+	if item.Provider != application.ManagedDatabaseProviderPostgres {
+		return item, "", nil, application.ErrManagedDatabaseWorkspaceUnsupported
+	}
+	postgres := managedEngines[application.ManagedDatabaseProviderPostgres]
+	directory, err := s.engineDirectory(postgres)
 	if err != nil {
 		return item, "", nil, err
 	}
@@ -150,7 +154,7 @@ func (s *ManagedDatabases) databaseQueryTarget(ctx context.Context, name string)
 	statement := fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE
 pg_has_role(%s, oid, 'MEMBER') AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
 OR rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program')));`, postgresQuoteLiteral(item.Owner))
-	privileged, err := s.execSQL(ctx, directory, statement)
+	privileged, err := postgres.run(s.runner, directory)(ctx, statement)
 	if err != nil || strings.TrimSpace(privileged) != "f" {
 		return item, "", nil, errors.New("SQL workspace requires a non-administrative database owner without host-access privileges")
 	}

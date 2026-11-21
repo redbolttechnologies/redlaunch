@@ -23,14 +23,15 @@ type managedDatabasesService interface {
 	IsEnabled(context.Context) (bool, error)
 	EnableCluster(context.Context, application.ManagedDatabaseEnableInput) error
 	DisableCluster(context.Context) error
-	StartCluster(context.Context) error
-	StopCluster(context.Context) error
-	RestartCluster(context.Context) error
-	GetStatus(context.Context) (application.ManagedDatabaseStatus, error)
-	GetLogs(context.Context) (string, bool, error)
-	OpenLogs(context.Context) (io.ReadCloser, error)
+	StartCluster(ctx context.Context, provider string) error
+	StopCluster(ctx context.Context, provider string) error
+	RestartCluster(ctx context.Context, provider string) error
+	GetEngines(context.Context) ([]application.ManagedDatabaseEngine, error)
+	GetLogs(ctx context.Context, provider string) (string, bool, error)
+	OpenLogs(ctx context.Context, provider string) (io.ReadCloser, error)
 	ListDatabases(context.Context) ([]application.ManagedDatabase, error)
 	CreateDatabase(context.Context, application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error)
+	CreateDatabaseWithProgress(context.Context, application.ManagedDatabaseCreateInput, func(stage, message string)) (application.ManagedDatabaseCreation, error)
 	DropDatabase(context.Context, string) error
 	ListUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error)
 	GetDatabaseConnections(context.Context, string) ([]application.ManagedDatabaseConnection, error)
@@ -47,22 +48,82 @@ type managedDatabasesService interface {
 }
 
 type managedDatabaseAccessChoice struct {
-	Name    string
-	Checked bool
+	Name     string
+	Provider string
+	Checked  bool
+}
+
+// databaseEngineOption is one entry of the create form's engine select. Note
+// says what creating a database on the engine will do; the browser swaps it in
+// when the selection changes.
+type databaseEngineOption struct {
+	Provider string
+	Label    string
+	Note     string
+	Selected bool
+}
+
+// setCreateProvider selects the engine of the inline create form.
+func (d *databasesPageData) setCreateProvider(provider string) {
+	d.CreateProvider = provider
+	d.CreateOptions = d.CreateOptions[:0]
+	for _, engine := range d.Engines {
+		option := databaseEngineOption{
+			Provider: engine.Provider,
+			Label:    engine.Name() + " " + engine.Version,
+			Note:     managedEngineCreateNote(engine),
+			Selected: engine.Provider == provider,
+		}
+		if option.Selected {
+			d.CreateNote = option.Note
+		}
+		d.CreateOptions = append(d.CreateOptions, option)
+	}
+}
+
+func managedEngineCreateNote(engine application.ManagedDatabaseEngine) string {
+	name := engine.Name() + " " + engine.Version
+	switch {
+	case !engine.Provisioned:
+		return "Redlaunch starts " + name + " when you create its first database."
+	case engine.Running:
+		return "Uses the running " + name + " container."
+	default:
+		return "The " + name + " container is not running. Start it from Settings first."
+	}
+}
+
+// databaseEngineChip is one engine filter of the database inventory.
+type databaseEngineChip struct {
+	Provider string
+	Label    string
+	Count    int
+	Active   bool
+	Href     string
 }
 
 type databasesPageData struct {
 	Cluster             application.ManagedDatabaseCluster
 	Enabled             bool
-	Status              application.ManagedDatabaseStatus
+	Engines             []application.ManagedDatabaseEngine
+	EngineFilter        string
+	EngineChips         []databaseEngineChip
+	LogsEngine          string
+	LogEngineChips      []databaseEngineChip
+	DialogEngine        string
 	Logs                string
 	LogsAvailable       bool
+	BackupRunning       bool
 	Databases           []application.ManagedDatabase
 	VisibleDatabases    []application.ManagedDatabase
 	DatabaseOwners      []string
 	DatabaseQuery       string
 	DatabaseOwner       string
 	CreateOpen          bool
+	CreateProvider      string
+	CreateOptions       []databaseEngineOption
+	CreateNote          string
+	CreateError         string
 	DisableOpen         bool
 	Users               []application.ManagedDatabaseUserDetail
 	ActiveTab           string
@@ -90,6 +151,7 @@ type databasesPageData struct {
 	CreatedCredentials  *managedDatabaseCredentialsData
 	Connection          *managedDatabaseConnectionData
 	UserName            string
+	UserProvider        string
 	UserDatabases       string
 	Progress            *managedDatabasesProgressData
 }
@@ -133,13 +195,21 @@ func (h *Handler) databasesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data.Progress = progress
+	if jobID := r.URL.Query().Get("created"); jobID != "" && h.managedDatabasesJobs != nil {
+		if job := h.managedDatabasesJobs.get(jobID); job != nil {
+			if credentials := job.takeCredentials(); credentials != nil {
+				data.CreatedCredentials = managedDatabaseCredentials(job.provider, credentials)
+			}
+		}
+	}
 	h.writeDatabasesPage(w, r, http.StatusOK, data)
 }
 
 func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (databasesPageData, error) {
 	data := databasesPageData{
-		Provider: application.ManagedDatabaseProviderPostgres,
-		Version:  application.ManagedDatabaseDefaultVersion,
+		Provider:     application.ManagedDatabaseProviderPostgres,
+		Version:      application.ManagedDatabaseDefaultVersion,
+		UserProvider: application.ManagedDatabaseProviderPostgres,
 	}
 	cluster, err := h.managedDatabases.GetCluster(ctx)
 	if err != nil {
@@ -159,22 +229,12 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 	if !cluster.Enabled {
 		return data, nil
 	}
-	if statusProvider, ok := h.managedDatabases.(interface {
-		GetStatus(context.Context) (application.ManagedDatabaseStatus, error)
-	}); ok {
-		if status, err := statusProvider.GetStatus(ctx); err == nil {
-			// Status is best-effort; keep the page usable when Docker is down.
-			data.Status = status
-		}
+	// Engine state is best-effort at runtime; keep the page usable when Docker is down.
+	engines, err := h.managedDatabases.GetEngines(ctx)
+	if err != nil {
+		return data, err
 	}
-	if logsProvider, ok := h.managedDatabases.(interface {
-		GetLogs(context.Context) (string, bool, error)
-	}); ok {
-		if logs, available, err := logsProvider.GetLogs(ctx); err == nil && available {
-			data.Logs = logs
-			data.LogsAvailable = true
-		}
-	}
+	data.Engines = engines
 	databases, err := h.managedDatabases.ListDatabases(ctx)
 	if err != nil {
 		return data, err
@@ -184,9 +244,33 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 	data.DatabaseOwner = query.Get("owner")
 	data.CreateOpen = query.Get("create") == "1"
 	data.DisableOpen = query.Get("disable") == "1"
+	if provider, err := application.ValidateManagedDatabaseEngine(query.Get("engine")); err == nil && query.Get("engine") != "" {
+		data.EngineFilter = provider
+	}
+	createProvider := data.EngineFilter
+	if createProvider == "" {
+		createProvider = application.ManagedDatabaseProviderPostgres
+	}
+	data.setCreateProvider(createProvider)
+	data.EngineChips = managedDatabaseEngineChips(engines, data.EngineFilter, len(databases), func(provider string) string {
+		params := url.Values{}
+		if provider != "" {
+			params.Set("engine", provider)
+		}
+		if data.CreateOpen {
+			params.Set("create", "1")
+		}
+		if data.DatabaseQuery != "" {
+			params.Set("q", data.DatabaseQuery)
+		}
+		return databasesURL(params)
+	})
 	owners := make(map[string]bool)
 	search := strings.ToLower(data.DatabaseQuery)
 	for _, database := range databases {
+		if data.EngineFilter != "" && database.Provider != data.EngineFilter {
+			continue
+		}
 		owners[database.Owner] = true
 		if strings.Contains(strings.ToLower(database.Name), search) &&
 			(data.DatabaseOwner == "" || database.Owner == data.DatabaseOwner) {
@@ -213,9 +297,30 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 			data.SelectedUser = &users[i]
 		}
 	}
+	data.LogsEngine = application.ManagedDatabaseProviderPostgres
+	if provider, err := application.ValidateManagedDatabaseEngine(query.Get("log_engine")); err == nil {
+		for _, engine := range engines {
+			if engine.Provider == provider && engine.Provisioned {
+				data.LogsEngine = provider
+			}
+		}
+	}
+	data.LogEngineChips = managedDatabaseLogChips(engines, data.LogsEngine)
+	if logsProvider, ok := h.managedDatabases.(interface {
+		GetLogs(context.Context, string) (string, bool, error)
+	}); ok {
+		if logs, available, err := logsProvider.GetLogs(ctx, data.LogsEngine); err == nil && available {
+			data.Logs = logs
+			data.LogsAvailable = true
+		}
+	}
 	switch query.Get("dialog") {
 	case "cluster-stop", "cluster-restart":
 		data.Dialog = query.Get("dialog")
+		data.DialogEngine = application.ManagedDatabaseProviderPostgres
+		if provider, err := application.ValidateManagedDatabaseEngine(query.Get("engine")); err == nil {
+			data.DialogEngine = provider
+		}
 		data.ActiveTab = "managed-settings"
 	case "user-create":
 		data.Dialog = "user-create"
@@ -229,8 +334,13 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 		}
 	}
 	for _, database := range databases {
-		choice := managedDatabaseAccessChoice{Name: database.Name}
+		data.CreateAccessChoices = append(data.CreateAccessChoices, managedDatabaseAccessChoice{Name: database.Name, Provider: database.Provider})
+		choice := managedDatabaseAccessChoice{Name: database.Name, Provider: database.Provider}
 		if data.SelectedUser != nil {
+			// A login only has access within its own engine.
+			if database.Provider != data.SelectedUser.User.Provider {
+				continue
+			}
 			for _, name := range data.SelectedUser.Databases {
 				if name == database.Name {
 					choice.Checked = true
@@ -238,7 +348,6 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 			}
 		}
 		data.AccessChoices = append(data.AccessChoices, choice)
-		data.CreateAccessChoices = append(data.CreateAccessChoices, managedDatabaseAccessChoice{Name: database.Name})
 	}
 	selected := strings.TrimSpace(query.Get("database"))
 	if selected == "" && len(databases) > 0 {
@@ -250,6 +359,16 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 			backup := details
 			data.Backup = &backup
 			data.BackupDatabaseName = selected
+		}
+		for _, database := range databases {
+			if database.Name != selected {
+				continue
+			}
+			for _, engine := range engines {
+				if engine.Provider == database.Provider {
+					data.BackupRunning = engine.Running
+				}
+			}
 		}
 	}
 	if query.Get("dialog") == "backup-restore" || query.Get("dialog") == "backup-delete" {
@@ -319,6 +438,41 @@ func (h *Handler) loadDatabasesPageData(ctx context.Context, query url.Values) (
 	return data, nil
 }
 
+func databasesURL(params url.Values) string {
+	if len(params) == 0 {
+		return "/databases"
+	}
+	return "/databases?" + params.Encode()
+}
+
+// managedDatabaseEngineChips builds the inventory engine filter: every engine
+// with its database count, preceded by the unfiltered view.
+func managedDatabaseEngineChips(engines []application.ManagedDatabaseEngine, active string, total int, href func(provider string) string) []databaseEngineChip {
+	chips := []databaseEngineChip{{Label: "All engines", Count: total, Active: active == "", Href: href("")}}
+	for _, engine := range engines {
+		chips = append(chips, databaseEngineChip{
+			Provider: engine.Provider, Label: engine.Name(), Count: engine.Databases,
+			Active: active == engine.Provider, Href: href(engine.Provider),
+		})
+	}
+	return chips
+}
+
+// managedDatabaseLogChips lists the engines whose logs can be shown.
+func managedDatabaseLogChips(engines []application.ManagedDatabaseEngine, active string) []databaseEngineChip {
+	var chips []databaseEngineChip
+	for _, engine := range engines {
+		if !engine.Provisioned {
+			continue
+		}
+		chips = append(chips, databaseEngineChip{
+			Provider: engine.Provider, Label: engine.Name(), Active: active == engine.Provider,
+			Href: "/databases?tab=managed-logs&log_engine=" + url.QueryEscape(engine.Provider),
+		})
+	}
+	return chips
+}
+
 func (h *Handler) writeDatabasesPage(w http.ResponseWriter, r *http.Request, status int, data databasesPageData) {
 	csrfToken := h.setCSRFCookie(w, r)
 	data.CSRFToken = csrfToken
@@ -352,6 +506,17 @@ func (h *Handler) managedDatabasesProgress(jobID string) (*managedDatabasesProgr
 	progress := job.snapshot()
 	progress.StatusURL = "/databases/enable/status?id=" + url.QueryEscape(jobID)
 	progress.CloseURL = "/databases"
+	if progress.Kind == managedDatabasesJobKindCreate {
+		switch {
+		case progress.State == managedDatabasesJobStateComplete && job.hasCredentials():
+			// The credentials are handed over once, on the next page load.
+			progress.CloseURL = "/databases?created=" + url.QueryEscape(jobID)
+		case progress.State == managedDatabasesJobStateComplete:
+			progress.CloseURL = "/databases?engine=" + url.QueryEscape(progress.Provider)
+		case progress.State == managedDatabasesJobStateFailed:
+			progress.CloseURL = "/databases?create=1&engine=" + url.QueryEscape(progress.Provider)
+		}
+	}
 	return &progress, true
 }
 
@@ -377,7 +542,7 @@ func (h *Handler) enableManagedDatabases(w http.ResponseWriter, r *http.Request)
 		h.renderDatabasesEnableError(w, r, managedDatabasesUserMessage(err), http.StatusBadRequest, input)
 		return
 	}
-	job, created, err := h.managedDatabasesJobs.createUnique()
+	job, created, err := h.managedDatabasesJobs.createUnique(managedDatabasesJobKindEnable, application.ManagedDatabaseProviderPostgres, "")
 	if err != nil {
 		h.logger.Error("create managed databases job", "error", err)
 		h.renderDatabasesEnableError(w, r, "The enable operation could not be started.", http.StatusInternalServerError, input)
@@ -460,14 +625,18 @@ func (h *Handler) managedDatabasesClusterAction(action string) http.HandlerFunc 
 			http.Error(w, "This databases page expired. Submit the refreshed page to continue.", http.StatusForbidden)
 			return
 		}
-		var err error
+		provider, err := application.ValidateManagedDatabaseEngine(r.Form.Get("engine"))
+		if err != nil {
+			h.renderManagedDatabasesActionError(w, r, err, "managed-settings", "")
+			return
+		}
 		switch action {
 		case "start":
-			err = h.managedDatabases.StartCluster(r.Context())
+			err = h.managedDatabases.StartCluster(r.Context(), provider)
 		case "stop":
-			err = h.managedDatabases.StopCluster(r.Context())
+			err = h.managedDatabases.StopCluster(r.Context(), provider)
 		case "restart":
-			err = h.managedDatabases.RestartCluster(r.Context())
+			err = h.managedDatabases.RestartCluster(r.Context(), provider)
 		default:
 			http.NotFound(w, r)
 			return
@@ -494,13 +663,25 @@ func (h *Handler) createManagedDatabase(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	input := application.ManagedDatabaseCreateInput{
-		Name:  r.Form.Get("name"),
-		Owner: r.Form.Get("owner"),
+		Provider: r.Form.Get("provider"),
+		Name:     r.Form.Get("name"),
+		Owner:    r.Form.Get("owner"),
+	}
+	validated, err := application.ValidateManagedDatabaseCreateInput(input)
+	if err != nil {
+		h.renderCreateDatabaseError(w, r, input, err)
+		return
+	}
+	// The first database on MariaDB or MySQL starts that engine's container,
+	// which outlasts a request, so it runs as a job with progress.
+	if h.managedDatabasesJobs != nil && h.managedDatabaseNeedsProvisioning(r.Context(), validated.Provider) {
+		h.startManagedDatabaseCreateJob(w, r, input, validated.Provider)
+		return
 	}
 	created, err := h.managedDatabases.CreateDatabase(r.Context(), input)
 	if err != nil {
 		h.logger.Error("create managed database", "error", err)
-		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		h.renderCreateDatabaseError(w, r, input, err)
 		return
 	}
 	if created.Credentials != nil {
@@ -510,19 +691,84 @@ func (h *Handler) createManagedDatabase(w http.ResponseWriter, r *http.Request) 
 			// A dashboard read failure must not lose newly generated credentials.
 			data = databasesPageData{Enabled: true, Error: "The database was created, but the overview could not be refreshed."}
 		}
-		credentials := created.Credentials
-		// Names can contain spaces; validated names cannot contain quotes,
-		// backslashes or interpolation characters. The generated password is URL-safe.
-		env := "POSTGRES_USER=" + strconv.Quote(credentials.Username) + "\nPOSTGRES_PASSWORD=" + credentials.Password + "\n"
-		data.CreatedCredentials = &managedDatabaseCredentialsData{
-			Username: credentials.Username, Password: credentials.Password,
-			// The fixed data URL prefix and base64 encoding cannot contain active content.
-			DownloadURL: template.URL("data:text/plain;charset=utf-8;base64," + base64.StdEncoding.EncodeToString([]byte(env))),
-		}
+		data.CreatedCredentials = managedDatabaseCredentials(created.Provider, created.Credentials)
 		h.writeDatabasesPage(w, r, http.StatusOK, data)
 		return
 	}
-	http.Redirect(w, r, "/databases?database="+url.QueryEscape(strings.TrimSpace(input.Name)), http.StatusSeeOther)
+	http.Redirect(w, r, "/databases?"+url.Values{"database": {created.Name}, "engine": {created.Provider}}.Encode(), http.StatusSeeOther)
+}
+
+func (h *Handler) managedDatabaseNeedsProvisioning(ctx context.Context, provider string) bool {
+	engines, err := h.managedDatabases.GetEngines(ctx)
+	if err != nil {
+		return false
+	}
+	for _, engine := range engines {
+		if engine.Provider == provider {
+			return !engine.Provisioned
+		}
+	}
+	return false
+}
+
+func (h *Handler) startManagedDatabaseCreateJob(w http.ResponseWriter, r *http.Request, input application.ManagedDatabaseCreateInput, provider string) {
+	job, created, err := h.managedDatabasesJobs.createUnique(managedDatabasesJobKindCreate, provider, input.Name)
+	if err != nil {
+		h.logger.Error("create managed databases job", "error", err)
+		h.renderCreateDatabaseError(w, r, input, errors.New("job unavailable"))
+		return
+	}
+	if created {
+		if err := h.startTrackedJob("managed-databases-create", func(ctx context.Context) {
+			h.runManagedDatabaseCreateJob(ctx, job, input)
+		}); err != nil {
+			job.fail(err)
+			h.logger.Error("admit managed databases job", "error", err)
+			http.Error(w, "The operation system is busy. Try again shortly.", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	http.Redirect(w, r, "/databases?managed_job="+url.QueryEscape(job.id), http.StatusSeeOther)
+}
+
+// renderCreateDatabaseError shows the inline create form again with the
+// submitted values and the failure, so nothing has to be retyped.
+func (h *Handler) renderCreateDatabaseError(w http.ResponseWriter, r *http.Request, input application.ManagedDatabaseCreateInput, createErr error) {
+	provider, err := application.ValidateManagedDatabaseEngine(input.Provider)
+	if err != nil {
+		provider = application.ManagedDatabaseProviderPostgres
+	}
+	data, loadErr := h.loadDatabasesPageData(r.Context(), url.Values{"engine": {provider}, "create": {"1"}})
+	if loadErr != nil {
+		h.writeDatabasesPage(w, r, managedDatabasesStatus(createErr), databasesPageData{Error: managedDatabasesUserMessage(createErr)})
+		return
+	}
+	data.CreateOpen = true
+	data.setCreateProvider(provider)
+	data.CreateName = input.Name
+	data.CreateOwner = input.Owner
+	data.CreateError = managedDatabasesUserMessage(createErr)
+	h.writeDatabasesPage(w, r, managedDatabasesStatus(createErr), data)
+}
+
+// managedDatabaseCredentials prepares the one-time credentials dialog. The
+// download uses the environment variables of the provider's official image.
+func managedDatabaseCredentials(provider string, credentials *application.ManagedDatabaseCredentials) *managedDatabaseCredentialsData {
+	prefix := "POSTGRES"
+	switch provider {
+	case application.ManagedDatabaseProviderMariaDB:
+		prefix = "MARIADB"
+	case application.ManagedDatabaseProviderMySQL:
+		prefix = "MYSQL"
+	}
+	// Names can contain spaces; validated names cannot contain quotes,
+	// backslashes or interpolation characters. The generated password is URL-safe.
+	env := prefix + "_USER=" + strconv.Quote(credentials.Username) + "\n" + prefix + "_PASSWORD=" + credentials.Password + "\n"
+	return &managedDatabaseCredentialsData{
+		Username: credentials.Username, Password: credentials.Password,
+		// The fixed data URL prefix and base64 encoding cannot contain active content.
+		DownloadURL: template.URL("data:text/plain;charset=utf-8;base64," + base64.StdEncoding.EncodeToString([]byte(env))),
+	}
 }
 
 func (h *Handler) dropManagedDatabase(w http.ResponseWriter, r *http.Request) {
@@ -559,6 +805,7 @@ func (h *Handler) createManagedDatabaseUser(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	input := application.ManagedDatabaseUserInput{
+		Provider:  r.Form.Get("provider"),
 		Username:  r.Form.Get("username"),
 		Password:  r.Form.Get("password"),
 		Databases: r.Form["databases"],
@@ -810,14 +1057,19 @@ func (h *Handler) downloadManagedLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	stream, err := h.managedDatabases.OpenLogs(r.Context())
+	provider, err := application.ValidateManagedDatabaseEngine(r.URL.Query().Get("engine"))
+	if err != nil {
+		http.Error(w, managedDatabasesUserMessage(err), managedDatabasesStatus(err))
+		return
+	}
+	stream, err := h.managedDatabases.OpenLogs(r.Context(), provider)
 	if err != nil {
 		h.logger.Error("open managed database logs", "error", err)
 		http.Error(w, "The database logs could not be read.", http.StatusInternalServerError)
 		return
 	}
 	defer stream.Close()
-	h.writeLogDownload(w, stream, "managed-databases-logs.txt", "managed-databases")
+	h.writeLogDownload(w, stream, "managed-databases-"+provider+"-logs.txt", "managed-databases")
 }
 
 func (h *Handler) requireDatabasesSetup(w http.ResponseWriter, r *http.Request) bool {
@@ -870,6 +1122,10 @@ func managedDatabasesStatus(err error) int {
 		errors.Is(err, application.ErrManagedDatabaseAlreadyExists),
 		errors.Is(err, application.ErrManagedDatabaseUserAlreadyExists),
 		errors.Is(err, application.ErrManagedDatabaseProviderInvalid),
+		errors.Is(err, application.ErrManagedDatabaseProviderMismatch),
+		errors.Is(err, application.ErrManagedDatabaseUserTooLong),
+		errors.Is(err, application.ErrManagedDatabaseUserOwnsDatabase),
+		errors.Is(err, application.ErrManagedDatabaseWorkspaceUnsupported),
 		errors.Is(err, application.ErrBackupOperationInProgress),
 		errors.Is(err, application.ErrBackupScheduleDisabled),
 		errors.Is(err, application.ErrManagedDatabaseDefaultUserInUse):
@@ -877,7 +1133,8 @@ func managedDatabasesStatus(err error) int {
 	case errors.Is(err, application.ErrBackupSchedulerUnavailable):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, application.ErrBackupServiceNotRunning),
-		errors.Is(err, application.ErrDatabaseServiceNotRunning):
+		errors.Is(err, application.ErrDatabaseServiceNotRunning),
+		errors.Is(err, application.ErrManagedDatabaseEngineNotProvisioned):
 		return http.StatusConflict
 	default:
 		if userErr := managedDatabasesUserMessage(err); userErr != "The managed database operation failed." {
@@ -896,7 +1153,19 @@ func managedDatabasesUserMessage(err error) string {
 	case errors.Is(err, application.ErrManagedDatabasesAlreadyEnabled):
 		return "Managed databases are already enabled."
 	case errors.Is(err, application.ErrManagedDatabaseProviderInvalid):
-		return "Only Postgres is supported for now."
+		return "Choose Postgres, MariaDB, or MySQL."
+	case errors.Is(err, application.ErrManagedDatabaseProviderMismatch):
+		return "This user and database belong to different database engines."
+	case errors.Is(err, application.ErrManagedDatabaseUserTooLong):
+		return "MySQL usernames can be at most 32 characters."
+	case errors.Is(err, application.ErrManagedDatabaseUserOwnsDatabase):
+		return "This user owns a database. Drop the database first."
+	case errors.Is(err, application.ErrManagedDatabaseEngineNotProvisioned):
+		return "This database engine has not been started yet."
+	case errors.Is(err, application.ErrManagedDatabaseEngineNotReady):
+		return "The database engine did not become ready in time. Check its logs and try again."
+	case errors.Is(err, application.ErrManagedDatabaseWorkspaceUnsupported):
+		return "The SQL workspace is only available for Postgres databases."
 	case errors.Is(err, application.ErrManagedDatabaseAlreadyExists):
 		return "A database with this name already exists."
 	case errors.Is(err, application.ErrManagedDatabaseNotFound):
@@ -994,6 +1263,9 @@ func (h *Handler) renderManagedDatabasesActionError(w http.ResponseWriter, r *ht
 	}
 	if dialog == "user-create" {
 		data.UserName = r.Form.Get("username")
+		if provider, err := application.ValidateManagedDatabaseEngine(r.Form.Get("provider")); err == nil {
+			data.UserProvider = provider
+		}
 	}
 	choices := data.AccessChoices
 	if dialog == "user-create" {

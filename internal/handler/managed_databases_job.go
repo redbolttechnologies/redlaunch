@@ -19,6 +19,9 @@ const (
 	managedDatabasesJobStepFailed    = "failed"
 
 	managedDatabasesJobRetention = time.Hour
+
+	managedDatabasesJobKindEnable = "enable"
+	managedDatabasesJobKindCreate = "create"
 )
 
 type managedDatabasesProgressService interface {
@@ -34,6 +37,10 @@ type managedDatabasesJob struct {
 	mu sync.RWMutex
 
 	id           string
+	kind         string
+	provider     string
+	database     string
+	credentials  *application.ManagedDatabaseCredentials
 	state        string
 	currentStage string
 	errorStage   string
@@ -50,6 +57,9 @@ type managedDatabasesJobStep struct {
 
 type managedDatabasesProgressData struct {
 	JobID        string
+	Kind         string
+	Provider     string
+	Database     string
 	State        string
 	CurrentStage string
 	ErrorStage   string
@@ -63,15 +73,24 @@ func newManagedDatabasesJobStore() *managedDatabasesJobStore {
 	return &managedDatabasesJobStore{jobs: make(map[string]*managedDatabasesJob)}
 }
 
-func (s *managedDatabasesJobStore) createUnique() (*managedDatabasesJob, bool, error) {
+// createUnique starts a job unless one is already running; managed database
+// operations share one container lock, so a second job could only wait.
+func (s *managedDatabasesJobStore) createUnique(kind, provider, database string) (*managedDatabasesJob, bool, error) {
 	id, err := newCSRFToken()
 	if err != nil {
 		return nil, false, err
 	}
+	steps := managedDatabasesJobSteps()
+	if kind == managedDatabasesJobKindCreate {
+		steps = managedDatabasesCreateJobSteps(provider)
+	}
 	job := &managedDatabasesJob{
-		id:    id,
-		state: managedDatabasesJobStateRunning,
-		steps: managedDatabasesJobSteps(),
+		id:       id,
+		kind:     kind,
+		provider: provider,
+		database: database,
+		state:    managedDatabasesJobStateRunning,
+		steps:    steps,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,7 +144,6 @@ func (j *managedDatabasesJob) update(stage, _ string) {
 		}
 	}
 	if stepIndex == -1 {
-		j.currentStage = "Enable managed databases"
 		return
 	}
 	for index := 0; index < stepIndex; index++ {
@@ -170,7 +188,7 @@ func (j *managedDatabasesJob) fail(err error) {
 		j.errorStage = j.currentStage
 	}
 	if j.errorStage == "" {
-		j.errorStage = "Enable managed databases"
+		j.errorStage = "Prepare the request"
 	}
 	j.state = managedDatabasesJobStateFailed
 	j.errorDetail = managedDatabasesUserMessage(err)
@@ -184,11 +202,27 @@ func (j *managedDatabasesJob) snapshot() managedDatabasesProgressData {
 	copy(steps, j.steps)
 	return managedDatabasesProgressData{
 		JobID:        j.id,
+		Kind:         j.kind,
+		Provider:     j.provider,
+		Database:     j.database,
 		State:        j.state,
 		CurrentStage: j.currentStage,
 		ErrorStage:   j.errorStage,
 		ErrorDetail:  j.errorDetail,
 		Steps:        steps,
+	}
+}
+
+// managedDatabasesCreateJobSteps lists the stages of creating a database on an
+// engine that is started for the first time.
+func managedDatabasesCreateJobSteps(provider string) []managedDatabasesJobStep {
+	name := application.ManagedDatabaseProviderName(provider)
+	return []managedDatabasesJobStep{
+		{Stage: "configuration", Label: "Prepare the database request", State: managedDatabasesJobStepRemaining},
+		{Stage: "files", Label: "Write " + name + " Compose and environment files", State: managedDatabasesJobStepRemaining},
+		{Stage: "start", Label: "Start the " + name + " container", State: managedDatabasesJobStepRemaining},
+		{Stage: "ready", Label: "Wait for " + name + " to accept connections", State: managedDatabasesJobStepRemaining},
+		{Stage: "database", Label: "Create the database", State: managedDatabasesJobStepRemaining},
 	}
 }
 
@@ -219,5 +253,44 @@ func (h *Handler) runManagedDatabasesJob(ctx context.Context, job *managedDataba
 		h.logger.Error("enable managed databases", "error", managedDatabasesErrorDetail(err))
 		return
 	}
+	job.complete()
+}
+
+// setCreation keeps the one-time credentials of a created database until the
+// browser collects them. They are never written to disk or a URL.
+func (j *managedDatabasesJob) setCreation(creation application.ManagedDatabaseCreation) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.database = creation.Name
+	j.credentials = creation.Credentials
+}
+
+// takeCredentials returns the pending credentials once and forgets them.
+func (j *managedDatabasesJob) takeCredentials() *application.ManagedDatabaseCredentials {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	credentials := j.credentials
+	j.credentials = nil
+	return credentials
+}
+
+func (j *managedDatabasesJob) hasCredentials() bool {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.credentials != nil
+}
+
+func (h *Handler) runManagedDatabaseCreateJob(ctx context.Context, job *managedDatabasesJob, input application.ManagedDatabaseCreateInput) {
+	if h.managedDatabases == nil {
+		job.fail(errManagedDatabasesNotConfigured)
+		return
+	}
+	creation, err := h.managedDatabases.CreateDatabaseWithProgress(ctx, input, job.update)
+	if err != nil {
+		job.fail(err)
+		h.logger.Error("create managed database", "provider", input.Provider, "error", managedDatabasesErrorDetail(err))
+		return
+	}
+	job.setCreation(creation)
 	job.complete()
 }

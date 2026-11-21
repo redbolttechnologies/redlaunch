@@ -389,6 +389,7 @@ func New(logger *slog.Logger, dependencies ...any) (*Handler, error) {
 		"versionDigestShort":          versionDigestShort,
 		"managedBackupDownloadPath":   managedDatabasesBackupDownloadPath,
 		"databaseWorkspacePath":       managedDatabaseWorkspacePath,
+		"engineName":                  application.ManagedDatabaseProviderName,
 		"dashboardRatio":              dashboardRatio,
 		"dashboardDiskTotal":          func(d systemmetrics.Disk) uint64 { return d.TotalBytes },
 		"dashboardChartData": func(trends []service.ServiceTrend, memory bool) any {

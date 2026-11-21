@@ -420,10 +420,10 @@ only management inventory, proxy policy, and job polling.
 | `update_application_proxy_settings` | `application_id`, `settings` |
 | `get_database_cluster`, `list_databases`, `list_database_users`, `disable_database_cluster` | None |
 | `enable_database_cluster` | `version`, `default_user`, `password`; optional `provider` (PostgreSQL only) |
-| `database_cluster_action` | `action` (`start`, `stop`, or `restart`) |
-| `create_database` | `name`, `owner` (an existing database user) |
+| `database_cluster_action` | `action` (`start`, `stop`, or `restart`); optional `provider` (`postgres`, `mariadb`, or `mysql`; default `postgres`). Starting MariaDB or MySQL for the first time creates its container |
+| `create_database` | `name`, `owner` (an existing database user); optional `provider` (default `postgres`; MariaDB and MySQL must already be started) |
 | `delete_database` | `name` |
-| `create_database_user` | `username`, `password`, `databases` (an array, possibly empty) |
+| `create_database_user` | `username`, `password`, `databases` (an array, possibly empty); optional `provider` (default `postgres`) |
 | `update_database_user_password` | `username`, `password` |
 | `set_database_user_permissions` | `username`, `databases` (replaces the access list) |
 | `delete_database_user` | `username` |

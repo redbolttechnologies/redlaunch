@@ -5977,123 +5977,20 @@ h1 {
 }
 
 /* Enabled managed databases compose the existing cards, tables and dialogs. */
-.databases-enabled-card {
-  margin-top: var(--space-4);
-  padding: var(--space-4) var(--space-6);
-}
-
-.databases-enabled-card .databases-enable-hero {
-  grid-template-columns: minmax(12rem, 20%) minmax(0, 1fr) auto;
-  gap: var(--space-6);
-}
-
-.databases-enabled-card .databases-enable-visual img {
-  width: min(100%, 15rem);
-}
-
-.databases-enabled-card .databases-enable-copy {
-  gap: var(--space-2);
-}
-
-.databases-enabled-card .databases-enable-copy h2 {
-  font-size: 1.5rem;
-}
-
-.databases-enabled-card .databases-enable-description,
-.databases-enabled-card .databases-docs-link {
-  font-size: 0.875rem;
-}
-
-.databases-enabled-card .databases-enable-actions {
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
-
-.databases-page .databases-enabled-card .service-status-running .status-dot {
-  background: hsl(var(--success));
-}
-
-.databases-enabled-card .databases-enable-hint {
-  max-width: none;
-  font-size: 0.75rem;
-}
-
-.databases-enabled-card .databases-enable-button,
+.databases-page .page-heading .databases-enable-button,
 .databases-page .databases-management-widget .databases-enable-button,
 .databases-page .service-tab-heading .databases-enable-button,
 .databases-page .application-dialog .databases-enable-button,
+.databases-page .databases-create .databases-enable-button,
 .databases-page .service-widget-empty .databases-enable-button {
   min-height: 2.25rem;
   padding: 0 var(--space-4);
   font-size: 0.875rem;
 }
 
-.databases-enabled-switch {
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius);
-  padding: var(--space-3);
-}
-
-.databases-enabled-switch .switch-visual {
-  border-color: hsl(var(--brand));
-  background: hsl(var(--brand));
-}
-
-.databases-enabled-switch .switch-visual > span {
-  background: hsl(var(--brand-foreground));
-  transform: translateX(var(--space-5));
-}
-
-.databases-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin-top: var(--space-4);
-}
-
-.databases-stat {
-  display: flex;
-  align-items: center;
-  gap: var(--space-5);
-  padding: var(--space-4) var(--space-5);
-}
-
-.databases-stat .databases-feature-icon {
-  width: 3rem;
-  height: 3rem;
-}
-
-.databases-stat h3 {
-  margin: 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.8125rem;
-  font-weight: 500;
-}
-
-.databases-stat-value {
-  margin: var(--space-1) 0 0;
-  font-size: 1.25rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-}
-
-.databases-stat .dashboard-metric-help {
-  margin-top: var(--space-1);
-}
-
-.databases-engine-icon {
-  color: hsl(var(--primary));
-  background: hsl(var(--muted));
-}
-
-.databases-running-icon {
-  color: hsl(var(--success));
-  background: hsl(var(--success) / 0.1);
-}
-
-.databases-neutral-icon {
-  color: hsl(var(--muted-foreground));
-  background: hsl(var(--muted));
+.databases-page .page-heading .databases-enable-button[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .databases-page .application-tabs {
@@ -6214,6 +6111,167 @@ h1 {
   white-space: nowrap;
 }
 
+.databases-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.databases-inventory-toolbar {
+  display: grid;
+  justify-content: stretch;
+  gap: var(--space-3);
+}
+
+.databases-inventory-toolbar .databases-filters {
+  justify-content: space-between;
+}
+
+.databases-inventory-toolbar .databases-filters input[type="search"] {
+  flex: 1;
+}
+
+.databases-scope-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.databases-log-engines {
+  margin-bottom: var(--space-4);
+}
+
+.databases-scope-link {
+  width: auto;
+  min-height: 1.875rem;
+  padding: var(--space-1) var(--space-2);
+  border-color: transparent;
+  color: hsl(var(--foreground));
+  background: transparent;
+  font-size: 0.75rem;
+}
+
+.databases-scope-link:hover {
+  background: hsl(var(--accent) / 0.6);
+}
+
+.databases-scope-link[aria-current="true"] {
+  border-color: hsl(var(--border));
+  background: hsl(var(--accent));
+  font-weight: 600;
+}
+
+.databases-scope-link span {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+}
+
+.databases-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.databases-table-footer {
+  margin-top: var(--space-3);
+}
+
+.databases-engine-rail .service-widget-header {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.databases-engine-list {
+  padding: 0 var(--space-5);
+}
+
+.databases-engine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+.databases-engine-row + .databases-engine-row {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.databases-engine-row h3 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.databases-engine-row p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.databases-engine-enabled {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+}
+
+.databases-create .application-dialog-panel {
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+
+.databases-create .application-dialog-header p {
+  max-width: none;
+}
+
+.databases-create-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.databases-create .field-help {
+  margin: 0;
+}
+
+.databases-create .application-form {
+  gap: var(--space-3);
+}
+
+.databases-create .application-form-actions {
+  margin: 0;
+}
+
+.databases-engine-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.35);
+  font-size: 0.75rem;
+}
+
+.databases-engine-note svg {
+  margin-top: 2px;
+}
+
 @media (max-width: 80rem) {
   .databases-overview-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -6221,36 +6279,41 @@ h1 {
 }
 
 @media (max-width: 64rem) {
-  .databases-enabled-card .databases-enable-hero {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .databases-split {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .databases-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .databases-engine-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .databases-engine-row + .databases-engine-row {
+    border-top: 0;
+  }
+
+  .databases-engine-row {
+    flex-wrap: wrap;
   }
 }
 
 @media (max-width: 640px) {
-  .databases-enabled-card,
-  .databases-stat {
-    padding: var(--space-4);
-  }
-
-  .databases-stat {
-    gap: var(--space-3);
-  }
-
-  .databases-stat .databases-feature-icon {
-    display: none;
-  }
-
-  .databases-enabled-card .databases-enable-hero {
+  .databases-create-fields,
+  .databases-engine-list {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .databases-enabled-switch {
-    grid-row: 1;
-    justify-self: end;
+  .databases-engine-row + .databases-engine-row {
+    border-top: 1px solid hsl(var(--border));
+  }
+
+  .databases-engine-row {
+    padding-block: var(--space-2);
+  }
+
+  .databases-create .application-dialog-panel {
+    padding: var(--space-4);
   }
 }
 
@@ -6563,3 +6626,13 @@ h1 {
 .dashboard-page .dashboard-volumes-table tbody td code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .dashboard-page .dashboard-volumes-table tbody td { overflow: hidden; text-overflow: ellipsis; }
+
+.databases-page .service-widget-empty {
+  align-content: center;
+  gap: var(--space-2);
+}
+
+.databases-settings-grid + .databases-settings-grid,
+.databases-settings-grid + .application-danger-zone {
+  margin-top: var(--space-4);
+}

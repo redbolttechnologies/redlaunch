@@ -344,23 +344,23 @@ func (h *Handler) executeManagement(ctx context.Context, op string, a applicatio
 		case "database_cluster_action":
 			switch a.Action {
 			case "start":
-				return success, db.StartCluster(ctx)
+				return success, db.StartCluster(ctx, a.Provider)
 			case "stop":
-				return success, db.StopCluster(ctx)
+				return success, db.StopCluster(ctx, a.Provider)
 			case "restart":
-				return success, db.RestartCluster(ctx)
+				return success, db.RestartCluster(ctx, a.Provider)
 			}
 		case "list_databases":
 			return db.ListDatabases(ctx)
 		case "create_database":
-			result, err := db.CreateDatabase(ctx, application.ManagedDatabaseCreateInput{Name: a.Name, Owner: a.Owner, RequireExistingOwner: true})
+			result, err := db.CreateDatabase(ctx, application.ManagedDatabaseCreateInput{Provider: a.Provider, Name: a.Name, Owner: a.Owner, RequireExistingOwner: true})
 			return result.ManagedDatabase, err
 		case "delete_database":
 			return success, db.DropDatabase(ctx, a.Name)
 		case "list_database_users":
 			return db.ListUsers(ctx)
 		case "create_database_user":
-			return success, db.CreateUser(ctx, application.ManagedDatabaseUserInput{Username: a.Username, Password: a.Password, Databases: a.Databases})
+			return success, db.CreateUser(ctx, application.ManagedDatabaseUserInput{Provider: a.Provider, Username: a.Username, Password: a.Password, Databases: a.Databases})
 		case "update_database_user_password":
 			return success, db.UpdateUserPassword(ctx, a.Username, a.Password)
 		case "set_database_user_permissions":

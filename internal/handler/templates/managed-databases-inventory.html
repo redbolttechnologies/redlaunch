@@ -1,0 +1,122 @@
+{{define "managed-databases-inventory.html"}}
+{{if .CreateOpen}}{{template "managed-database-create-form.html" .}}{{end}}
+<div class="databases-split">
+  <section class="service-widget" aria-labelledby="managed-databases-title">
+    <header class="service-widget-header databases-inventory-toolbar">
+      <div class="service-widget-heading">
+        <h2 id="managed-databases-title">Database inventory</h2>
+        <p>Manage databases and their owners.</p>
+      </div>
+      <nav class="databases-scope-bar" aria-label="Filter by engine">
+        {{range .EngineChips}}<a class="button databases-scope-link" href="{{.Href}}"{{if .Active}} aria-current="true"{{end}}>{{.Label}} <span>{{.Count}}</span></a>{{end}}
+      </nav>
+      <form class="databases-filters" method="get" action="/databases" role="search" aria-label="Search databases">
+        {{if .EngineFilter}}<input type="hidden" name="engine" value="{{.EngineFilter}}">{{end}}
+        {{if .CreateOpen}}<input type="hidden" name="create" value="1">{{end}}
+        <div class="field"><label class="sr-only" for="managed-database-search">Search databases</label><input id="managed-database-search" type="search" name="q" value="{{.DatabaseQuery}}" placeholder="Search databases…"></div>
+        <div class="field"><label class="sr-only" for="managed-database-owner-filter">Filter by owner</label><select id="managed-database-owner-filter" name="owner"><option value="">All owners</option>{{range .DatabaseOwners}}<option value="{{.}}"{{if eq . $.DatabaseOwner}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+        <button class="button button-secondary" type="submit">Filter</button>
+      </form>
+    </header>
+    <div class="service-widget-body">
+      {{if .VisibleDatabases}}
+      <div class="service-environment-table-wrap">
+        <table class="service-environment-table">
+          <caption class="sr-only">Managed databases</caption>
+          <thead>
+            <tr><th scope="col">Name</th><th scope="col">Engine</th><th scope="col">Owner</th><th scope="col">Created</th><th scope="col">Actions</th></tr>
+          </thead>
+          <tbody>
+            {{range .VisibleDatabases}}
+            <tr>
+              <th scope="row">{{if eq .Provider "postgres"}}<a class="databases-name" href="{{databaseWorkspacePath .Name}}">{{template "managed-database-icon"}}<code>{{.Name}}</code></a>{{else}}<span class="databases-name">{{template "managed-database-icon"}}<code>{{.Name}}</code></span>{{end}}</th>
+              <td><span class="databases-engine-badge">{{engineName .Provider}}</span></td>
+              <td><code>{{.Owner}}</code></td>
+              <td>{{if .CreatedAt.IsZero}}—{{else}}<time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.CreatedAt.Format "Jan 02, 2006"}}</time>{{end}}</td>
+              <td class="databases-row-actions">
+                <a class="button button-secondary" href="/databases?dialog=database-connection&amp;database={{.Name}}" aria-label="View connection string for {{.Name}}" aria-haspopup="dialog">{{template "managed-link-icon"}}<span>View connection string</span></a>
+                <a class="icon-button" href="/databases?tab=managed-backups&amp;database={{.Name}}" aria-label="Backups for {{.Name}}" title="Backups">{{template "managed-backup-icon"}}</a>
+                <form method="post" action="/databases/drop" data-managed-drop>
+                  <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                  <input type="hidden" name="name" value="{{.Name}}">
+                  <button class="icon-button databases-drop-button" type="submit" aria-label="Drop database {{.Name}}" title="Drop database">{{template "managed-trash-icon"}}</button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <p class="field-help databases-table-footer">{{len .VisibleDatabases}} {{if eq (len .VisibleDatabases) 1}}database{{else}}databases{{end}}</p>
+      {{else}}
+      <div class="service-widget-empty" role="status">
+        {{if or .DatabaseQuery .DatabaseOwner}}<p>No matching databases</p><p class="field-help">Try another search or filter.</p><a class="button button-secondary" href="/databases{{if .EngineFilter}}?engine={{.EngineFilter}}{{end}}">Clear filters</a>
+        {{else}}<p><strong>No {{if .EngineFilter}}{{engineName .EngineFilter}} {{end}}databases yet</strong></p><p class="field-help">Create your first {{if .EngineFilter}}{{engineName .EngineFilter}} {{end}}database to get started.</p>{{if not .CreateOpen}}<a class="button button-primary databases-enable-button" href="/databases?create=1{{if .EngineFilter}}&amp;engine={{.EngineFilter}}{{end}}">Create database</a>{{end}}{{end}}
+      </div>
+      {{end}}
+    </div>
+  </section>
+  {{template "managed-database-engines.html" .}}
+</div>
+{{end}}
+
+{{define "managed-database-create-form.html"}}
+<section class="service-widget databases-create" aria-labelledby="managed-database-create-title">
+  <div class="application-dialog-panel">
+    <header class="application-dialog-header">
+      <div><h2 id="managed-database-create-title">Create database</h2><p>Choose the engine your application uses.</p></div>
+      <a class="icon-button" href="/databases{{if .EngineFilter}}?engine={{.EngineFilter}}{{end}}" aria-label="Close the create database form">{{template "managed-close-icon"}}</a>
+    </header>
+    {{if .CreateError}}<div class="application-alert application-dialog-alert" role="alert"><span>{{.CreateError}}</span></div>{{end}}
+    <form class="application-form" method="post" action="/databases/create" data-managed-create-form>
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="databases-create-fields">
+        <div class="field">
+          <label for="managed-db-provider">Database engine</label>
+          <select id="managed-db-provider" name="provider" aria-describedby="managed-db-engine-help" data-managed-engine-select autofocus>
+            {{range .CreateOptions}}<option value="{{.Provider}}" data-note="{{.Note}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+        </div>
+        <div class="field">
+          <label for="managed-db-name">Database name</label>
+          <input id="managed-db-name" name="name" type="text" maxlength="63"{{if .CreateName}} value="{{.CreateName}}"{{end}} placeholder="e.g. billing_api" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="managed-db-owner">Username <small>Optional</small></label>
+          <input id="managed-db-owner" name="owner" type="text" maxlength="63"{{if .CreateOwner}} value="{{.CreateOwner}}"{{end}} placeholder="Defaults to database name" autocomplete="off" aria-describedby="managed-db-owner-help">
+        </div>
+      </div>
+      <p class="field-help" id="managed-db-owner-help">Redlaunch generates a password for new users, with access to this database only. Existing users keep their credentials and permissions.</p>
+      <p class="databases-engine-note" id="managed-db-engine-help" role="status">{{template "managed-info-icon"}}<span data-managed-engine-note>{{.CreateNote}}</span></p>
+      <footer class="application-form-actions">
+        <a class="button button-secondary" href="/databases{{if .EngineFilter}}?engine={{.EngineFilter}}{{end}}">Cancel</a>
+        <button class="button button-primary databases-enable-button" type="submit" data-managed-create-submit>Create database</button>
+      </footer>
+    </form>
+  </div>
+</section>
+{{end}}
+
+{{define "managed-database-engines.html"}}
+<aside class="service-widget databases-engine-rail" aria-labelledby="managed-engines-title">
+  <header class="service-widget-header"><div class="service-widget-heading"><h2 id="managed-engines-title">Database engines</h2></div></header>
+  <div class="databases-engine-list">
+    {{range .Engines}}
+    <div class="databases-engine-row">
+      <div><h3>{{.Name}} <code>{{.Version}}</code></h3><p>{{if .Provisioned}}{{.Databases}} {{if eq .Databases 1}}database{{else}}databases{{end}}{{else}}Starts on first use{{end}}</p></div>
+      {{if not .Provisioned}}<span class="service-status-badge service-status-neutral"><span class="status-dot" aria-hidden="true"></span>Available</span>
+      {{else if .Running}}<span class="service-status-badge service-status-running"><span class="status-dot" aria-hidden="true"></span>Running</span>
+      {{else if serviceIsStopped .Status}}<span class="service-status-badge service-status-neutral"><span class="status-dot" aria-hidden="true"></span>Stopped</span>
+      {{else}}<span class="service-status-badge service-status-warning"><span class="status-dot" aria-hidden="true"></span>Unavailable</span>{{end}}
+    </div>
+    {{end}}
+  </div>
+  <div class="databases-engine-enabled">Managed databases <span class="service-status-badge service-status-running"><span class="status-dot" aria-hidden="true"></span>Enabled</span></div>
+</aside>
+{{end}}
+
+{{define "managed-link-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>{{end}}
+
+{{define "managed-close-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"></path></svg>{{end}}
+
+{{define "managed-info-icon"}}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg>{{end}}

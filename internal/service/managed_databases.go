@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +24,11 @@ const (
 	managedDatabaseVolumeKey      = "data"
 	managedDatabaseVolumeName     = "redbolt-databases-data"
 	managedDatabaseProjectLockKey = "managed-databases"
+	managedCleanupTimeout         = 10 * time.Second
+	// managedProvisionTimeout bounds first-use provisioning of an engine:
+	// image pull, database initialization, and the first successful query.
+	managedProvisionTimeout = 10 * time.Minute
+	managedReadyInterval    = 2 * time.Second
 )
 
 // ManagedDatabaseRepository is the persistence capability required by the
@@ -32,6 +36,8 @@ const (
 type ManagedDatabaseRepository interface {
 	GetManagedDatabaseCluster(context.Context) (application.ManagedDatabaseCluster, error)
 	SaveManagedDatabaseCluster(context.Context, application.ManagedDatabaseCluster) error
+	GetManagedDatabaseEngine(context.Context, string) (application.ManagedDatabaseEngine, error)
+	SaveManagedDatabaseEngine(context.Context, application.ManagedDatabaseEngine) error
 	ListManagedDatabases(context.Context) ([]application.ManagedDatabase, error)
 	GetManagedDatabase(context.Context, string) (application.ManagedDatabase, error)
 	CreateManagedDatabase(context.Context, application.ManagedDatabase) (application.ManagedDatabase, error)
@@ -39,7 +45,7 @@ type ManagedDatabaseRepository interface {
 	DeleteManagedDatabase(context.Context, string) error
 	ListManagedDatabaseUsers(context.Context) ([]application.ManagedDatabaseUserDetail, error)
 	GetManagedDatabaseUser(context.Context, string) (application.ManagedDatabaseUserDetail, error)
-	CreateManagedDatabaseUser(context.Context, string, []string) error
+	CreateManagedDatabaseUser(context.Context, string, string, []string) error
 	SetManagedDatabaseGrants(context.Context, string, []string) error
 	DeleteManagedDatabaseUser(context.Context, string) error
 	GetManagedBackupSchedule(context.Context, int64) (application.BackupSchedule, error)
@@ -52,7 +58,7 @@ type ManagedDatabaseRepository interface {
 	ReleaseManagedBackupLease(context.Context, int64, string) error
 }
 
-// ManagedDatabaseRunner performs Docker operations for the shared cluster.
+// ManagedDatabaseRunner performs Docker operations for the shared containers.
 type ManagedDatabaseRunner interface {
 	EnsureNetwork(context.Context, string) error
 	Up(ctx context.Context, projectDir string) error
@@ -61,6 +67,9 @@ type ManagedDatabaseRunner interface {
 	BackupPostgreSQL(ctx context.Context, projectDir, serviceName, destination string) error
 	RestorePostgreSQL(ctx context.Context, projectDir, serviceName, source string) error
 	ExecPostgresSQL(ctx context.Context, projectDir, serviceName, sql string) (string, error)
+	ExecMySQLSQL(ctx context.Context, projectDir, serviceName string, flavor compose.MySQLFlavor, sql string) (string, error)
+	BackupMySQL(ctx context.Context, projectDir, serviceName string, flavor compose.MySQLFlavor, database, destination string) error
+	RestoreMySQL(ctx context.Context, projectDir, serviceName string, flavor compose.MySQLFlavor, source string) error
 	Start(ctx context.Context, projectDir, serviceName string) error
 	Stop(ctx context.Context, projectDir, serviceName string) error
 	Restart(ctx context.Context, projectDir, serviceName string) error
@@ -81,8 +90,8 @@ type ManagedDatabaseConfig struct {
 	Clock            func() time.Time
 }
 
-// ManagedDatabases coordinates the server-level PostgreSQL cluster, logical
-// databases, roles, and per-database backups.
+// ManagedDatabases coordinates the server-level Postgres, MariaDB, and MySQL
+// containers, logical databases, logins, and per-database backups.
 type ManagedDatabases struct {
 	repository       ManagedDatabaseRepository
 	projectsRoot     string
@@ -94,6 +103,7 @@ type ManagedDatabases struct {
 	scheduler        BackupScheduler
 	clock            func() time.Time
 	projectLocks     *projectLockManager
+	readyInterval    time.Duration
 	mu               sync.Mutex
 }
 
@@ -154,6 +164,7 @@ func NewManagedDatabases(repository ManagedDatabaseRepository, config ManagedDat
 		scheduler:        scheduler,
 		clock:            clock,
 		projectLocks:     newProjectLockManager(),
+		readyInterval:    managedReadyInterval,
 	}, nil
 }
 
@@ -256,6 +267,7 @@ func (s *ManagedDatabases) EnableClusterWithProgress(ctx context.Context, input 
 			if _, err := s.repository.CreateManagedDatabase(ctx, application.ManagedDatabase{
 				Name:      validated.DefaultUser,
 				Owner:     validated.DefaultUser,
+				Provider:  application.ManagedDatabaseProviderPostgres,
 				CreatedAt: now,
 			}); err != nil && !errors.Is(err, application.ErrManagedDatabaseAlreadyExists) {
 				return fmt.Errorf("record default managed database: %w", err)
@@ -266,7 +278,7 @@ func (s *ManagedDatabases) EnableClusterWithProgress(ctx context.Context, input 
 	}
 	if _, err := s.repository.GetManagedDatabaseUser(ctx, validated.DefaultUser); err != nil {
 		if errors.Is(err, application.ErrManagedDatabaseUserNotFound) {
-			if err := s.repository.CreateManagedDatabaseUser(ctx, validated.DefaultUser, []string{validated.DefaultUser}); err != nil && !errors.Is(err, application.ErrManagedDatabaseUserAlreadyExists) {
+			if err := s.repository.CreateManagedDatabaseUser(ctx, validated.DefaultUser, application.ManagedDatabaseProviderPostgres, []string{validated.DefaultUser}); err != nil && !errors.Is(err, application.ErrManagedDatabaseUserAlreadyExists) {
 				return fmt.Errorf("record default managed database user: %w", err)
 			}
 		} else {
@@ -281,8 +293,8 @@ func (s *ManagedDatabases) EnableClusterWithProgress(ctx context.Context, input 
 	return nil
 }
 
-// DisableCluster stops the shared container but retains data, files, and
-// metadata. Backup files remain operator-managed artifacts.
+// DisableCluster stops every provisioned container but retains data, files,
+// and metadata. Backup files remain operator-managed artifacts.
 func (s *ManagedDatabases) DisableCluster(ctx context.Context) error {
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
@@ -297,12 +309,22 @@ func (s *ManagedDatabases) DisableCluster(ctx context.Context) error {
 	if !cluster.Enabled {
 		return application.ErrManagedDatabasesDisabled
 	}
-	directory, err := s.managedDirectory()
-	if err != nil {
-		return err
-	}
-	if err := s.runner.Stop(ctx, directory, managedDatabaseServiceName); err != nil {
-		return fmt.Errorf("stop managed databases: %w", sanitizeManagedError(err))
+	for _, provider := range application.ManagedDatabaseProviders {
+		engine := managedEngines[provider]
+		provisioned, err := s.engineProvisioned(ctx, engine)
+		if err != nil {
+			return err
+		}
+		if !provisioned {
+			continue
+		}
+		directory, err := s.engineDirectory(engine)
+		if err != nil {
+			return err
+		}
+		if err := s.runner.Stop(ctx, directory, engine.service); err != nil {
+			return fmt.Errorf("stop managed databases: %w", sanitizeManagedError(err))
+		}
 	}
 	cluster.Enabled = false
 	cluster.UpdatedAt = time.Now().UTC()
@@ -312,12 +334,21 @@ func (s *ManagedDatabases) DisableCluster(ctx context.Context) error {
 	return nil
 }
 
-// StartCluster starts the shared container when it is enabled.
-func (s *ManagedDatabases) StartCluster(ctx context.Context) error {
-	if err := s.requireEnabled(ctx); err != nil {
-		return err
+// StartCluster starts one provider's shared container when managed databases
+// are enabled. Starting MariaDB or MySQL for the first time provisions it, the
+// same as creating its first database would.
+func (s *ManagedDatabases) StartCluster(ctx context.Context, provider string) error {
+	engine, directory, err := s.provisionedEngine(ctx, provider)
+	if errors.Is(err, application.ErrManagedDatabaseEngineNotProvisioned) {
+		lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
+		if err != nil {
+			return err
+		}
+		defer lease.release()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), managedProvisionTimeout)
+		defer cancel()
+		return s.provisionEngine(ctx, engine, nil)
 	}
-	directory, err := s.managedDirectory()
 	if err != nil {
 		return err
 	}
@@ -332,98 +363,128 @@ func (s *ManagedDatabases) StartCluster(ctx context.Context) error {
 	return nil
 }
 
-// StopCluster stops the shared container while keeping it enabled.
-func (s *ManagedDatabases) StopCluster(ctx context.Context) error {
-	if err := s.requireEnabled(ctx); err != nil {
-		return err
-	}
-	directory, err := s.managedDirectory()
+// StopCluster stops one provider's shared container while keeping it enabled.
+func (s *ManagedDatabases) StopCluster(ctx context.Context, provider string) error {
+	engine, directory, err := s.provisionedEngine(ctx, provider)
 	if err != nil {
 		return err
 	}
-	if err := s.runner.Stop(ctx, directory, managedDatabaseServiceName); err != nil {
+	if err := s.runner.Stop(ctx, directory, engine.service); err != nil {
 		return fmt.Errorf("stop managed databases: %w", sanitizeManagedError(err))
 	}
 	return nil
 }
 
-// RestartCluster restarts the shared container while keeping it enabled.
-func (s *ManagedDatabases) RestartCluster(ctx context.Context) error {
-	if err := s.requireEnabled(ctx); err != nil {
-		return err
-	}
-	directory, err := s.managedDirectory()
+// RestartCluster restarts one provider's shared container while keeping it
+// enabled.
+func (s *ManagedDatabases) RestartCluster(ctx context.Context, provider string) error {
+	engine, directory, err := s.provisionedEngine(ctx, provider)
 	if err != nil {
 		return err
 	}
-	if err := s.runner.Restart(ctx, directory, managedDatabaseServiceName); err != nil {
+	if err := s.runner.Restart(ctx, directory, engine.service); err != nil {
 		return fmt.Errorf("restart managed databases: %w", sanitizeManagedError(err))
 	}
 	return nil
 }
 
-// GetStatus returns best-effort runtime state for the shared container.
-func (s *ManagedDatabases) GetStatus(ctx context.Context) (application.ManagedDatabaseStatus, error) {
-	var status application.ManagedDatabaseStatus
-	if err := s.requireEnabled(ctx); err != nil {
-		return status, err
-	}
-	directory, err := s.managedDirectory()
+// GetEngines returns every provider with its best-effort runtime state and the
+// number of databases it hosts. Providers that were never provisioned report
+// their default version so the UI can announce what will be started.
+func (s *ManagedDatabases) GetEngines(ctx context.Context) ([]application.ManagedDatabaseEngine, error) {
+	cluster, err := s.repository.GetManagedDatabaseCluster(ctx)
 	if err != nil {
-		return status, err
+		return nil, err
 	}
-	running, err := s.runner.IsServiceRunning(ctx, directory, managedDatabaseServiceName)
-	if err == nil {
-		status.Running = running
+	if !cluster.Enabled {
+		return nil, application.ErrManagedDatabasesDisabled
+	}
+	databases, err := s.repository.ListManagedDatabases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	engines := make([]application.ManagedDatabaseEngine, 0, len(application.ManagedDatabaseProviders))
+	for _, provider := range application.ManagedDatabaseProviders {
+		spec := managedEngines[provider]
+		engine := application.ManagedDatabaseEngine{Provider: provider, Version: spec.defaultVersion}
+		if spec.lazy {
+			stored, err := s.repository.GetManagedDatabaseEngine(ctx, provider)
+			if err != nil {
+				return nil, err
+			}
+			if stored.Provisioned {
+				engine.Provisioned = true
+				engine.Version = stored.Version
+				engine.CreatedAt = stored.CreatedAt
+			}
+		} else {
+			engine.Provisioned = true
+			engine.Version = cluster.Version
+			engine.CreatedAt = cluster.CreatedAt
+		}
+		for _, database := range databases {
+			if database.Provider == provider {
+				engine.Databases++
+			}
+		}
+		if engine.Provisioned {
+			s.readEngineRuntime(ctx, spec, &engine)
+		}
+		engines = append(engines, engine)
+	}
+	return engines, nil
+}
+
+// readEngineRuntime fills the best-effort Docker fields of one engine.
+func (s *ManagedDatabases) readEngineRuntime(ctx context.Context, spec managedEngine, engine *application.ManagedDatabaseEngine) {
+	directory, err := s.engineDirectory(spec)
+	if err != nil {
+		return
+	}
+	if running, err := s.runner.IsServiceRunning(ctx, directory, spec.service); err == nil {
+		engine.Running = running
 	}
 	runtime, err := s.runner.ListServices(ctx, directory)
 	if err != nil {
-		if status.Running {
-			status.Status = "running"
+		if engine.Running {
+			engine.Status = "running"
 		}
-		return status, nil
+		return
 	}
 	for _, item := range runtime {
-		if item.ServiceName != managedDatabaseServiceName {
+		if item.ServiceName != spec.service {
 			continue
 		}
-		status.ContainerName = item.ContainerName
-		status.Status = item.Status
-		status.ImageName = item.Image
-		if status.Status == "" && status.Running {
-			status.Status = "running"
+		engine.ContainerName = item.ContainerName
+		engine.Status = item.Status
+		engine.ImageName = item.Image
+		if engine.Status == "" && engine.Running {
+			engine.Status = "running"
 		}
 		break
 	}
-	return status, nil
 }
 
-// GetLogs returns the recent shared container logs.
-func (s *ManagedDatabases) GetLogs(ctx context.Context) (string, bool, error) {
-	if err := s.requireEnabled(ctx); err != nil {
-		return "", false, err
-	}
-	directory, err := s.managedDirectory()
+// GetLogs returns the recent container logs of one provider.
+func (s *ManagedDatabases) GetLogs(ctx context.Context, provider string) (string, bool, error) {
+	engine, directory, err := s.provisionedEngine(ctx, provider)
 	if err != nil {
 		return "", false, err
 	}
-	logs, err := s.runner.Logs(ctx, directory, managedDatabaseServiceName, application.ServiceLogLineLimit)
+	logs, err := s.runner.Logs(ctx, directory, engine.service, application.ServiceLogLineLimit)
 	if err != nil {
 		return "", false, nil
 	}
 	return logs, true, nil
 }
 
-// OpenLogs opens a bounded log stream for downloads.
-func (s *ManagedDatabases) OpenLogs(ctx context.Context) (io.ReadCloser, error) {
-	if err := s.requireEnabled(ctx); err != nil {
-		return nil, err
-	}
-	directory, err := s.managedDirectory()
+// OpenLogs opens a bounded log stream of one provider for downloads.
+func (s *ManagedDatabases) OpenLogs(ctx context.Context, provider string) (io.ReadCloser, error) {
+	engine, directory, err := s.provisionedEngine(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
-	return s.runner.OpenLogs(ctx, directory, managedDatabaseServiceName)
+	return s.runner.OpenLogs(ctx, directory, engine.service)
 }
 
 // ListDatabases returns logical databases in name order.
@@ -434,24 +495,27 @@ func (s *ManagedDatabases) ListDatabases(ctx context.Context) ([]application.Man
 	return s.repository.ListManagedDatabases(ctx)
 }
 
-// CreateDatabase creates a database and creates its owner when the role is absent.
+// CreateDatabase creates a database and creates its owner when the login is absent.
 func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application.ManagedDatabaseCreateInput) (application.ManagedDatabaseCreation, error) {
+	return s.CreateDatabaseWithProgress(ctx, input, nil)
+}
+
+// CreateDatabaseWithProgress creates a database. MariaDB and MySQL containers
+// are provisioned first when this is their first database, which can take
+// minutes, so the callback reports the stages. The callback is synchronous and
+// may be nil.
+func (s *ManagedDatabases) CreateDatabaseWithProgress(ctx context.Context, input application.ManagedDatabaseCreateInput, progress func(stage, message string)) (application.ManagedDatabaseCreation, error) {
 	var result application.ManagedDatabaseCreation
+	reportManagedProgress(progress, "configuration", "Preparing the database request")
 	if err := s.requireEnabled(ctx); err != nil {
 		return result, err
 	}
-	name, err := application.ValidateManagedDatabaseName(input.Name)
+	validated, err := application.ValidateManagedDatabaseCreateInput(input)
 	if err != nil {
 		return result, err
 	}
-	owner := strings.TrimSpace(input.Owner)
-	if owner == "" {
-		owner = name
-	}
-	owner, err = application.ValidateManagedDatabaseUsername(owner)
-	if err != nil {
-		return result, err
-	}
+	name, owner := validated.Name, validated.Owner
+	engine := managedEngines[validated.Provider]
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
 		return result, err
@@ -462,41 +526,64 @@ func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application
 	} else if !errors.Is(err, application.ErrManagedDatabaseNotFound) {
 		return result, err
 	}
+	if user, err := s.repository.GetManagedDatabaseUser(ctx, owner); err == nil {
+		if user.User.Provider != engine.provider {
+			return result, application.ErrManagedDatabaseProviderMismatch
+		}
+	} else if !errors.Is(err, application.ErrManagedDatabaseUserNotFound) {
+		return result, err
+	}
 
-	directory, err := s.managedDirectory()
+	provisioned, err := s.engineProvisioned(ctx, engine)
 	if err != nil {
 		return result, err
 	}
-	running, err := s.runner.IsServiceRunning(ctx, directory, managedDatabaseServiceName)
+	if !provisioned {
+		if validated.RequireExistingOwner {
+			// Machine requests cannot name an existing login on an engine that
+			// has none yet; they start the engine explicitly instead.
+			return result, application.ErrManagedDatabaseEngineNotProvisioned
+		}
+		// Provisioning must finish even when the client disconnects, otherwise
+		// a half-initialized volume would be left behind.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), managedProvisionTimeout)
+		defer cancel()
+		if err := s.provisionEngine(ctx, engine, progress); err != nil {
+			return result, err
+		}
+	}
+	reportManagedProgress(progress, "database", "Creating the database")
+	directory, err := s.engineDirectory(engine)
+	if err != nil {
+		return result, err
+	}
+	running, err := s.runner.IsServiceRunning(ctx, directory, engine.service)
 	if err != nil {
 		return result, fmt.Errorf("inspect managed database state: %w", err)
 	}
 	if !running {
 		return result, application.ErrDatabaseServiceNotRunning
 	}
-	// Consult Postgres rather than metadata: a role may have been created externally.
-	exists, err := s.execSQL(ctx, directory, "SELECT 1 FROM pg_roles WHERE rolname = "+postgresQuoteLiteral(owner))
+	run := engine.run(s.runner, directory)
+	exists, err := engine.driver.userExists(ctx, run, owner)
 	if err != nil {
-		return result, fmt.Errorf("inspect managed database user: %w", sanitizeManagedError(err))
+		return result, err
 	}
 	password := ""
-	if strings.TrimSpace(exists) != "1" {
-		if input.RequireExistingOwner {
+	if !exists {
+		if validated.RequireExistingOwner {
 			return result, application.ErrManagedDatabaseUserNotFound
 		}
 		password, err = generateDatabasePassword()
 		if err != nil {
 			return result, fmt.Errorf("generate database user password: %w", err)
 		}
-		// Snapshot PUBLIC access for existing roles before removing it. New roles
-		// then need explicit database access, while existing roles retain theirs.
-		statement := "BEGIN; " + restrictManagedDatabasePublicAccess + " CREATE ROLE " + postgresQuoteIdentifier(owner) +
-			" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD " + postgresQuoteLiteral(password) + "; COMMIT;"
-		if _, err := s.execSQL(ctx, directory, statement); err != nil {
-			if !isManagedAlreadyExists(err) {
-				return result, fmt.Errorf("create managed database user: %w", sanitizePostgresError(err, password))
+		if err := engine.driver.createOwner(ctx, run, owner, password); err != nil {
+			if !errors.Is(err, application.ErrManagedDatabaseUserAlreadyExists) {
+				return result, err
 			}
-			// An externally created role won the race. Never rotate its password.
+			// An externally created login won the race. Never rotate its password.
 			password = ""
 		}
 	}
@@ -506,32 +593,28 @@ func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application
 		if complete {
 			return
 		}
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), managedCleanupTimeout)
 		defer cancel()
 		if createdDatabase {
-			_, _ = s.execSQL(cleanupCtx, directory, "DROP DATABASE "+postgresQuoteIdentifier(name))
+			_ = engine.driver.dropDatabase(cleanupCtx, run, name, []string{owner})
 		}
 		if password != "" {
-			_, _ = s.execSQL(cleanupCtx, directory, "DROP ROLE "+postgresQuoteIdentifier(owner))
+			_ = engine.driver.dropUser(cleanupCtx, run, owner)
 		}
 	}()
-	if _, err := s.execSQL(ctx, directory, "CREATE DATABASE "+postgresQuoteIdentifier(name)+" OWNER "+postgresQuoteIdentifier(owner)); err != nil {
-		if isManagedAlreadyExists(err) {
-			return result, application.ErrManagedDatabaseAlreadyExists
-		}
-		return result, fmt.Errorf("create managed database: %w", sanitizeManagedError(err))
+	if err := engine.driver.createDatabase(ctx, run, name, owner); err != nil {
+		return result, err
 	}
 	createdDatabase = true
-	// Future databases must not reopen PUBLIC access for previously created users.
-	if _, err := s.execSQL(ctx, directory, "REVOKE CONNECT, TEMPORARY ON DATABASE "+postgresQuoteIdentifier(name)+" FROM PUBLIC"); err != nil {
-		return result, fmt.Errorf("restrict managed database access: %w", sanitizeManagedError(err))
+	if err := engine.driver.restrictDatabase(ctx, run, name); err != nil {
+		return result, err
 	}
 	newUsername := ""
 	if password != "" {
 		newUsername = owner
 	}
 	created, err := s.repository.CreateManagedDatabaseWithUser(ctx, application.ManagedDatabase{
-		Name: name, Owner: owner, CreatedAt: time.Now().UTC(),
+		Name: name, Owner: owner, Provider: engine.provider, CreatedAt: time.Now().UTC(),
 	}, newUsername)
 	if err != nil {
 		return result, err
@@ -542,6 +625,79 @@ func (s *ManagedDatabases) CreateDatabase(ctx context.Context, input application
 		result.Credentials = &application.ManagedDatabaseCredentials{Username: owner, Password: password}
 	}
 	return result, nil
+}
+
+// provisionEngine writes the Compose project of a MariaDB or MySQL engine,
+// starts it, and waits until it accepts queries. An existing secrets file is
+// kept: a retry after a partial first start must not change the root password
+// of an already initialized data volume.
+func (s *ManagedDatabases) provisionEngine(ctx context.Context, engine managedEngine, progress func(stage, message string)) error {
+	label := application.ManagedDatabaseProviderName(engine.provider)
+	reportManagedProgress(progress, "files", "Writing the "+label+" Compose project")
+	if err := s.runner.EnsureNetwork(ctx, applicationNetworkName); err != nil {
+		return fmt.Errorf("ensure managed databases network: %w", sanitizeManagedError(err))
+	}
+	coreRoot := filepath.Join(s.projectsRoot, coreDir)
+	directory := filepath.Join(coreRoot, engine.directory)
+	if err := ensureDirectory(coreRoot); err != nil {
+		return fmt.Errorf("ensure core directory: %w", err)
+	}
+	if err := ensureDirectory(directory); err != nil {
+		return fmt.Errorf("ensure managed databases directory: %w", err)
+	}
+	passwordVariable := engine.environmentPrefix + "_ROOT_PASSWORD"
+	secrets, err := snapshotManagedFile(filepath.Join(directory, secretsEnvFile))
+	if err != nil {
+		return fmt.Errorf("read managed database secrets file: %w", err)
+	}
+	secretsContents := string(secrets.contents)
+	if existing, err := findEnvironmentVariable(secretsContents, passwordVariable); err != nil || existing == "" {
+		password, err := generateDatabasePassword()
+		if err != nil {
+			return fmt.Errorf("generate managed database password: %w", err)
+		}
+		secretsContents = passwordVariable + "=" + formatEnvironmentValue(password) + "\n"
+	}
+	// Root is limited to loopback, so it is reachable only from inside the
+	// container; applications use the logins Redlaunch creates.
+	varsContents := engine.environmentPrefix + "_ROOT_HOST=127.0.0.1\n"
+	version := engine.defaultVersion
+	if err := writeManagedFile(filepath.Join(directory, "compose.yml"), engine.renderCompose(version), 0o644); err != nil {
+		return fmt.Errorf("write managed database Compose file: %w", err)
+	}
+	if err := writeManagedFile(filepath.Join(directory, varsEnvFile), varsContents, envFileMode); err != nil {
+		return fmt.Errorf("write managed database variables file: %w", err)
+	}
+	if err := writeManagedFile(filepath.Join(directory, secretsEnvFile), secretsContents, envFileMode); err != nil {
+		return fmt.Errorf("write managed database secrets file: %w", err)
+	}
+	if err := s.validateStagedCompose(ctx, directory); err != nil {
+		return err
+	}
+	reportManagedProgress(progress, "start", "Starting "+label+" "+version)
+	if err := s.runner.Up(ctx, directory); err != nil {
+		return fmt.Errorf("start managed databases: %w", sanitizeManagedError(err))
+	}
+	reportManagedProgress(progress, "ready", "Waiting for "+label+" to accept connections")
+	if err := s.waitUntilReady(ctx, engine, directory); err != nil {
+		return err
+	}
+	return s.repository.SaveManagedDatabaseEngine(ctx, application.ManagedDatabaseEngine{Provider: engine.provider, Version: version})
+}
+
+// waitUntilReady polls the engine until a query succeeds or ctx ends.
+func (s *ManagedDatabases) waitUntilReady(ctx context.Context, engine managedEngine, directory string) error {
+	run := engine.run(s.runner, directory)
+	for {
+		if _, err := run(ctx, "SELECT 1"); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return application.ErrManagedDatabaseEngineNotReady
+		case <-time.After(s.readyInterval):
+		}
+	}
 }
 
 // PostgreSQL privileges are additive: revoking a privilege from one role cannot
@@ -583,9 +739,20 @@ func (s *ManagedDatabases) DropDatabase(ctx context.Context, name string) error 
 	if err != nil {
 		return err
 	}
-	directory, err := s.managedDirectory()
+	engine := managedEngines[item.Provider]
+	directory, err := s.engineDirectory(engine)
 	if err != nil {
 		return err
+	}
+	users, err := s.repository.ListManagedDatabaseUsers(ctx)
+	if err != nil {
+		return err
+	}
+	grantees := []string{item.Owner}
+	for _, user := range users {
+		if user.User.Username != item.Owner && slices.Contains(user.Databases, item.Name) {
+			grantees = append(grantees, user.User.Username)
+		}
 	}
 	// Refuse to drop while a backup operation holds the lease.
 	release, err := s.acquireDatabaseLease(ctx, item.ID, "drop")
@@ -593,12 +760,8 @@ func (s *ManagedDatabases) DropDatabase(ctx context.Context, name string) error 
 		return err
 	}
 	defer release()
-	if _, err := s.execSQL(ctx, directory, "DROP DATABASE "+postgresQuoteIdentifier(name)); err != nil {
-		if isManagedNotExists(err) {
-			// The live database is already gone; still remove metadata.
-		} else {
-			return fmt.Errorf("drop managed database: %w", sanitizeManagedError(err))
-		}
+	if err := engine.driver.dropDatabase(ctx, engine.run(s.runner, directory), name, grantees); err != nil {
+		return err
 	}
 	if err := s.repository.DeleteManagedDatabase(ctx, name); err != nil {
 		return err
@@ -628,6 +791,7 @@ func (s *ManagedDatabases) GetDatabaseConnections(ctx context.Context, name stri
 	if err != nil {
 		return nil, err
 	}
+	engine := managedEngines[database.Provider]
 	users, err := s.repository.ListManagedDatabaseUsers(ctx)
 	if err != nil {
 		return nil, err
@@ -635,21 +799,22 @@ func (s *ManagedDatabases) GetDatabaseConnections(ctx context.Context, name stri
 	var connections []application.ManagedDatabaseConnection
 	for _, user := range users {
 		username := user.User.Username
-		if username != cluster.DefaultUser && username != database.Owner && !slices.Contains(user.Databases, database.Name) {
+		if user.User.Provider != database.Provider {
 			continue
 		}
-		connection := url.URL{
-			Scheme: "postgresql",
-			User:   url.UserPassword(username, "PASSWORD"),
-			Host:   managedDatabaseContainerName + ":5432",
-			Path:   "/" + database.Name,
+		isDefault := database.Provider == application.ManagedDatabaseProviderPostgres && username == cluster.DefaultUser
+		if !isDefault && username != database.Owner && !slices.Contains(user.Databases, database.Name) {
+			continue
 		}
-		connections = append(connections, application.ManagedDatabaseConnection{Username: username, URI: connection.String()})
+		connections = append(connections, application.ManagedDatabaseConnection{
+			Username: username,
+			URI:      engine.driver.connectionURI(engine.container, username, database.Name),
+		})
 	}
 	return connections, nil
 }
 
-// CreateUser creates a login role and grants database access.
+// CreateUser creates a login and grants database access.
 func (s *ManagedDatabases) CreateUser(ctx context.Context, input application.ManagedDatabaseUserInput) error {
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
@@ -658,43 +823,86 @@ func (s *ManagedDatabases) CreateUser(ctx context.Context, input application.Man
 	if err != nil {
 		return err
 	}
+	engine := managedEngines[validated.Provider]
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
 		return err
 	}
 	defer lease.release()
 
-	directory, err := s.managedDirectory()
+	if _, err := s.repository.GetManagedDatabaseUser(ctx, validated.Username); err == nil {
+		return application.ErrManagedDatabaseUserAlreadyExists
+	} else if !errors.Is(err, application.ErrManagedDatabaseUserNotFound) {
+		return err
+	}
+	if err := s.requireProviderDatabases(ctx, engine.provider, validated.Databases); err != nil {
+		return err
+	}
+	_, directory, err := s.provisionedEngine(ctx, engine.provider)
 	if err != nil {
 		return err
 	}
-	running, err := s.runner.IsServiceRunning(ctx, directory, managedDatabaseServiceName)
+	running, err := s.runner.IsServiceRunning(ctx, directory, engine.service)
 	if err != nil {
 		return fmt.Errorf("inspect managed database state: %w", err)
 	}
 	if !running {
 		return application.ErrDatabaseServiceNotRunning
 	}
-	if _, err := s.execSQL(ctx, directory, "CREATE ROLE "+postgresQuoteIdentifier(validated.Username)+" LOGIN PASSWORD "+postgresQuoteLiteral(validated.Password)); err != nil {
-		if isManagedAlreadyExists(err) {
-			return application.ErrManagedDatabaseUserAlreadyExists
-		}
-		return fmt.Errorf("create managed database user: %w", sanitizeManagedError(err))
+	run := engine.run(s.runner, directory)
+	if err := engine.driver.createUser(ctx, run, validated.Username, validated.Password); err != nil {
+		return err
 	}
 	for _, database := range validated.Databases {
-		if _, err := s.execSQL(ctx, directory, "GRANT ALL PRIVILEGES ON DATABASE "+postgresQuoteIdentifier(database)+" TO "+postgresQuoteIdentifier(validated.Username)); err != nil {
-			_, _ = s.execSQL(ctx, directory, "DROP ROLE "+postgresQuoteIdentifier(validated.Username))
-			return fmt.Errorf("grant managed database access: %w", sanitizeManagedError(err))
+		if err := engine.driver.grant(ctx, run, database, validated.Username); err != nil {
+			_ = engine.driver.dropUser(ctx, run, validated.Username)
+			return err
 		}
 	}
-	if err := s.repository.CreateManagedDatabaseUser(ctx, validated.Username, validated.Databases); err != nil {
-		_, _ = s.execSQL(ctx, directory, "DROP ROLE "+postgresQuoteIdentifier(validated.Username))
+	if err := s.repository.CreateManagedDatabaseUser(ctx, validated.Username, engine.provider, validated.Databases); err != nil {
+		_ = engine.driver.dropUser(ctx, run, validated.Username)
 		return err
 	}
 	return nil
 }
 
-// UpdateUserPassword changes a login role password.
+// requireProviderDatabases verifies that every named database exists on the
+// given provider. A login can only be granted access within its own engine.
+func (s *ManagedDatabases) requireProviderDatabases(ctx context.Context, provider string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	databases, err := s.repository.ListManagedDatabases(ctx)
+	if err != nil {
+		return err
+	}
+	providers := make(map[string]string, len(databases))
+	for _, database := range databases {
+		providers[database.Name] = database.Provider
+	}
+	for _, name := range names {
+		databaseProvider, ok := providers[name]
+		if !ok {
+			return application.ErrManagedDatabaseNotFound
+		}
+		if databaseProvider != provider {
+			return application.ErrManagedDatabaseProviderMismatch
+		}
+	}
+	return nil
+}
+
+// userEngine resolves the engine and SQL runner that host a stored login.
+func (s *ManagedDatabases) userEngine(ctx context.Context, username string) (application.ManagedDatabaseUserDetail, managedEngine, string, error) {
+	user, err := s.repository.GetManagedDatabaseUser(ctx, username)
+	if err != nil {
+		return user, managedEngine{}, "", err
+	}
+	engine, directory, err := s.provisionedEngine(ctx, user.User.Provider)
+	return user, engine, directory, err
+}
+
+// UpdateUserPassword changes a login password.
 func (s *ManagedDatabases) UpdateUserPassword(ctx context.Context, username, password string) error {
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
@@ -710,17 +918,11 @@ func (s *ManagedDatabases) UpdateUserPassword(ctx context.Context, username, pas
 	if strings.TrimSpace(password) == "" {
 		return application.ErrDatabasePasswordInvalid
 	}
-	if _, err := s.repository.GetManagedDatabaseUser(ctx, username); err != nil {
-		return err
-	}
-	directory, err := s.managedDirectory()
+	_, engine, directory, err := s.userEngine(ctx, username)
 	if err != nil {
 		return err
 	}
-	if _, err := s.execSQL(ctx, directory, "ALTER ROLE "+postgresQuoteIdentifier(username)+" WITH PASSWORD "+postgresQuoteLiteral(password)); err != nil {
-		return fmt.Errorf("update managed database password: %w", sanitizeManagedError(err))
-	}
-	return nil
+	return engine.driver.setPassword(ctx, engine.run(s.runner, directory), username, password)
 }
 
 // SetUserPermissions replaces which databases a user may access.
@@ -736,20 +938,20 @@ func (s *ManagedDatabases) SetUserPermissions(ctx context.Context, username stri
 	if err != nil {
 		return err
 	}
-	current, err := s.repository.GetManagedDatabaseUser(ctx, username)
-	if err != nil {
-		return err
-	}
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
 		return err
 	}
 	defer lease.release()
 
-	directory, err := s.managedDirectory()
+	current, engine, directory, err := s.userEngine(ctx, username)
 	if err != nil {
 		return err
 	}
+	if err := s.requireProviderDatabases(ctx, engine.provider, grants); err != nil {
+		return err
+	}
+	run := engine.run(s.runner, directory)
 	previous := make(map[string]struct{}, len(current.Databases))
 	for _, database := range current.Databases {
 		previous[database] = struct{}{}
@@ -762,16 +964,16 @@ func (s *ManagedDatabases) SetUserPermissions(ctx context.Context, username stri
 		if _, ok := previous[database]; ok {
 			continue
 		}
-		if _, err := s.execSQL(ctx, directory, "GRANT ALL PRIVILEGES ON DATABASE "+postgresQuoteIdentifier(database)+" TO "+postgresQuoteIdentifier(username)); err != nil {
-			return fmt.Errorf("grant managed database access: %w", sanitizeManagedError(err))
+		if err := engine.driver.grant(ctx, run, database, username); err != nil {
+			return err
 		}
 	}
 	for database := range previous {
 		if _, ok := wanted[database]; ok {
 			continue
 		}
-		if _, err := s.execSQL(ctx, directory, "REVOKE ALL PRIVILEGES ON DATABASE "+postgresQuoteIdentifier(database)+" FROM "+postgresQuoteIdentifier(username)); err != nil {
-			return fmt.Errorf("revoke managed database access: %w", sanitizeManagedError(err))
+		if err := engine.driver.revoke(ctx, run, database, username); err != nil {
+			return err
 		}
 	}
 	if err := s.repository.SetManagedDatabaseGrants(ctx, username, grants); err != nil {
@@ -780,7 +982,7 @@ func (s *ManagedDatabases) SetUserPermissions(ctx context.Context, username stri
 	return nil
 }
 
-// DeleteUser removes a login role.
+// DeleteUser removes a login.
 func (s *ManagedDatabases) DeleteUser(ctx context.Context, username string) error {
 	if err := s.requireEnabled(ctx); err != nil {
 		return err
@@ -793,28 +995,30 @@ func (s *ManagedDatabases) DeleteUser(ctx context.Context, username string) erro
 	if err != nil {
 		return err
 	}
-	if username == cluster.DefaultUser {
-		return application.ErrManagedDatabaseDefaultUserInUse
-	}
-	if _, err := s.repository.GetManagedDatabaseUser(ctx, username); err != nil {
-		return err
-	}
 	lease, err := s.projectLocks.acquire(ctx, managedDatabaseProjectLockKey)
 	if err != nil {
 		return err
 	}
 	defer lease.release()
 
-	directory, err := s.managedDirectory()
+	user, engine, directory, err := s.userEngine(ctx, username)
 	if err != nil {
 		return err
 	}
-	if _, err := s.execSQL(ctx, directory, "DROP ROLE "+postgresQuoteIdentifier(username)); err != nil {
-		if isManagedNotExists(err) {
-			// Role already gone live; still remove metadata.
-		} else {
-			return fmt.Errorf("delete managed database user: %w", sanitizeManagedError(err))
+	if engine.provider == application.ManagedDatabaseProviderPostgres && username == cluster.DefaultUser {
+		return application.ErrManagedDatabaseDefaultUserInUse
+	}
+	databases, err := s.repository.ListManagedDatabases(ctx)
+	if err != nil {
+		return err
+	}
+	for _, database := range databases {
+		if database.Owner == user.User.Username {
+			return application.ErrManagedDatabaseUserOwnsDatabase
 		}
+	}
+	if err := engine.driver.dropUser(ctx, engine.run(s.runner, directory), username); err != nil {
+		return err
 	}
 	if err := s.repository.DeleteManagedDatabaseUser(ctx, username); err != nil {
 		return err
@@ -833,8 +1037,45 @@ func (s *ManagedDatabases) requireEnabled(ctx context.Context) error {
 	return nil
 }
 
-func (s *ManagedDatabases) managedDirectory() (string, error) {
-	directory := filepath.Join(s.projectsRoot, coreDir, managedDatabasesDir)
+// engineProvisioned reports whether an engine's container project exists.
+func (s *ManagedDatabases) engineProvisioned(ctx context.Context, engine managedEngine) (bool, error) {
+	if !engine.lazy {
+		cluster, err := s.repository.GetManagedDatabaseCluster(ctx)
+		if err != nil {
+			return false, err
+		}
+		return cluster.Enabled, nil
+	}
+	stored, err := s.repository.GetManagedDatabaseEngine(ctx, engine.provider)
+	if err != nil {
+		return false, err
+	}
+	return stored.Provisioned, nil
+}
+
+// provisionedEngine resolves a provider that exists on this server and returns
+// its project directory.
+func (s *ManagedDatabases) provisionedEngine(ctx context.Context, provider string) (managedEngine, string, error) {
+	if err := s.requireEnabled(ctx); err != nil {
+		return managedEngine{}, "", err
+	}
+	engine, err := managedEngineFor(provider)
+	if err != nil {
+		return managedEngine{}, "", err
+	}
+	provisioned, err := s.engineProvisioned(ctx, engine)
+	if err != nil {
+		return managedEngine{}, "", err
+	}
+	if !provisioned {
+		return engine, "", application.ErrManagedDatabaseEngineNotProvisioned
+	}
+	directory, err := s.engineDirectory(engine)
+	return engine, directory, err
+}
+
+func (s *ManagedDatabases) engineDirectory(engine managedEngine) (string, error) {
+	directory := filepath.Join(s.projectsRoot, coreDir, engine.directory)
 	coreRoot := filepath.Join(s.projectsRoot, coreDir)
 	relative, err := filepath.Rel(coreRoot, directory)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -864,14 +1105,6 @@ func (s *ManagedDatabases) validateStagedCompose(ctx context.Context, directory 
 		return fmt.Errorf("validate staged Compose project: %w", err)
 	}
 	return nil
-}
-
-func (s *ManagedDatabases) execSQL(ctx context.Context, directory, statement string) (string, error) {
-	output, err := s.runner.ExecPostgresSQL(ctx, directory, managedDatabaseServiceName, statement)
-	if err != nil {
-		return "", err
-	}
-	return output, nil
 }
 
 func renderManagedDatabaseCompose(version string) string {
@@ -1068,7 +1301,7 @@ func (s *ManagedDatabases) RunBackupNow(ctx context.Context, databaseName string
 		return application.Backup{}, err
 	}
 	defer release()
-	if err := s.ensureClusterRunning(ctx); err != nil {
+	if err := s.ensureClusterRunning(ctx, item); err != nil {
 		return application.Backup{}, err
 	}
 	return s.runBackup(ctx, item, false)
@@ -1140,13 +1373,14 @@ func (s *ManagedDatabases) RestoreBackup(ctx context.Context, databaseName, file
 	if err := validatePlainSQLDump(path); err != nil {
 		return err
 	}
-	directory, err := s.managedDirectory()
+	engine := managedEngines[item.Provider]
+	directory, err := s.engineDirectory(engine)
 	if err != nil {
 		return fmt.Errorf("resolve managed databases directory for restore: %w", err)
 	}
 	// Restore targets the logical database by restoring into the shared
-	// cluster service; the dump itself selects the database contents.
-	if err := s.runner.RestorePostgreSQL(ctx, directory, managedDatabaseServiceName, path); err != nil {
+	// container; the dump itself selects the database contents.
+	if err := engine.driver.restore(ctx, s.runner, directory, engine.service, path); err != nil {
 		return fmt.Errorf("restore managed backup: %w", err)
 	}
 	return nil
@@ -1285,12 +1519,13 @@ func (s *ManagedDatabases) deleteBackupRecord(ctx context.Context, databaseID in
 	return nil
 }
 
-func (s *ManagedDatabases) ensureClusterRunning(ctx context.Context) error {
-	directory, err := s.managedDirectory()
+func (s *ManagedDatabases) ensureClusterRunning(ctx context.Context, item application.ManagedDatabase) error {
+	engine := managedEngines[item.Provider]
+	directory, err := s.engineDirectory(engine)
 	if err != nil {
 		return fmt.Errorf("resolve managed databases directory for backup status: %w", err)
 	}
-	running, err := s.runner.IsServiceRunning(ctx, directory, managedDatabaseServiceName)
+	running, err := s.runner.IsServiceRunning(ctx, directory, engine.service)
 	if err != nil {
 		return fmt.Errorf("check managed database status: %w", err)
 	}
@@ -1331,12 +1566,13 @@ func (s *ManagedDatabases) runBackup(ctx context.Context, item application.Manag
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	directory, err := s.managedDirectory()
+	engine := managedEngines[item.Provider]
+	directory, err := s.engineDirectory(engine)
 	if err != nil {
 		s.recordBackupFailure(ctx, schedule, location, now)
 		return application.Backup{}, fmt.Errorf("resolve managed databases directory for backup: %w", err)
 	}
-	if err := s.runner.BackupPostgreSQL(ctx, directory, managedDatabaseServiceName, temporaryPath); err != nil {
+	if err := engine.driver.backup(ctx, s.runner, directory, engine.service, item.Name, temporaryPath); err != nil {
 		s.recordBackupFailure(ctx, schedule, location, now)
 		return application.Backup{}, fmt.Errorf("create managed backup: %w", err)
 	}

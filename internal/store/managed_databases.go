@@ -74,7 +74,7 @@ func (s *Store) SaveManagedDatabaseCluster(ctx context.Context, cluster applicat
 // ListManagedDatabases returns logical databases in name order.
 func (s *Store) ListManagedDatabases(ctx context.Context) ([]application.ManagedDatabase, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, owner, created_at
+		SELECT id, name, owner, provider, created_at
 		FROM managed_databases
 		ORDER BY name ASC`)
 	if err != nil {
@@ -85,7 +85,7 @@ func (s *Store) ListManagedDatabases(ctx context.Context) ([]application.Managed
 	for rows.Next() {
 		var item application.ManagedDatabase
 		var createdAt string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Owner, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Owner, &item.Provider, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan managed database: %w", err)
 		}
 		item.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -109,9 +109,9 @@ func (s *Store) GetManagedDatabase(ctx context.Context, name string) (applicatio
 	var item application.ManagedDatabase
 	var createdAt string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, name, owner, created_at
+		SELECT id, name, owner, provider, created_at
 		FROM managed_databases
-		WHERE name = ?`, name).Scan(&item.ID, &item.Name, &item.Owner, &createdAt)
+		WHERE name = ?`, name).Scan(&item.ID, &item.Name, &item.Owner, &item.Provider, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.ManagedDatabase{}, application.ErrManagedDatabaseNotFound
 	}
@@ -138,11 +138,15 @@ func (s *Store) CreateManagedDatabaseWithUser(ctx context.Context, item applicat
 		return application.ManagedDatabase{}, err
 	}
 	item.Name = name
+	item.Provider, err = application.ValidateManagedDatabaseEngine(item.Provider)
+	if err != nil {
+		return application.ManagedDatabase{}, err
+	}
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = time.Now().UTC()
 	}
 	if username != "" {
-		username, err = application.ValidateManagedDatabaseUsername(username)
+		username, err = application.ValidateManagedDatabaseLogin(item.Provider, username)
 		if err != nil {
 			return application.ManagedDatabase{}, err
 		}
@@ -153,8 +157,8 @@ func (s *Store) CreateManagedDatabaseWithUser(ctx context.Context, item applicat
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
-		INSERT INTO managed_databases (name, owner, created_at)
-		VALUES (?, ?, ?)`, item.Name, item.Owner, item.CreatedAt.Format(time.RFC3339Nano))
+		INSERT INTO managed_databases (name, owner, provider, created_at)
+		VALUES (?, ?, ?, ?)`, item.Name, item.Owner, item.Provider, item.CreatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return application.ManagedDatabase{}, application.ErrManagedDatabaseAlreadyExists
@@ -166,7 +170,7 @@ func (s *Store) CreateManagedDatabaseWithUser(ctx context.Context, item applicat
 		return application.ManagedDatabase{}, fmt.Errorf("read managed database ID: %w", err)
 	}
 	if username != "" {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO managed_database_users (username, created_at) VALUES (?, ?)`, username, item.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO managed_database_users (username, provider, created_at) VALUES (?, ?, ?)`, username, item.Provider, item.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			if isUniqueConstraint(err) {
 				return application.ManagedDatabase{}, application.ErrManagedDatabaseUserAlreadyExists
 			}
@@ -218,7 +222,7 @@ func (s *Store) DeleteManagedDatabase(ctx context.Context, name string) error {
 // ListManagedDatabaseUsers returns database users in name order with grants.
 func (s *Store) ListManagedDatabaseUsers(ctx context.Context) ([]application.ManagedDatabaseUserDetail, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT username, created_at
+		SELECT username, provider, created_at
 		FROM managed_database_users
 		ORDER BY username ASC`)
 	if err != nil {
@@ -229,7 +233,7 @@ func (s *Store) ListManagedDatabaseUsers(ctx context.Context) ([]application.Man
 	for rows.Next() {
 		var user application.ManagedDatabaseUser
 		var createdAt string
-		if err := rows.Scan(&user.Username, &createdAt); err != nil {
+		if err := rows.Scan(&user.Username, &user.Provider, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan managed database user: %w", err)
 		}
 		user.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
@@ -261,9 +265,9 @@ func (s *Store) GetManagedDatabaseUser(ctx context.Context, username string) (ap
 	var user application.ManagedDatabaseUser
 	var createdAt string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT username, created_at
+		SELECT username, provider, created_at
 		FROM managed_database_users
-		WHERE username = ?`, username).Scan(&user.Username, &createdAt)
+		WHERE username = ?`, username).Scan(&user.Username, &user.Provider, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return application.ManagedDatabaseUserDetail{}, application.ErrManagedDatabaseUserNotFound
 	}
@@ -281,9 +285,14 @@ func (s *Store) GetManagedDatabaseUser(ctx context.Context, username string) (ap
 	return application.ManagedDatabaseUserDetail{User: user, Databases: grants}, nil
 }
 
-// CreateManagedDatabaseUser records one login role and its initial grants.
-func (s *Store) CreateManagedDatabaseUser(ctx context.Context, username string, databases []string) error {
-	username, err := application.ValidateManagedDatabaseUsername(username)
+// CreateManagedDatabaseUser records one login role of a provider and its
+// initial grants.
+func (s *Store) CreateManagedDatabaseUser(ctx context.Context, username, provider string, databases []string) error {
+	provider, err := application.ValidateManagedDatabaseEngine(provider)
+	if err != nil {
+		return err
+	}
+	username, err = application.ValidateManagedDatabaseLogin(provider, username)
 	if err != nil {
 		return err
 	}
@@ -297,8 +306,8 @@ func (s *Store) CreateManagedDatabaseUser(ctx context.Context, username string, 
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO managed_database_users (username, created_at)
-		VALUES (?, ?)`, username, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		INSERT INTO managed_database_users (username, provider, created_at)
+		VALUES (?, ?, ?)`, username, provider, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		if isUniqueConstraint(err) {
 			return application.ErrManagedDatabaseUserAlreadyExists
 		}
@@ -632,6 +641,45 @@ func (s *Store) ReleaseManagedBackupLease(ctx context.Context, databaseID int64,
 		DELETE FROM managed_database_backup_leases
 		WHERE database_id = ? AND token = ?`, databaseID, token); err != nil {
 		return fmt.Errorf("release managed backup lease: %w", err)
+	}
+	return nil
+}
+
+// GetManagedDatabaseEngine returns the recorded container configuration of a
+// MariaDB or MySQL engine. The zero value means it was never provisioned.
+func (s *Store) GetManagedDatabaseEngine(ctx context.Context, provider string) (application.ManagedDatabaseEngine, error) {
+	engine := application.ManagedDatabaseEngine{Provider: provider}
+	var createdAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT version, created_at
+		FROM managed_database_engines
+		WHERE provider = ?`, provider).Scan(&engine.Version, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return engine, nil
+	}
+	if err != nil {
+		return engine, fmt.Errorf("get managed database engine: %w", err)
+	}
+	engine.Provisioned = true
+	engine.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return engine, fmt.Errorf("parse managed database engine timestamp: %w", err)
+	}
+	return engine, nil
+}
+
+// SaveManagedDatabaseEngine records that a MariaDB or MySQL engine container
+// exists. The creation time of an already recorded engine is preserved.
+func (s *Store) SaveManagedDatabaseEngine(ctx context.Context, engine application.ManagedDatabaseEngine) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO managed_database_engines (provider, version, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(provider) DO UPDATE SET
+			version = excluded.version,
+			updated_at = excluded.updated_at`, engine.Provider, engine.Version, now, now)
+	if err != nil {
+		return fmt.Errorf("save managed database engine: %w", err)
 	}
 	return nil
 }

@@ -6,16 +6,16 @@
     <div class="backup-run-disabled">
       <form class="backup-run-form" method="post" action="/databases/backups/run" data-managed-submit>
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="database" value="{{.BackupDatabaseName}}">
-        <button class="button button-primary databases-enable-button" type="submit"{{if not .Status.Running}} disabled{{end}}>{{template "managed-backup-icon"}}<span>Run backup now</span></button>
+        <button class="button button-primary databases-enable-button" type="submit"{{if not .BackupRunning}} disabled{{end}}>{{template "managed-backup-icon"}}<span>Run backup now</span></button>
       </form>
-      {{if not .Status.Running}}<span class="field-help">Start the cluster from Settings to run a backup.</span>{{end}}
+      {{if not .BackupRunning}}<span class="field-help">Start the database container from Settings to run a backup.</span>{{end}}
     </div>
     {{end}}
   </header>
   {{if .Databases}}
   <form class="databases-filters databases-table-toolbar" method="get" action="/databases">
     <input type="hidden" name="tab" value="managed-backups">
-    <div class="field"><label for="managed-backup-database">Database</label><select id="managed-backup-database" name="database" data-managed-database-select>{{range .Databases}}<option value="{{.Name}}"{{if eq $.SelectedDatabase .Name}} selected{{end}}>{{.Name}}</option>{{end}}</select></div>
+    <div class="field"><label for="managed-backup-database">Database</label><select id="managed-backup-database" name="database" data-managed-database-select>{{range .Databases}}<option value="{{.Name}}"{{if eq $.SelectedDatabase .Name}} selected{{end}}>{{.Name}} ({{engineName .Provider}})</option>{{end}}</select></div>
     <button class="button button-secondary" type="submit">View backups</button>
   </form>
   {{with .Backup}}
@@ -58,7 +58,7 @@
     </div>
   </div>
   {{else}}<section class="service-widget"><div class="service-widget-empty" role="status"><p>Backup details are unavailable for this database.</p><p class="field-help">Choose another database or retry.</p><a class="button button-secondary" href="/databases?tab=managed-backups&amp;database={{.SelectedDatabase}}">Retry</a></div></section>{{end}}
-  {{else}}<section class="service-widget"><div class="service-widget-empty" role="status"><p>No databases available for backups.</p><a class="button button-primary databases-enable-button" href="/databases?create=1" data-managed-dialog-open="managed-database-create-dialog">Create database</a></div></section>{{end}}
+  {{else}}<section class="service-widget"><div class="service-widget-empty" role="status"><p>No databases available for backups.</p><a class="button button-primary databases-enable-button" href="/databases?create=1">Create database</a></div></section>{{end}}
 
   {{if or (eq .Dialog "backup-restore") (eq .Dialog "backup-delete")}}
   <dialog class="application-dialog" id="managed-backup-action-dialog" aria-labelledby="managed-backup-action-title" data-managed-dialog open>

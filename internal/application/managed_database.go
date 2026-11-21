@@ -7,23 +7,58 @@ import (
 )
 
 const (
-	// ManagedDatabaseProviderPostgres is the only supported server-level
-	// database provider for now. The provider value is persisted so future
-	// providers can be added without a schema change.
+	// ManagedDatabaseProviderPostgres is the provider enabled with the managed
+	// databases feature. Its container is provisioned when the feature is
+	// enabled; the other providers are provisioned on first use.
 	ManagedDatabaseProviderPostgres = "postgres"
+	// ManagedDatabaseProviderMariaDB and ManagedDatabaseProviderMySQL run in
+	// their own shared containers, started when their first database is created.
+	ManagedDatabaseProviderMariaDB = "mariadb"
+	ManagedDatabaseProviderMySQL   = "mysql"
 	// ManagedDatabaseDefaultVersion is used to pre-fill the enable dialog.
 	ManagedDatabaseDefaultVersion = "17"
+	// ManagedDatabaseMariaDBVersion and ManagedDatabaseMySQLVersion are the
+	// official image tags used when those providers are first provisioned.
+	ManagedDatabaseMariaDBVersion = "11.4"
+	ManagedDatabaseMySQLVersion   = "8.4"
+	// maxMySQLUsernameLength is the longest login MySQL 8.4 accepts.
+	maxMySQLUsernameLength = 32
 )
 
+// ManagedDatabaseProviders lists the supported providers in display order.
+var ManagedDatabaseProviders = []string{
+	ManagedDatabaseProviderPostgres,
+	ManagedDatabaseProviderMariaDB,
+	ManagedDatabaseProviderMySQL,
+}
+
+// ManagedDatabaseProviderName returns the display name of a provider.
+func ManagedDatabaseProviderName(provider string) string {
+	switch provider {
+	case ManagedDatabaseProviderMariaDB:
+		return "MariaDB"
+	case ManagedDatabaseProviderMySQL:
+		return "MySQL"
+	default:
+		return "Postgres"
+	}
+}
+
 var (
-	ErrManagedDatabasesDisabled         = errors.New("managed databases are not enabled")
-	ErrManagedDatabasesAlreadyEnabled   = errors.New("managed databases are already enabled")
-	ErrManagedDatabaseProviderInvalid   = errors.New("database provider is invalid")
-	ErrManagedDatabaseAlreadyExists     = errors.New("managed database already exists")
-	ErrManagedDatabaseNotFound          = errors.New("managed database not found")
-	ErrManagedDatabaseUserAlreadyExists = errors.New("managed database user already exists")
-	ErrManagedDatabaseUserNotFound      = errors.New("managed database user not found")
-	ErrManagedDatabaseDefaultUserInUse  = errors.New("the default database user cannot be deleted")
+	ErrManagedDatabasesDisabled            = errors.New("managed databases are not enabled")
+	ErrManagedDatabasesAlreadyEnabled      = errors.New("managed databases are already enabled")
+	ErrManagedDatabaseProviderInvalid      = errors.New("database provider is invalid")
+	ErrManagedDatabaseProviderMismatch     = errors.New("database user belongs to a different provider")
+	ErrManagedDatabaseEngineNotProvisioned = errors.New("database engine has not been started yet")
+	ErrManagedDatabaseEngineNotReady       = errors.New("database engine did not become ready")
+	ErrManagedDatabaseUserOwnsDatabase     = errors.New("the database user owns a database")
+	ErrManagedDatabaseWorkspaceUnsupported = errors.New("the SQL workspace is only available for Postgres databases")
+	ErrManagedDatabaseUserTooLong          = errors.New("database user is too long for this provider")
+	ErrManagedDatabaseAlreadyExists        = errors.New("managed database already exists")
+	ErrManagedDatabaseNotFound             = errors.New("managed database not found")
+	ErrManagedDatabaseUserAlreadyExists    = errors.New("managed database user already exists")
+	ErrManagedDatabaseUserNotFound         = errors.New("managed database user not found")
+	ErrManagedDatabaseDefaultUserInUse     = errors.New("the default database user cannot be deleted")
 )
 
 // ManagedDatabaseCluster is the singleton server-level database cluster. It
@@ -38,11 +73,33 @@ type ManagedDatabaseCluster struct {
 	UpdatedAt   time.Time
 }
 
-// ManagedDatabase is one logical database inside the shared cluster.
+// ManagedDatabaseEngine is one provider's shared container. Postgres is
+// provisioned when managed databases are enabled; MariaDB and MySQL are
+// provisioned when their first database is created. Runtime fields are
+// best-effort and may be empty when Docker is unreachable.
+type ManagedDatabaseEngine struct {
+	Provider      string
+	Version       string
+	Provisioned   bool
+	Running       bool
+	Status        string
+	ContainerName string
+	ImageName     string
+	Databases     int
+	CreatedAt     time.Time
+}
+
+// Name returns the provider's display name.
+func (e ManagedDatabaseEngine) Name() string {
+	return ManagedDatabaseProviderName(e.Provider)
+}
+
+// ManagedDatabase is one logical database inside a provider's shared container.
 type ManagedDatabase struct {
 	ID        int64
 	Name      string
 	Owner     string
+	Provider  string
 	CreatedAt time.Time
 }
 
@@ -63,6 +120,7 @@ type ManagedDatabaseCredentials struct {
 // are never persisted in SQLite.
 type ManagedDatabaseUser struct {
 	Username  string
+	Provider  string
 	CreatedAt time.Time
 }
 
@@ -79,15 +137,6 @@ type ManagedDatabaseConnection struct {
 	URI      string
 }
 
-// ManagedDatabaseStatus describes the shared container for the dashboard.
-// Runtime fields are best-effort and may be empty when Docker is unreachable.
-type ManagedDatabaseStatus struct {
-	Running       bool
-	Status        string
-	ContainerName string
-	ImageName     string
-}
-
 // ManagedDatabaseEnableInput contains the values from the enable dialog.
 type ManagedDatabaseEnableInput struct {
 	Provider    string
@@ -100,12 +149,16 @@ type ManagedDatabaseEnableInput struct {
 type ManagedDatabaseCreateInput struct {
 	// RequireExistingOwner prevents generating credentials for machine requests.
 	RequireExistingOwner bool
-	Name                 string
-	Owner                string
+	// Provider selects the database engine; empty means Postgres.
+	Provider string
+	Name     string
+	Owner    string
 }
 
 // ManagedDatabaseUserInput contains the values for creating a database user.
 type ManagedDatabaseUserInput struct {
+	// Provider selects the database engine; empty means Postgres.
+	Provider  string
 	Username  string
 	Password  string
 	Databases []string
@@ -121,6 +174,62 @@ func ValidateManagedDatabaseProvider(value string) (string, error) {
 		return "", ErrManagedDatabaseProviderInvalid
 	}
 	return provider, nil
+}
+
+// ValidateManagedDatabaseEngine accepts every supported provider. An empty
+// value selects Postgres, which keeps older API clients working.
+func ValidateManagedDatabaseEngine(value string) (string, error) {
+	provider := strings.ToLower(strings.TrimSpace(value))
+	if provider == "" {
+		return ManagedDatabaseProviderPostgres, nil
+	}
+	for _, supported := range ManagedDatabaseProviders {
+		if provider == supported {
+			return provider, nil
+		}
+	}
+	return "", ErrManagedDatabaseProviderInvalid
+}
+
+// ValidateManagedDatabaseLogin applies the login-name limits of one provider on
+// top of the shared username rules. MySQL 8.4 rejects logins above 32 bytes.
+func ValidateManagedDatabaseLogin(provider, value string) (string, error) {
+	username, err := ValidateManagedDatabaseUsername(value)
+	if err != nil {
+		return "", err
+	}
+	if provider == ManagedDatabaseProviderMySQL && len(username) > maxMySQLUsernameLength {
+		return "", ErrManagedDatabaseUserTooLong
+	}
+	return username, nil
+}
+
+// ValidateManagedDatabaseCreateInput validates a logical database request and
+// resolves its defaults: Postgres for an empty provider and the database name
+// for an empty owner.
+func ValidateManagedDatabaseCreateInput(input ManagedDatabaseCreateInput) (ManagedDatabaseCreateInput, error) {
+	provider, err := ValidateManagedDatabaseEngine(input.Provider)
+	if err != nil {
+		return ManagedDatabaseCreateInput{}, err
+	}
+	name, err := ValidateManagedDatabaseName(input.Name)
+	if err != nil {
+		return ManagedDatabaseCreateInput{}, err
+	}
+	owner := strings.TrimSpace(input.Owner)
+	if owner == "" {
+		owner = name
+	}
+	owner, err = ValidateManagedDatabaseLogin(provider, owner)
+	if err != nil {
+		return ManagedDatabaseCreateInput{}, err
+	}
+	return ManagedDatabaseCreateInput{
+		RequireExistingOwner: input.RequireExistingOwner,
+		Provider:             provider,
+		Name:                 name,
+		Owner:                owner,
+	}, nil
 }
 
 // ValidateManagedDatabaseEnableInput validates the enable dialog without
@@ -182,7 +291,11 @@ func ValidateManagedDatabaseUsername(value string) (string, error) {
 
 // ValidateManagedDatabaseUserInput validates user creation input.
 func ValidateManagedDatabaseUserInput(input ManagedDatabaseUserInput) (ManagedDatabaseUserInput, error) {
-	username, err := ValidateManagedDatabaseUsername(input.Username)
+	provider, err := ValidateManagedDatabaseEngine(input.Provider)
+	if err != nil {
+		return ManagedDatabaseUserInput{}, err
+	}
+	username, err := ValidateManagedDatabaseLogin(provider, input.Username)
 	if err != nil {
 		return ManagedDatabaseUserInput{}, err
 	}
@@ -206,7 +319,7 @@ func ValidateManagedDatabaseUserInput(input ManagedDatabaseUserInput) (ManagedDa
 		seen[validated] = struct{}{}
 		databases = append(databases, validated)
 	}
-	return ManagedDatabaseUserInput{Username: username, Password: password, Databases: databases}, nil
+	return ManagedDatabaseUserInput{Provider: provider, Username: username, Password: password, Databases: databases}, nil
 }
 
 // ValidateManagedDatabaseGrants validates the database list from the

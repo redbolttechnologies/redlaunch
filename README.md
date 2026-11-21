@@ -418,38 +418,62 @@ container does not remove the database.
   compression, security headers, request body limits, upstream timeouts, and
   Cache-Control. See [proxy settings](#proxy-settings).
 
-### Managed PostgreSQL
+### Managed databases
 
-- **One server-level cluster.** Enable a managed Postgres cluster from the
-  Databases page, then create and drop databases, manage users and
-  per-database access, and schedule, restore, download, and remove PostgreSQL
-  backups.
-- **Database overview.** The enabled overview shows database and user totals,
-  the Postgres version, container status, and a database list searchable by
-  name and filterable by owner.
+- **One shared container per engine.** Enable managed databases from the
+  Databases page to start the shared Postgres container (`core/databases/`).
+  MariaDB 11.4 (`core/databases-mariadb/`) and MySQL 8.4
+  (`core/databases-mysql/`) get their own shared containers, started the first
+  time you create a database on them. Each project has its own `compose.yml`,
+  `vars.env`, and `secrets.env`; the MariaDB and MySQL root password is
+  generated into `secrets.env`, and root only accepts connections from inside
+  its container. Create and drop databases, manage users and per-database
+  access, and schedule, restore, download, and remove SQL backups for every
+  engine.
+- **Database names and users are unique server-wide.** A name cannot be used
+  on two engines. A user belongs to one engine and can only be granted
+  databases of that engine. MySQL usernames are limited to 32 characters.
+- **Database inventory.** The Databases tab lists every database with its
+  engine and owner. Filter by engine with the buttons above the table, search
+  by name, and filter by owner. The Database engines panel shows each
+  engine's version, database count, and status; engines that have not been
+  started show **Starts on first use**.
+- **Create database.** **Create database** opens an inline form with the
+  engine, database name, and optional username. The engine selected in the
+  inventory filter is preselected. Creating the first MariaDB or MySQL
+  database shows progress while Redlaunch pulls the image, starts the
+  container, and waits until it accepts connections; the generated credentials
+  appear once afterwards.
 - **Connection strings.** Each database's **View connection string** action
   opens a dialog with its accessible managed users and a copyable, read-only
-  PostgreSQL URI. The user selector is hidden when only one user qualifies.
+  URI: `postgresql://` for Postgres and `mysql://` for MariaDB and MySQL. The
+  user selector is hidden when only one user qualifies.
   Replace `PASSWORD` with the user's URL-encoded password; stored passwords
-  cannot be retrieved. The address `redbolt-databases:5432` is reachable from
-  application containers on `redlaunch-common`, not directly from outside
-  Docker.
+  cannot be retrieved. The addresses `redbolt-databases:5432`,
+  `redbolt-databases-mariadb:3306`, and `redbolt-databases-mysql:3306` are
+  reachable from application containers on `redlaunch-common`, not directly
+  from outside Docker.
 - **Create databases safely.** Leave Username empty to use the database name.
   Missing users are created with a strong random password and read/write access
   to their new database only; existing users keep their credentials and
   permissions. Save new credentials from the confirmation dialog: reveal or
   copy the password, or download `<username>.creds.env` containing
-  `POSTGRES_USER` and `POSTGRES_PASSWORD`. Credentials are shown once and never
-  stored in SQLite. New databases disable PUBLIC connection access; legacy
-  PUBLIC access is preserved as explicit grants for existing roles when
-  creating a new user. Use Manage users for access management and Settings for
-  cluster start/stop/restart controls. The Users tab has searchable roles and
+  `POSTGRES_USER` and `POSTGRES_PASSWORD` (`MARIADB_*` or `MYSQL_*` for those
+  engines). Credentials are shown once and never stored in SQLite. New
+  Postgres databases disable PUBLIC connection access; legacy PUBLIC access is
+  preserved as explicit grants for existing roles when creating a new user.
+  MariaDB and MySQL logins are `'user'@'%'` accounts with `ALL PRIVILEGES` on
+  their databases only; dropping a database also revokes those privileges.
+  Use Manage users for access management and Settings for per-engine
+  start/stop/restart controls; Logs shows one engine at a time. The Users tab has searchable roles and
   dialogs for passwords and database grants. The Backups tab keeps the selected
   database while editing schedules or managing backup history, with
   confirmation before restoring or deleting a backup. Settings separates
   cluster details and runtime controls from the disable action.
-- **SQL workspace.** Click a database name on **Databases → Databases** to open
-  its SQL workspace. Schemas and tables appear on the left, with an SQL editor
+- **SQL workspace (Postgres only).** Click a Postgres database name on
+  **Databases → Databases** to open its SQL workspace. MariaDB and MySQL
+  databases have no workspace or dump import yet; use the Backups tab, or
+  connect from an application. Schemas and tables appear on the left, with an SQL editor
   above query results on the right. Expand a table to see its columns in
   database order. Right-click a table (or use its actions button or Shift+F10)
   and choose **Show data (max. 1000 rows)** to load and automatically execute a

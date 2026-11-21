@@ -2302,6 +2302,34 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	var managedDatabaseProvidersApplied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 29`).Scan(&managedDatabaseProvidersApplied); err != nil {
+		return err
+	}
+	if managedDatabaseProvidersApplied == 0 {
+		// Existing rows were created for the Postgres cluster, which is the
+		// column default. MariaDB and MySQL record their container version in
+		// managed_database_engines when first provisioned.
+		for _, table := range []string{"managed_databases", "managed_database_users"} {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN provider TEXT NOT NULL DEFAULT 'postgres'`); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("add %s provider: %w", table, err)
+				}
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			CREATE TABLE IF NOT EXISTS managed_database_engines (
+				provider TEXT PRIMARY KEY CHECK (provider IN ('mariadb', 'mysql')),
+				version TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`); err != nil {
+			return fmt.Errorf("create managed database engines table: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (29, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}

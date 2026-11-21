@@ -27,6 +27,13 @@ type managedDatabasesRunnerFake struct {
 	networkErr error
 	upErr      error
 	operations []string
+	// MariaDB and MySQL calls are recorded separately from Postgres ones.
+	mysqlCalls   []string
+	mysqlFunc    func(sql string) (string, error)
+	mysqlBackups []string
+	mysqlRestore int
+	upDirs       []string
+	stopped      []string
 }
 
 func (r *managedDatabasesRunnerFake) EnsureNetwork(_ context.Context, name string) error {
@@ -35,7 +42,8 @@ func (r *managedDatabasesRunnerFake) EnsureNetwork(_ context.Context, name strin
 	return r.networkErr
 }
 
-func (r *managedDatabasesRunnerFake) Up(context.Context, string) error {
+func (r *managedDatabasesRunnerFake) Up(_ context.Context, directory string) error {
+	r.upDirs = append(r.upDirs, directory)
 	r.upCalls++
 	r.operations = append(r.operations, "up")
 	return r.upErr
@@ -71,8 +79,29 @@ func (r *managedDatabasesRunnerFake) ExecPostgresSQL(_ context.Context, _, _ str
 	return "", nil
 }
 
+func (r *managedDatabasesRunnerFake) ExecMySQLSQL(_ context.Context, _, _ string, _ compose.MySQLFlavor, sql string) (string, error) {
+	r.mysqlCalls = append(r.mysqlCalls, sql)
+	if r.mysqlFunc != nil {
+		return r.mysqlFunc(sql)
+	}
+	return "", nil
+}
+
+func (r *managedDatabasesRunnerFake) BackupMySQL(_ context.Context, _, _ string, _ compose.MySQLFlavor, database, destination string) error {
+	r.mysqlBackups = append(r.mysqlBackups, database)
+	return writeTestBackupFile(destination)
+}
+
+func (r *managedDatabasesRunnerFake) RestoreMySQL(context.Context, string, string, compose.MySQLFlavor, string) error {
+	r.mysqlRestore++
+	return nil
+}
+
 func (r *managedDatabasesRunnerFake) Start(context.Context, string, string) error { return nil }
-func (r *managedDatabasesRunnerFake) Stop(context.Context, string, string) error  { return nil }
+func (r *managedDatabasesRunnerFake) Stop(_ context.Context, directory, _ string) error {
+	r.stopped = append(r.stopped, directory)
+	return nil
+}
 func (r *managedDatabasesRunnerFake) Restart(context.Context, string, string) error {
 	return nil
 }
@@ -134,7 +163,7 @@ func TestManagedDatabaseConnectionsIncludeOnlyAccessibleUsers(t *testing.T) {
 		{User: application.ManagedDatabaseUser{Username: "read user"}, Databases: []string{"Status page"}},
 		{User: application.ManagedDatabaseUser{Username: "unrelated"}, Databases: []string{"other"}},
 	} {
-		if err := managed.repository.CreateManagedDatabaseUser(ctx, user.User.Username, user.Databases); err != nil {
+		if err := managed.repository.CreateManagedDatabaseUser(ctx, user.User.Username, application.ManagedDatabaseProviderPostgres, user.Databases); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -298,7 +327,7 @@ func TestManagedDatabasesStartRecoversFailedFirstLaunch(t *testing.T) {
 			runner.networks = nil
 			runner.networkErr = test.networkErr
 			runner.upErr = test.upErr
-			err = managed.StartCluster(t.Context())
+			err = managed.StartCluster(t.Context(), application.ManagedDatabaseProviderPostgres)
 			if (err != nil) != (test.networkErr != nil || test.upErr != nil) {
 				t.Fatal("Start returned an unexpected result")
 			}

@@ -64,7 +64,7 @@ func TestManagedDatabasesAndUsersRoundTrip(t *testing.T) {
 	if len(items) != 1 || items[0].Name != "app" {
 		t.Fatalf("databases = %#v", items)
 	}
-	if err := database.CreateManagedDatabaseUser(t.Context(), "app", []string{"app"}); err != nil {
+	if err := database.CreateManagedDatabaseUser(t.Context(), "app", application.ManagedDatabaseProviderPostgres, []string{"app"}); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := database.GetManagedDatabaseUser(t.Context(), "app")
@@ -165,5 +165,114 @@ func TestManagedDatabaseCreationWithUserIsAtomic(t *testing.T) {
 	user, err = database.GetManagedDatabaseUser(t.Context(), "reporter")
 	if err != nil || len(user.Databases) != 1 || user.Databases[0] != "analytics" {
 		t.Fatal("failed creation changed existing grants")
+	}
+}
+
+func TestManagedDatabaseProvidersRoundTrip(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	if _, err := database.CreateManagedDatabase(t.Context(), application.ManagedDatabase{Name: "legacy", Owner: "legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateManagedDatabaseWithUser(t.Context(), application.ManagedDatabase{
+		Name: "shop", Owner: "shop", Provider: application.ManagedDatabaseProviderMariaDB,
+	}, "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CreateManagedDatabase(t.Context(), application.ManagedDatabase{Name: "bad", Provider: "oracle"}); err != application.ErrManagedDatabaseProviderInvalid {
+		t.Fatalf("invalid provider error = %v, want %v", err, application.ErrManagedDatabaseProviderInvalid)
+	}
+	if _, err := database.CreateManagedDatabaseWithUser(t.Context(), application.ManagedDatabase{
+		Name: "billing", Provider: application.ManagedDatabaseProviderMySQL,
+	}, "a-login-name-longer-than-thirty-two-bytes"); err != application.ErrManagedDatabaseUserTooLong {
+		t.Fatalf("long MySQL login error = %v, want %v", err, application.ErrManagedDatabaseUserTooLong)
+	}
+
+	items, err := database.ListManagedDatabases(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := map[string]string{}
+	for _, item := range items {
+		providers[item.Name] = item.Provider
+	}
+	if len(items) != 2 || providers["legacy"] != application.ManagedDatabaseProviderPostgres || providers["shop"] != application.ManagedDatabaseProviderMariaDB {
+		t.Fatalf("database providers = %#v", providers)
+	}
+	user, err := database.GetManagedDatabaseUser(t.Context(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.User.Provider != application.ManagedDatabaseProviderMariaDB {
+		t.Fatalf("user provider = %q, want mariadb", user.User.Provider)
+	}
+}
+
+func TestManagedDatabaseEngineRoundTrip(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	engine, err := database.GetManagedDatabaseEngine(t.Context(), application.ManagedDatabaseProviderMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine.Provisioned {
+		t.Fatalf("fresh engine = %#v, want not provisioned", engine)
+	}
+	if err := database.SaveManagedDatabaseEngine(t.Context(), application.ManagedDatabaseEngine{Provider: application.ManagedDatabaseProviderMySQL, Version: "8.4"}); err != nil {
+		t.Fatal(err)
+	}
+	engine, err = database.GetManagedDatabaseEngine(t.Context(), application.ManagedDatabaseProviderMySQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !engine.Provisioned || engine.Version != "8.4" || engine.CreatedAt.IsZero() {
+		t.Fatalf("engine = %#v", engine)
+	}
+	if err := database.SaveManagedDatabaseEngine(t.Context(), application.ManagedDatabaseEngine{Provider: "oracle", Version: "1"}); err == nil {
+		t.Fatal("saving an unknown provider succeeded, want error")
+	}
+}
+
+func TestManagedDatabaseProviderMigrationKeepsExistingRowsOnPostgres(t *testing.T) {
+	database, err := Open(t.Context(), t.TempDir()+"/redlaunch.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	// Rewind to the schema that existed before migration 29.
+	for _, statement := range []string{
+		`DROP TABLE managed_database_engines`,
+		`ALTER TABLE managed_databases DROP COLUMN provider`,
+		`ALTER TABLE managed_database_users DROP COLUMN provider`,
+		`DELETE FROM schema_migrations WHERE version = 29`,
+		`INSERT INTO managed_databases (name, owner, created_at) VALUES ('old', 'old', '2026-01-02T03:04:05Z')`,
+		`INSERT INTO managed_database_users (username, created_at) VALUES ('old', '2026-01-02T03:04:05Z')`,
+	} {
+		if _, err := database.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if err := database.migrate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	item, err := database.GetManagedDatabase(t.Context(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := database.GetManagedDatabaseUser(t.Context(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Provider != application.ManagedDatabaseProviderPostgres || user.User.Provider != application.ManagedDatabaseProviderPostgres {
+		t.Fatalf("migrated providers = %q and %q, want postgres", item.Provider, user.User.Provider)
 	}
 }
