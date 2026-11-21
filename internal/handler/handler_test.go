@@ -5371,8 +5371,15 @@ func TestCreateApplicationContainerRequiresCSRFAndRedirects(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("application container job did not finish")
 	}
-	statusRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/application/status?id="+url.QueryEscape(jobID), nil))
+	// The fake signals completion before the handler records the job result.
+	var statusRecorder *httptest.ResponseRecorder
+	for deadline := time.Now().Add(time.Second); ; time.Sleep(5 * time.Millisecond) {
+		statusRecorder = httptest.NewRecorder()
+		handler.ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/applications/7/services/application/status?id="+url.QueryEscape(jobID), nil))
+		if strings.Contains(statusRecorder.Body.String(), "Application container ready") || time.Now().After(deadline) {
+			break
+		}
+	}
 	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), "Application container ready") {
 		t.Fatalf("completed application container status = (%d, %s), want completed progress dialog", statusRecorder.Code, statusRecorder.Body.String())
 	}
