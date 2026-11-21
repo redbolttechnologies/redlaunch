@@ -80,7 +80,8 @@ actual=$(sha256sum "$work_dir/$archive" | awk '{print $1}')
 [[ $expected == "$actual" ]] || fail "checksum mismatch for $archive"
 printf 'Checksum verified.\n'
 
-git fetch --tags --quiet || fail 'could not fetch tags'
+# --force: a release tag that was re-created upstream must replace the stale local one.
+git fetch --tags --force || fail 'could not fetch tags from the Git remote (see the error above)'
 git rev-parse --verify --quiet "refs/tags/$version" >/dev/null || fail "tag $version not found in the repository"
 
 gunzip -c "$work_dir/$archive" | docker load >/dev/null || fail 'could not load the release image'
