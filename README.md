@@ -151,8 +151,8 @@ docker compose up -d --no-build --pull never --no-deps --force-recreate app
 set a custom `REDLAUNCH_IMAGE` in `.env`, tag the image with that name instead
 of `redlaunch:local`.
 
-Option 2, build from source on the server (needs the Go toolchain image to be
-pulled and takes longer):
+Option 2, build the image from source on the server (slower, compiles on the
+VPS):
 
 ```sh
 cd /opt/redlaunch
