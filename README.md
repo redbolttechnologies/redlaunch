@@ -128,6 +128,22 @@ Run the commands on the server, from the installation directory (`/opt/redlaunch
 by default). The `/data` volume, `.env`, and your applications are not touched;
 only the Redlaunch `app` container is recreated.
 
+The quickest way is the upgrade script. It finds the latest GitHub Release (or
+the version you pass), downloads the image for the server architecture, verifies
+its checksum, loads and tags the image, checks out the matching tag, and
+recreates only the `app` container. It refuses to run when tracked files have
+local changes and exits early when the server is already up to date:
+
+```sh
+cd /opt/redlaunch
+scripts/upgrade.sh           # latest release
+scripts/upgrade.sh v1.2.3    # a specific release (also usable for rollback)
+```
+
+Set `REDLAUNCH_INSTALL_DIR` to run it from outside the installation directory.
+The user must be able to run `docker` (root or the `docker` group). To do the
+same steps by hand, use one of the options below.
+
 Option 1, from a prebuilt release (no compilation on the VPS). Replace `vX.Y.Z`
 with the release you want and `amd64` with `arm64` on ARM servers:
 
