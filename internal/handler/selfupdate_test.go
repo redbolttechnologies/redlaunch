@@ -145,6 +145,8 @@ func TestSettingsPageRendersUpdateSection(t *testing.T) {
 		`/settings/update/check`,
 		`Check for updates`,
 		`without compiling on this server`,
+		// The Check for updates button is an htmx request; without the script it does nothing.
+		`<script src="/static/htmx.min.js" defer></script>`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("GET /settings did not render %q: %s", expected, body)

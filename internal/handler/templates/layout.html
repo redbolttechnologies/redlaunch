@@ -12,7 +12,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/copy.js" defer></script>
-  {{if or .DashboardPage .ApplicationDetailsPage .ServiceDetailsPage .DatabaseWorkspacePage}}<script src="/static/htmx.min.js" defer></script>{{end}}
+  {{if or .DashboardPage .ApplicationDetailsPage .ServiceDetailsPage .DatabaseWorkspacePage .SettingsPage}}<script src="/static/htmx.min.js" defer></script>{{end}}
   {{if .DatabaseWorkspacePage}}<script src="/static/database-workspace.js" defer></script>{{end}}
   {{if or .Setup .SetupProgress .PostgreSQLProgress .RedisProgress .ApplicationContainerProgress .ServiceDeleteProgress .ApplicationDeleteProgress .ApplicationVersionProgress .BackupProgress .ManagedDatabasesProgress .SelfUpdateProgress}}<script src="/static/setup.js" defer></script>{{end}}
   {{if or .ServiceActionToasts .ProxyActionToasts .RegistryMaintenanceToasts $notice}}<script src="/static/toasts.js" defer></script>{{end}}
