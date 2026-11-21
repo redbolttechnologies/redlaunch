@@ -64,8 +64,8 @@ type ManagedDatabaseRunner interface {
 	Up(ctx context.Context, projectDir string) error
 	ConfigServices(ctx context.Context, projectDir string) ([]compose.ConfiguredService, error)
 	IsServiceRunning(ctx context.Context, projectDir, serviceName string) (bool, error)
-	BackupPostgreSQL(ctx context.Context, projectDir, serviceName, destination string) error
-	RestorePostgreSQL(ctx context.Context, projectDir, serviceName, source string) error
+	BackupPostgreSQLDatabase(ctx context.Context, projectDir, serviceName, database, destination string) error
+	RestorePostgreSQLDatabase(ctx context.Context, projectDir, serviceName, database, source string) error
 	ExecPostgresSQL(ctx context.Context, projectDir, serviceName, sql string) (string, error)
 	ExecMySQLSQL(ctx context.Context, projectDir, serviceName string, flavor compose.MySQLFlavor, sql string) (string, error)
 	BackupMySQL(ctx context.Context, projectDir, serviceName string, flavor compose.MySQLFlavor, database, destination string) error
@@ -1380,7 +1380,7 @@ func (s *ManagedDatabases) RestoreBackup(ctx context.Context, databaseName, file
 	}
 	// Restore targets the logical database by restoring into the shared
 	// container; the dump itself selects the database contents.
-	if err := engine.driver.restore(ctx, s.runner, directory, engine.service, path); err != nil {
+	if err := engine.driver.restore(ctx, s.runner, directory, engine.service, item.Name, path); err != nil {
 		return fmt.Errorf("restore managed backup: %w", err)
 	}
 	return nil

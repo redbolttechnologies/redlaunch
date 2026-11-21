@@ -72,3 +72,44 @@ func TestCommandRunnerRestorePostgreSQLReadsManagedBackup(t *testing.T) {
 		t.Fatalf("restore arguments = %#v, want %#v", got, want)
 	}
 }
+
+func TestCommandRunnerPostgreSQLDatabaseBackupAndRestorePassNameAsOneArgument(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\ncase \" $* \" in *\" exec \"*) printf '%s\\n' \"$@\" > \"${0%/*}/args\"; cat > \"${0%/*}/stdin\"; printf '%s\\n' '-- SQL dump';; esac\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := CommandRunner{Binary: binary}
+	database := "-odd name; rm -rf /"
+	destination := filepath.Join(t.TempDir(), "backup.sql")
+	if err := runner.BackupPostgreSQLDatabase(context.Background(), projectDir, "db", database, destination); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expectedComposeArguments(projectDir, "exec", "-T", "db", "sh", "-c", postgresDatabaseDumpScript, database)
+	if strings.Join(strings.Split(strings.TrimSpace(string(args)), "\n"), "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("backup arguments = %q, want %q", args, want)
+	}
+	source := filepath.Join(t.TempDir(), "backup.sql")
+	if err := os.WriteFile(source, []byte("restore this\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.RestorePostgreSQLDatabase(context.Background(), projectDir, "db", database, source); err != nil {
+		t.Fatal(err)
+	}
+	args, _ = os.ReadFile(filepath.Join(filepath.Dir(binary), "args"))
+	want = expectedComposeArguments(projectDir, "exec", "-T", "db", "sh", "-c", postgresDatabaseRestoreScript, database)
+	if strings.Join(strings.Split(strings.TrimSpace(string(args)), "\n"), "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("restore arguments = %q, want %q", args, want)
+	}
+	if err := runner.BackupPostgreSQLDatabase(context.Background(), projectDir, "db", " ", destination); err == nil {
+		t.Fatal("empty database name accepted")
+	}
+}

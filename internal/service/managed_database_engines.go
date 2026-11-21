@@ -36,7 +36,7 @@ type managedEngineDriver interface {
 	dropDatabase(ctx context.Context, run managedSQL, name string, grantees []string) error
 	connectionURI(host, username, database string) string
 	backup(ctx context.Context, runner ManagedDatabaseRunner, directory, service, database, destination string) error
-	restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, source string) error
+	restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, database, source string) error
 }
 
 // managedEngine describes one provider's shared container project under core/.
@@ -256,12 +256,12 @@ func (postgresDriver) connectionURI(host, username, database string) string {
 	return connection.String()
 }
 
-func (postgresDriver) backup(ctx context.Context, runner ManagedDatabaseRunner, directory, service, _, destination string) error {
-	return runner.BackupPostgreSQL(ctx, directory, service, destination)
+func (postgresDriver) backup(ctx context.Context, runner ManagedDatabaseRunner, directory, service, database, destination string) error {
+	return runner.BackupPostgreSQLDatabase(ctx, directory, service, database, destination)
 }
 
-func (postgresDriver) restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, source string) error {
-	return runner.RestorePostgreSQL(ctx, directory, service, source)
+func (postgresDriver) restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, database, source string) error {
+	return runner.RestorePostgreSQLDatabase(ctx, directory, service, database, source)
 }
 
 // mysqlDriver implements managedEngineDriver for MariaDB and MySQL. Logins are
@@ -403,6 +403,6 @@ func (d mysqlDriver) backup(ctx context.Context, runner ManagedDatabaseRunner, d
 	return runner.BackupMySQL(ctx, directory, service, d.flavor, database, destination)
 }
 
-func (d mysqlDriver) restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, source string) error {
+func (d mysqlDriver) restore(ctx context.Context, runner ManagedDatabaseRunner, directory, service, _, source string) error {
 	return runner.RestoreMySQL(ctx, directory, service, d.flavor, source)
 }

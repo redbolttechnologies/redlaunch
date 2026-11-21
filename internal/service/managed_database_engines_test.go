@@ -471,3 +471,26 @@ func TestDisableClusterStopsEveryProvisionedEngine(t *testing.T) {
 		t.Fatalf("stopped = %v", runner.stopped)
 	}
 }
+
+func TestPostgresBackupAndRestoreTargetTheSelectedDatabase(t *testing.T) {
+	runner := &managedDatabasesRunnerFake{running: true}
+	managed := enabledManagedDatabasesForCreation(t, runner)
+	for _, name := range []string{"shop", "analytics"} {
+		if _, err := managed.CreateDatabase(t.Context(), application.ManagedDatabaseCreateInput{Name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shop, err := managed.RunBackupNow(t.Context(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managed.RunBackupNow(t.Context(), "analytics"); err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.RestoreBackup(t.Context(), "shop", shop.FileName); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(runner.postgresBackups, ",") != "shop,analytics" || strings.Join(runner.postgresRestores, ",") != "shop" {
+		t.Fatalf("backups = %v restores = %v, want the selected databases", runner.postgresBackups, runner.postgresRestores)
+	}
+}

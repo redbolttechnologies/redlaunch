@@ -952,6 +952,12 @@ const (
 	// format check in the backup service); retrying a rolled-back restore is
 	// safe.
 	postgresRestoreScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec psql --single-transaction --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"`
+
+	// The managed databases cluster hosts many logical databases, so these
+	// variants take the target as the single exec argument "$0" instead of
+	// the container's default POSTGRES_DB.
+	postgresDatabaseDumpScript    = `PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dump --clean --if-exists --username "$POSTGRES_USER" --dbname "$0"`
+	postgresDatabaseRestoreScript = `PGPASSWORD="$POSTGRES_PASSWORD" exec psql --single-transaction --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$0"`
 )
 
 // BackupPostgreSQL writes a plain SQL dump produced inside the PostgreSQL
@@ -959,6 +965,19 @@ const (
 // are already provided to the managed container, so credentials never pass
 // through the host command line or HTTP layer.
 func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, serviceName, destination string) error {
+	return r.backupPostgreSQL(ctx, projectDir, serviceName, destination, postgresDumpScript)
+}
+
+// BackupPostgreSQLDatabase dumps one named database of a shared PostgreSQL
+// cluster. The name is a single exec argument, never parsed by the shell.
+func (r CommandRunner) BackupPostgreSQLDatabase(ctx context.Context, projectDir, serviceName, database, destination string) error {
+	if strings.TrimSpace(database) == "" {
+		return errors.New("database name is required")
+	}
+	return r.backupPostgreSQL(ctx, projectDir, serviceName, destination, postgresDatabaseDumpScript, database)
+}
+
+func (r CommandRunner) backupPostgreSQL(ctx context.Context, projectDir, serviceName, destination, script string, scriptArgs ...string) error {
 	output, err := openManagedOutput(destination)
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL backup: %w", err)
@@ -973,7 +992,7 @@ func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, service
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresDumpScript)
+	command := composeCommand(ctx, binary, projectDir, composeFile, append([]string{"exec", "-T", serviceName, "sh", "-c", script}, scriptArgs...)...)
 	command.Stdout = output
 	stderr := newTailBuffer(maxCommandOutput)
 	command.Stderr = stderr
@@ -986,6 +1005,19 @@ func (r CommandRunner) BackupPostgreSQL(ctx context.Context, projectDir, service
 // RestorePostgreSQL restores a plain SQL dump through psql inside the
 // PostgreSQL service container.
 func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, serviceName, source string) error {
+	return r.restorePostgreSQL(ctx, projectDir, serviceName, source, postgresRestoreScript)
+}
+
+// RestorePostgreSQLDatabase replays a plain SQL dump into one named database
+// of a shared PostgreSQL cluster.
+func (r CommandRunner) RestorePostgreSQLDatabase(ctx context.Context, projectDir, serviceName, database, source string) error {
+	if strings.TrimSpace(database) == "" {
+		return errors.New("database name is required")
+	}
+	return r.restorePostgreSQL(ctx, projectDir, serviceName, source, postgresDatabaseRestoreScript, database)
+}
+
+func (r CommandRunner) restorePostgreSQL(ctx context.Context, projectDir, serviceName, source, script string, scriptArgs ...string) error {
 	input, err := openManagedInput(source)
 	if err != nil {
 		return fmt.Errorf("open PostgreSQL backup: %w", err)
@@ -1000,7 +1032,7 @@ func (r CommandRunner) RestorePostgreSQL(ctx context.Context, projectDir, servic
 	if err != nil {
 		return fmt.Errorf("find Compose file: %w", err)
 	}
-	command := composeCommand(ctx, binary, projectDir, composeFile, "exec", "-T", serviceName, "sh", "-c", postgresRestoreScript)
+	command := composeCommand(ctx, binary, projectDir, composeFile, append([]string{"exec", "-T", serviceName, "sh", "-c", script}, scriptArgs...)...)
 	command.Stdin = input
 	stderr := newTailBuffer(maxCommandOutput)
 	command.Stderr = stderr

@@ -31,9 +31,12 @@ type managedDatabasesRunnerFake struct {
 	mysqlCalls   []string
 	mysqlFunc    func(sql string) (string, error)
 	mysqlBackups []string
-	mysqlRestore int
-	upDirs       []string
-	stopped      []string
+	// Postgres backups and restores record the database they were asked for.
+	postgresBackups  []string
+	postgresRestores []string
+	mysqlRestore     int
+	upDirs           []string
+	stopped          []string
 }
 
 func (r *managedDatabasesRunnerFake) EnsureNetwork(_ context.Context, name string) error {
@@ -57,11 +60,13 @@ func (r *managedDatabasesRunnerFake) IsServiceRunning(context.Context, string, s
 	return r.running, nil
 }
 
-func (r *managedDatabasesRunnerFake) BackupPostgreSQL(_ context.Context, _, _ string, destination string) error {
+func (r *managedDatabasesRunnerFake) BackupPostgreSQLDatabase(_ context.Context, _, _ string, database, destination string) error {
+	r.postgresBackups = append(r.postgresBackups, database)
 	return writeTestBackupFile(destination)
 }
 
-func (r *managedDatabasesRunnerFake) RestorePostgreSQL(context.Context, string, string, string) error {
+func (r *managedDatabasesRunnerFake) RestorePostgreSQLDatabase(_ context.Context, _, _ string, database, _ string) error {
+	r.postgresRestores = append(r.postgresRestores, database)
 	return nil
 }
 
