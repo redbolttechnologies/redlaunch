@@ -97,7 +97,7 @@ run the installer.
 ## Local development dependencies
 
 Building and running Redlaunch from source needs the host tools above plus Go.
-The Makefile pins Go 1.26.10 through `GOTOOLCHAIN`; with toolchain
+The Makefile pins Go 1.26.11 through `GOTOOLCHAIN`; with toolchain
 auto-downloads enabled, a newer Go installation fetches the pinned version
 automatically.
 
@@ -108,9 +108,9 @@ Install Go from the official downloads page:
 For a Linux `amd64` VPS, the matching archive can be installed with:
 
 ```sh
-curl -fsSLO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
+curl -fsSLO https://go.dev/dl/go1.26.11.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.11.linux-amd64.tar.gz
 export PATH="$PATH:/usr/local/go/bin"
 ```
 

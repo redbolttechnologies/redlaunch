@@ -1,7 +1,7 @@
 .PHONY: build test integration update-acceptance lint fmt fmt-check secret-scan run setup update linux-build vulncheck-linux vulncheck-linux-arm64 compose-config docker-build image-identity release-check clean add-authorized-email auth-add-email
 
 BINARY := bin/redlaunch
-GO_VERSION := 1.26.10
+GO_VERSION := 1.26.11
 GO_TOOLCHAIN := go$(GO_VERSION)
 GO := GOTOOLCHAIN=$(GO_TOOLCHAIN) go
 GO_PACKAGES := ./cmd/... ./internal/...

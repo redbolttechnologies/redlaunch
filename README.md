@@ -676,7 +676,7 @@ application is deleted.
 
 ## Local development
 
-Local development uses the pinned Go 1.26.10 toolchain and requires a running
+Local development uses the pinned Go 1.26.11 toolchain and requires a running
 user systemd manager. With Go toolchain auto-downloads enabled, the Make targets
 select that patch release through `GOTOOLCHAIN`.
 

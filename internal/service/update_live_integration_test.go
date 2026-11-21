@@ -327,7 +327,7 @@ func acceptanceBuildRelease(t *testing.T, ctx context.Context, repoRoot, suffix,
 	tag := "redlaunch-accept-" + suffix + ":" + version
 	acceptanceDocker(t, ctx, "build",
 		"--platform", "linux/"+arch,
-		"--build-arg", "GO_VERSION=1.26.10",
+		"--build-arg", "GO_VERSION=1.26.11",
 		"--build-arg", "VERSION="+version,
 		"--build-arg", "COMMIT="+commit,
 		"--build-arg", "BUILD_DATE="+buildDate,
@@ -357,7 +357,7 @@ func acceptanceBuildSleepingHelperRelease(t *testing.T, ctx context.Context, suf
 	tag := "redlaunch-accept-" + suffix + ":" + version
 	directory := t.TempDir()
 	dockerfile := fmt.Sprintf(`FROM alpine:3.22
-LABEL io.redlaunch.build.go-version="1.26.10" org.opencontainers.image.version=%q org.opencontainers.image.revision=%q org.opencontainers.image.created=%q io.redlaunch.deployment-contract="1"
+LABEL io.redlaunch.build.go-version="1.26.11" org.opencontainers.image.version=%q org.opencontainers.image.revision=%q org.opencontainers.image.created=%q io.redlaunch.deployment-contract="1"
 RUN printf '#!/bin/sh\necho acceptance helper sleeping\nsleep 300\n' > /usr/local/bin/redlaunch && chmod +x /usr/local/bin/redlaunch
 ENTRYPOINT ["/usr/local/bin/redlaunch"]
 `, version, commit, buildDate)
