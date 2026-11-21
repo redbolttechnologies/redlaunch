@@ -121,6 +121,57 @@ After that bootstrap, future updates can be installed from Settings. If a stale
 updater container remains, inspect it and remove it once with
 `docker rm -f $(docker ps -aq --filter label=redlaunch.updater=true)`.
 
+### Manual upgrade
+
+Use this when you cannot or do not want to use **Settings → Software update**.
+Run the commands on the server, from the installation directory (`/opt/redlaunch`
+by default). The `/data` volume, `.env`, and your applications are not touched;
+only the Redlaunch `app` container is recreated.
+
+Option 1, from a prebuilt release (no compilation on the VPS). Replace `vX.Y.Z`
+with the release you want and `amd64` with `arm64` on ARM servers:
+
+```sh
+cd /opt/redlaunch
+VERSION=vX.Y.Z
+ARCH=amd64
+BASE=https://github.com/redbolttechnologies/redlaunch/releases/download/$VERSION
+mkdir -p /tmp/redlaunch-upgrade && cd /tmp/redlaunch-upgrade
+curl -fsSLO $BASE/redlaunch-image-linux-$ARCH.tar.gz
+curl -fsSLO $BASE/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+gunzip -c redlaunch-image-linux-$ARCH.tar.gz | docker load
+docker tag redlaunch:$VERSION redlaunch:local
+cd /opt/redlaunch
+git fetch --tags && git checkout --detach $VERSION
+docker compose up -d --no-build --pull never --no-deps --force-recreate app
+```
+
+`sha256sum` must report `OK` for the image archive before you load it. If you
+set a custom `REDLAUNCH_IMAGE` in `.env`, tag the image with that name instead
+of `redlaunch:local`.
+
+Option 2, build from source on the server (needs the Go toolchain image to be
+pulled and takes longer):
+
+```sh
+cd /opt/redlaunch
+git fetch --tags && git checkout --detach vX.Y.Z
+docker compose up -d --build --no-deps app
+```
+
+Verify the upgrade:
+
+```sh
+docker compose ps app
+docker compose logs --tail 50 app
+```
+
+The running version is shown on the Settings page. To roll back, repeat the
+steps with the previous release tag; database migrations are not reversed, so
+restore a backup if the newer version changed the schema in a way the older one
+cannot read.
+
 ### Prebuilt release artifacts
 
 Pushing a `v*` tag runs the **Release artifacts** GitHub Actions workflow. It
